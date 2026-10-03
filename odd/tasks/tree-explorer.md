@@ -80,15 +80,16 @@ un enum es más legible y deja el controlador genérico: `ActionExpand` es
 "tengo el cursor sobre un dir colapsado, dame sus hijos", sin que el
 controlador sepa qué tecla lo disparó.
 
-### Enter/→ expanden, ← colapsa en el lugar (y sube al padre)
-Enter sobre un archivo lo abre (viene de U3); sobre un dir colapsado expande;
-sobre un dir ya expandido no hace nada. `←` cierra la carpeta con la semántica
-estándar de árbol: colapsa el dir expandido del cursor y la selección queda EN
-ÉL —colapsar una subcarpeta anidada nunca se lleva el cursor a otro nivel—; si
-el cursor está en un hijo, PRIMERO sube la selección al padre (el segundo `←`
-lo colapsa). Con el foco en el panel, `←` es SIEMPRE del árbol —también en el
-nivel raíz sin nada que colapsar ni subir—: la flecha nunca se escapa al editor
-moviendo el cursor por sorpresa.
+### `Enter`/`→` alternan; `←` colapsa en el lugar (y sube al padre)
+`Enter`/`→` sobre un archivo lo abre (viene de U3); sobre un directorio
+ALTERNAN: colapsado → expande, expandido → lo colapsa (la misma tecla abre y
+cierra, sin releer hijos ni duplicarlos). `←` cierra la carpeta con la
+semántica estándar de árbol: colapsa el dir expandido del cursor y la selección
+queda EN ÉL —colapsar una subcarpeta anidada nunca se lleva el cursor a otro
+nivel—; si el cursor está en un hijo, PRIMERO sube la selección al padre (el
+segundo `←` lo colapsa). Con el foco en el panel, `←` es SIEMPRE del árbol
+—también en el nivel raíz sin nada que colapsar ni subir—: la flecha nunca se
+escapa al editor moviendo el cursor por sorpresa.
 
 Con el mouse, el clic sobre la flecha de expansión (`▸`/`▾`, las celdas
 `[depth*2, depth*2+2)` de la fila) alterna colapsado ↔ expandido; el clic en el
@@ -167,3 +168,17 @@ resto de la fila solo selecciona.
   `TestFileBrowserClickOnTheExpansionArrowToggles`.
 - **Verificación:** paquete `view` completo en verde, `-race` con clang en
   verde (2.40s), `go vet`/`gofmt` limpios, controller del explorador en verde.
+
+### U3b-fix 3 — `Enter` alterna expandir/colapsar (reportado: "probaba con Enter")
+- **Bug reportado:** quien usa el editor probaba `Enter` sobre un directorio
+  desplegado esperando cerrarlo; `Enter`/`→` sobre un dir ya expandido era
+  no-op (`ActionNone`), porque solo `←` colapsaba.
+- **Fix:** `Enter`/`→` ALTERNAN: dir colapsado → expande, dir expandido → lo
+  colapsa (toggle interno, sin E/S ni relectura; la selección queda en el dir).
+- **Tests:** `TestFileBrowserEnterTogglesAnExpandedDirectory` (vista: expande,
+  colapsa con la misma tecla y re-expande sin releer) y
+  `TestEnterTogglesAnExpandedDirectory` (controlador, end-to-end: `▸`↔`▾` en el
+  dibujo del panel); `TestFileBrowserRightActsOnFilesAndDirs` actualizado al
+  toggle con `→`.
+- **Verificación:** paquete `view` completo y bajo `-race` con clang en verde,
+  controller del explorador en verde, `go vet`/`gofmt` limpios.

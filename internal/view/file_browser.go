@@ -255,8 +255,10 @@ func (fb *FileBrowser) CursorPath() string {
 
 // activateOrExpand decide la acción de Enter/→ sobre el nodo del cursor: un
 // archivo se activa (ActionActivate), un dir colapsado pide sus hijos
-// (ActionExpand), un dir ya expandido no hace nada (ActionNone: ← es el que
-// colapsa). Sin nodos, Enter cae al flujo normal del controlador, como en U3.
+// (ActionExpand) y un dir ya expandido se COLAPSA (toggle con la misma tecla
+// con la que se abrió: Enter/→ alternan expandido ↔ colapsado, como en
+// cualquier árbol; la acción es interna, sin E/S, y la selección queda en el
+// dir). Sin nodos, Enter cae al flujo normal del controlador, como en U3.
 func (fb *FileBrowser) activateOrExpand() (Action, bool) {
 	if len(fb.nodes) == 0 {
 		return ActionNone, false
@@ -266,7 +268,8 @@ func (fb *FileBrowser) activateOrExpand() (Action, bool) {
 		return ActionActivate, true
 	}
 	if n.expanded {
-		return ActionNone, true
+		fb.collapseAtCursor()
+		return ActionMove, true
 	}
 	return ActionExpand, true
 }

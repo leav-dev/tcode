@@ -256,10 +256,11 @@ func TestFileBrowserSetRootResetsTheTree(t *testing.T) {
 	}
 }
 
-// TestFileBrowserEnterExpandsACollapsedDirectory: Enter sobre un dir colapsado
-// pide sus hijos con ActionExpand; sobre el mismo dir ya expandido devuelve
-// ActionNone (manejado: sin E/S ni relectura, ← es el que colapsa).
-func TestFileBrowserEnterExpandsACollapsedDirectory(t *testing.T) {
+// TestFileBrowserEnterTogglesAnExpandedDirectory: Enter sobre un dir colapsado
+// pide sus hijos con ActionExpand; sobre el mismo dir ya expandido lo COLAPSA
+// (toggle: la misma tecla abre y cierra, sin E/S ni relectura) y la selección
+// queda en el dir.
+func TestFileBrowserEnterTogglesAnExpandedDirectory(t *testing.T) {
 	fb := NewFileBrowser()
 	fb.Resize(10, 5)
 	fb.SetRoot("/cwd")
@@ -271,8 +272,20 @@ func TestFileBrowserEnterExpandsACollapsedDirectory(t *testing.T) {
 	}
 
 	fb.SetChildren([]Entry{{Name: "a.txt", Path: "/cwd/docs/a.txt"}})
-	if action, handled := fb.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone)); action != ActionNone || !handled {
-		t.Fatalf("Enter sobre un dir ya expandido devolvió (action=%v, handled=%v), se esperaba (ActionNone, true)", action, handled)
+	action, handled = fb.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	if action != ActionMove || !handled {
+		t.Fatalf("Enter sobre un dir ya expandido devolvió (action=%v, handled=%v), se esperaba (ActionMove, true)", action, handled)
+	}
+	if got := fb.CursorPath(); got != "/cwd/docs" {
+		t.Fatalf("CursorPath() = %q tras el toggle, se esperaba %q (la selección queda en el dir)", got, "/cwd/docs")
+	}
+	if n := len(fb.nodes); n != 1 {
+		t.Fatalf("aplanado = %d nodos tras el toggle, se esperaba 1 (los hijos colapsaron)", n)
+	}
+	// Y un Enter más lo vuelve a expandir sin releer.
+	action, handled = fb.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	if action != ActionExpand || !handled {
+		t.Fatalf("el tercer Enter devolvió (action=%v, handled=%v), se esperaba (ActionExpand, true)", action, handled)
 	}
 }
 
@@ -300,10 +313,16 @@ func TestFileBrowserRightActsOnFilesAndDirs(t *testing.T) {
 		t.Fatalf("Right sobre un dir colapsado devolvió (action=%v, handled=%v), se esperaba (ActionExpand, true)", action, handled)
 	}
 
-	// Right sobre el dir ya expandido → ActionNone.
+	// Right sobre el dir ya expandido → lo colapsa (toggle, como Enter).
 	fb.SetChildren([]Entry{{Name: "a.txt", Path: "/cwd/docs/a.txt"}})
-	if action, handled := fb.HandleEvent(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone)); action != ActionNone || !handled {
-		t.Fatalf("Right sobre un dir ya expandido devolvió (action=%v, handled=%v), se esperaba (ActionNone, true)", action, handled)
+	action, handled := fb.HandleEvent(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone))
+	if action != ActionMove || !handled {
+		t.Fatalf("Right sobre un dir ya expandido devolvió (action=%v, handled=%v), se esperaba (ActionMove, true)", action, handled)
+	}
+	// El árbol raíz tiene docs + a.txt: tras el toggle solo se ocultan los
+	// hijos del dir colapsado.
+	if n := len(fb.nodes); n != 2 {
+		t.Fatalf("aplanado = %d nodos tras el toggle con Right, se esperaba 2", n)
 	}
 }
 

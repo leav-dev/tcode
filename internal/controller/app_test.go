@@ -1660,9 +1660,10 @@ func TestSubdirsAreNotReadUntilExpanded(t *testing.T) {
 	}
 }
 
-// TestEnterOnAnExpandedDirectoryDoesNothing: Enter sobre un dir ya expandido
-// no relee ni duplica sus hijos; colapsar es con Left.
-func TestEnterOnAnExpandedDirectoryDoesNothing(t *testing.T) {
+// TestEnterTogglesAnExpandedDirectory: Enter alterna expandido ↔ colapsado
+// sobre un directorio (la misma tecla abre y cierra, sin releer ni duplicar
+// hijos); la selección queda siempre en el dir.
+func TestEnterTogglesAnExpandedDirectory(t *testing.T) {
 	dir := t.TempDir()
 	sub := filepath.Join(dir, "carpeta")
 	if err := os.Mkdir(sub, 0o755); err != nil {
@@ -1677,26 +1678,34 @@ func TestEnterOnAnExpandedDirectoryDoesNothing(t *testing.T) {
 
 	app := newExplorerApp(t, dir)
 
-	press(app, tcell.KeyEnter) // expande: lee el subdir
-	press(app, tcell.KeyEnter) // Enter de más: no relee ni duplica
-	press(app, tcell.KeyEnter)
-
+	press(app, tcell.KeyEnter) // expande el dir
 	app.redraw()
-	// Los dos hijos aparecen una sola vez y el cursor sigue en el dir.
 	if got := panelRow(app, 0); got != "▾ carpeta/" {
-		t.Fatalf("fila 0 del panel = %q, se esperaba %q", got, "▾ carpeta/")
+		t.Fatalf("fila 0 del panel tras el primer Enter = %q, se esperaba %q", got, "▾ carpeta/")
 	}
 	if got := panelRow(app, 1); got != "    fuente.txt" {
 		t.Fatalf("fila 1 del panel = %q, se esperaba %q", got, "    fuente.txt")
 	}
-	if got := panelRow(app, 2); got != "    otra.txt" {
-		t.Fatalf("fila 2 del panel = %q, se esperaba %q", got, "    otra.txt")
+
+	press(app, tcell.KeyEnter) // lo colapsa (toggle)
+	app.redraw()
+	if got := panelRow(app, 0); got != "▸ carpeta/" {
+		t.Fatalf("fila 0 del panel tras el segundo Enter = %q, se esperaba %q (dir colapsado)", got, "▸ carpeta/")
 	}
-	if got := panelRow(app, 3); got != "" {
-		t.Fatalf("fila 3 del panel = %q, se esperaba vacía: los hijos no se duplican", got)
+	if got := panelRow(app, 1); got != "" {
+		t.Fatalf("fila 1 del panel = %q, se esperaba vacía: los hijos se ocultaron al colapsar", got)
 	}
 	if got := app.explorer.CursorPath(); got != sub {
-		t.Fatalf("CursorPath() = %q, se esperaba %q (el cursor en el dir)", got, sub)
+		t.Fatalf("CursorPath() = %q tras colapsar, se esperaba %q (la selección queda en el dir)", got, sub)
+	}
+
+	press(app, tcell.KeyEnter) // y un tercer Enter lo vuelve a expandir, sin releer
+	app.redraw()
+	if got := panelRow(app, 0); got != "▾ carpeta/" {
+		t.Fatalf("fila 0 del panel tras el tercer Enter = %q, se esperaba %q", got, "▾ carpeta/")
+	}
+	if got := panelRow(app, 2); got != "    otra.txt" {
+		t.Fatalf("fila 2 del panel = %q, se esperaba %q (los hijos no se duplican en el toggle)", got, "    otra.txt")
 	}
 }
 
