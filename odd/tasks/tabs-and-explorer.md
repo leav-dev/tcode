@@ -110,3 +110,4 @@ sistema ya no tiene el archivo abierto".
 - **Pendiente conocido:** si `SaveAs` mueve un buffer a una ruta ya abierta en otra
   pestaña, el dedupe deja de verlos como el mismo archivo. Es decisión de U2/U4
   (dueño de la TabBar), no de U1.
+- **Commit de unidad de trabajo:** `646a4c3`.
