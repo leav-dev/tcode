@@ -174,3 +174,22 @@ terminal escrolle por accidente mientras se cambia de pestaña.
   contaba mal el ancho de la etiqueta (21 vs 20) y asumía un `>` derecho inexistente
   cuando la ventana cabe entera sin desborde —corregido en la aserción, no en el código.
 - **Commit de unidad de trabajo:** `322cf62`.
+
+### Ajustes posteriores — layout y mouse (reportes del usuario)
+- **Layout:** la fila de pestañas dejó de ocupar todo el ancho (se dibujaba sobre
+  el árbol) y se renderiza SOLO sobre el área del editor, arrancando en la columna
+  del panel; su ancho de encuadre (`tabBarWidth`) es el del editor.
+- **Mouse:** clic sobre una pestaña → la activa; rueda sobre la fila → cambia de
+  pestaña (arriba = anterior, abajo = siguiente, con wrap), como en un navegador;
+  clic en `<`/`>` → corre la ventana del strip. El hit box de cada pestaña se come
+  el separador siguiente para no dejar zonas muertas.
+- **Aritmética unificada:** `layout()` es la única fuente de la geometría del
+  strip (posiciones, flechas, truncado) y la usan `Draw` y `HandleMouse`, para que
+  el dibujo y lo que se puede clickear no puedan divergir.
+- **Coherencia modal:** con el menú (`Ctrl+T`) o el pedido de Save As abiertos el
+  mouse es de ellos y no toca nada por debajo.
+- **Tests:** `TestTabBarClickOnATabReturnsItsIndex`,
+  `TestTabBarArrowClicksScrollTheStrip`, `TestTabBarWheelSwitchesTabs` (vista) y
+  `TestClickOnATabSwitchesToIt`, `TestClickOnATabWithThePanelVisible`,
+  `TestWheelOverTheTabBarSwitchesTabs`, `TestSaveAsPromptOwnsTheMouse`
+  (controlador).

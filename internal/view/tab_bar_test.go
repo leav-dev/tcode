@@ -252,3 +252,77 @@ func TestTabBarTruncatesATabWiderThanTheRow(t *testing.T) {
 		t.Fatalf("fila 0 = %q, se esperaba %q", got, want)
 	}
 }
+
+// TestTabBarClickOnATabReturnsItsIndex: el clic sobre una pestaña devuelve su
+// índice para activarla; el hit box se come el separador siguiente (sin zonas
+// muertas entre pestañas) y un clic fuera de la fila no es de la barra.
+func TestTabBarClickOnATabReturnsItsIndex(t *testing.T) {
+	ws := newTabWorkspace(t, "a.txt", "b.txt", "c.txt")
+	ws.SetActive(0)
+	tb := NewTabBar()
+
+	// A 40 columnas: "a.txt" en 0..4, separador en 5, "b.txt" en 6..10,
+	// separador en 11, "c.txt" en 12..16.
+	for _, tc := range []struct{ x, want int }{
+		{0, 0}, {4, 0}, {5, 0}, // el separador pertenece a la pestaña anterior
+		{6, 1}, {10, 1}, {11, 1},
+		{12, 2}, {16, 2},
+	} {
+		idx, handled := tb.HandleMouse(tc.x, 0, tcell.Button1, ws, 40)
+		if !handled || idx != tc.want {
+			t.Fatalf("clic en x=%d devolvió (idx=%d, handled=%v), se esperaba (%d, true)", tc.x, idx, handled, tc.want)
+		}
+	}
+	// Fuera de la fila: no es de la barra.
+	if _, handled := tb.HandleMouse(3, 1, tcell.Button1, ws, 40); handled {
+		t.Fatal("un clic fuera de la fila de pestañas no debe manejarlo la barra")
+	}
+	// En la fila pero a la derecha de la última pestaña: se come el evento sin
+	// activar nada.
+	if idx, handled := tb.HandleMouse(30, 0, tcell.Button1, ws, 40); !handled || idx != -1 {
+		t.Fatalf("clic en el vacío de la fila devolvió (idx=%d, handled=%v), se esperaba (-1, true)", idx, handled)
+	}
+}
+
+// TestTabBarArrowClicksScrollTheStrip: con más pestañas que ancho, el clic en
+// '>' y '<' corre la ventana del strip sin cambiar la pestaña activa.
+func TestTabBarArrowClicksScrollTheStrip(t *testing.T) {
+	ws := newTabWorkspace(t, "t0.txt", "t1.txt", "t2.txt", "t3.txt", "t4.txt", "t5.txt")
+	ws.SetActive(0)
+	tb := NewTabBar()
+	const width = 18
+
+	// '>' en la última columna: hay pestañas fuera a la derecha.
+	if idx, handled := tb.HandleMouse(width-1, 0, tcell.Button1, ws, width); !handled || idx != -1 {
+		t.Fatalf("clic en '>' devolvió (idx=%d, handled=%v), se esperaba (-1, true)", idx, handled)
+	}
+	if tb.start != 1 {
+		t.Fatalf("start = %d tras el clic en '>', se esperaba 1", tb.start)
+	}
+	// '<' en la columna 0: vuelve la ventana.
+	if idx, handled := tb.HandleMouse(0, 0, tcell.Button1, ws, width); !handled || idx != -1 {
+		t.Fatalf("clic en '<' devolvió (idx=%d, handled=%v), se esperaba (-1, true)", idx, handled)
+	}
+	if tb.start != 0 {
+		t.Fatalf("start = %d tras el clic en '<', se esperaba 0", tb.start)
+	}
+	// Sin pestañas la fila no es de nadie.
+	if _, handled := tb.HandleMouse(0, 0, tcell.Button1, model.NewWorkspace(), width); handled {
+		t.Fatal("sin pestañas el clic no debe manejarlo la barra")
+	}
+}
+
+// TestTabBarWheelSwitchesTabs: la rueda sobre la fila cambia de pestaña
+// (arriba = anterior, abajo = siguiente, con wrap), como en un navegador.
+func TestTabBarWheelSwitchesTabs(t *testing.T) {
+	ws := newTabWorkspace(t, "a.txt", "b.txt", "c.txt")
+	ws.SetActive(0)
+	tb := NewTabBar()
+
+	if idx, handled := tb.HandleMouse(2, 0, tcell.WheelDown, ws, 40); !handled || idx != 1 {
+		t.Fatalf("rueda abajo devolvió (idx=%d, handled=%v), se esperaba (1, true)", idx, handled)
+	}
+	if idx, handled := tb.HandleMouse(2, 0, tcell.WheelUp, ws, 40); !handled || idx != 2 {
+		t.Fatalf("rueda arriba desde la primera devolvió (idx=%d, handled=%v), se esperaba (2, true) con wrap", idx, handled)
+	}
+}

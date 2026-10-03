@@ -54,6 +54,78 @@ func tabLabelWidth(ws *model.Workspace, i int) int {
 // controlador— la desplace: las pestañas viven sobre el área del editor, no
 // sobre el panel del árbol, y el offset lo pone el OffsetSurface igual que
 // para el editor.
+// tabSlot es la celda donde quedó dibujada una pestaña visible en la fila: su
+// índice en el workspace, la columna inicial de la etiqueta y el ancho REAL
+// que ocupa (ya recortado si se truncó).
+type tabSlot struct {
+	index     int
+	x         int
+	width     int
+	truncated bool
+}
+
+// layout calcula la geometría de la fila de pestañas: qué pestañas se ven, en
+// qué columnas y con qué ancho, dónde están las flechas '<'/'>' y hasta dónde
+// llega el contenido. Es la ÚNICA fuente de esa aritmética: la usan Draw y el
+// hit-testing del mouse (HandleMouse), así el dibujo y lo que el usuario puede
+// clickear no pueden divergir.
+func (tb *TabBar) layout(ws *model.Workspace, width int) (slots []tabSlot, contentStart, contentEnd int, right bool) {
+	if width <= 0 || ws.Len() == 0 {
+		return nil, 0, -1, false
+	}
+
+	start := tb.start
+	if start < 0 {
+		start = 0
+	}
+	if start >= ws.Len() {
+		start = ws.Len() - 1
+	}
+
+	// La flecha izquierda ocupa la columna 0 cuando la ventana está corrida;
+	// las pestañas entonces arrancan en la columna 1.
+	contentStart = 0
+	if start > 0 {
+		contentStart = 1
+	}
+
+	// ¿Quedan pestañas fuera por la derecha? Se mide el total desde start con
+	// un separador por pestaña: si no entra, la última columna queda reservada
+	// para '>'.
+	total := 0
+	for i := start; i < ws.Len(); i++ {
+		if i > start {
+			total++
+		}
+		total += tabLabelWidth(ws, i)
+	}
+	right = total > width-contentStart
+	contentEnd = width - 1
+	if right {
+		contentEnd--
+	}
+
+	x := contentStart
+	for i := start; i < ws.Len(); i++ {
+		if x > contentEnd {
+			break
+		}
+		w := tabLabelWidth(ws, i)
+		remaining := contentEnd - x + 1
+		if w > remaining {
+			// La pestaña no entra entera: se trunca y la fila corta acá.
+			slots = append(slots, tabSlot{index: i, x: x, width: remaining, truncated: true})
+			break
+		}
+		slots = append(slots, tabSlot{index: i, x: x, width: w})
+		x += w
+		if i+1 < ws.Len() {
+			x++ // separador de una columna entre pestañas
+		}
+	}
+	return slots, contentStart, contentEnd, right
+}
+
 func (tb *TabBar) Draw(sc Surface, ws *model.Workspace, width int) {
 	if width <= 0 {
 		return
@@ -68,68 +140,100 @@ func (tb *TabBar) Draw(sc Surface, ws *model.Workspace, width int) {
 		return
 	}
 
-	active := ws.ActiveIndex()
-	start := tb.start
-
-	// La flecha izquierda ocupa la columna 0 cuando la ventana está corrida;
-	// las pestañas entonces arrancan en la columna 1.
-	contentStart := 0
-	if start > 0 {
+	slots, contentStart, contentEnd, right := tb.layout(ws, width)
+	if contentStart > 0 {
 		sc.SetContent(0, 0, '<', nil, tcell.StyleDefault)
-		contentStart = 1
 	}
 
-	// ¿Quedan pestañas fuera por la derecha? Se mide el total desde start con
-	// un separador por pestaña: si no entra, la última columna queda reservada
-	// para '>'.
-	total := 0
-	for i := start; i < ws.Len(); i++ {
-		if i > start {
-			total++
-		}
-		total += tabLabelWidth(ws, i)
-	}
-	right := total > width-contentStart
-	contentEnd := width - 1
-	if right {
-		contentEnd--
-	}
-
-	x := contentStart
-	for i := start; i < ws.Len(); i++ {
-		if x > contentEnd {
-			break
-		}
-		label := tabLabel(ws.BufferAt(i))
+	active := ws.ActiveIndex()
+	for _, s := range slots {
+		label := tabLabel(ws.BufferAt(s.index))
 		style := tcell.StyleDefault
-		if i == active {
+		if s.index == active {
 			style = tcell.StyleDefault.Reverse(true)
 		}
-
-		remaining := contentEnd - x + 1
-		w := displayWidth(label)
-		if w > remaining {
-			// La pestaña no entra entera: se trunca mostrando su inicio y la
-			// fila corta acá. Si queda al menos una celda además del inicio,
-			// la última de la fila muestra la elipsis que marca el corte.
-			if remaining >= 2 {
-				writeString(sc, x, 0, label, style, remaining-1)
+		if s.truncated {
+			// Se muestra el inicio de la etiqueta y la elipsis en la última
+			// celda del contenido (si hay lugar además del inicio).
+			if s.width >= 2 {
+				writeString(sc, s.x, 0, label, style, s.width-1)
 				sc.SetContent(contentEnd, 0, '…', nil, style)
 			} else {
-				writeString(sc, x, 0, label, style, remaining)
+				writeString(sc, s.x, 0, label, style, s.width)
 			}
-			break
+			continue
 		}
-		writeString(sc, x, 0, label, style, remaining)
-		x += w
-		if i+1 < ws.Len() {
-			x++ // separador de una columna entre pestañas
-		}
+		writeString(sc, s.x, 0, label, style, s.width)
 	}
 
 	if right {
 		sc.SetContent(width-1, 0, '>', nil, tcell.StyleDefault)
 	}
+}
+
+// HandleMouse procesa un evento de mouse sobre la fila de pestañas (en las
+// coordenadas de SU región: el controlador ya restó la columna del panel) y
+// devuelve (índice, handled): un índice >= 0 es la pestaña que hay que activar;
+// -1 con handled=true es un clic en las flechas '<'/'>' o en la rueda —la
+// ventana del strip se corre—, o un clic en la fila que no cayó en ninguna
+// pestaña. Sin pestañas o fuera de la fila devuelve handled=false.
+//
+// La rueda cambia de pestaña (arriba = anterior, abajo = siguiente), como en
+// un navegador; las flechas solo corren la ventana del strip. El hit box de
+// cada pestaña se come el separador siguiente (menos la última) para no dejar
+// zonas muertas entre pestañas.
+func (tb *TabBar) HandleMouse(x, y int, btns tcell.ButtonMask, ws *model.Workspace, width int) (int, bool) {
+	if y != 0 || width <= 0 || ws.Len() == 0 {
+		return -1, false
+	}
+
+	n := ws.Len()
+	active := ws.ActiveIndex()
+	if active < 0 {
+		active = 0
+	}
+	switch {
+	case btns&tcell.WheelUp != 0:
+		return (active - 1 + n) % n, true
+	case btns&tcell.WheelDown != 0:
+		return (active + 1) % n, true
+	}
+	if btns&tcell.Button1 == 0 {
+		return -1, false
+	}
+
+	slots, contentStart, contentEnd, right := tb.layout(ws, width)
+
+	// Flechas: corren la ventana del strip.
+	if contentStart > 0 && x == 0 {
+		if tb.start > 0 {
+			tb.start--
+		}
+		return -1, true
+	}
+	if right && x == width-1 {
+		if tb.start < n-1 {
+			tb.start++
+		}
+		return -1, true
+	}
+
+	for i, s := range slots {
+		end := s.x + s.width
+		if !s.truncated && i < len(slots)-1 {
+			end = slots[i+1].x
+		}
+		if x >= s.x && x < end {
+			return s.index, true
+		}
+	}
+
+	// Clic en la fila pero fuera de toda pestaña: es de la barra igual —se
+	// come el evento— para no raspar el documento por accidente.
+	if x >= contentStart && x <= contentEnd {
+		return -1, true
+	}
+	return -1, false
 }
 
 // EnsureActive corre start lo mínimo a la derecha hasta que la pestaña activa

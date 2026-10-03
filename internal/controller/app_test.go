@@ -2159,3 +2159,92 @@ func TestQuitRemovesTheSessionFileWhenNoTabs(t *testing.T) {
 		t.Fatalf("sin pestañas persistibles la sesión debe borrarse: %v", err)
 	}
 }
+
+// --- pestañas con el mouse ---
+
+// TestClickOnATabSwitchesToIt: el clic sobre la fila de pestañas activa la
+// pestaña clickeada, como en cualquier editor. A 80 columnas con el panel
+// oculto: "a.txt" en 0..4, separador en 5, "b.txt" en 6..10.
+func TestClickOnATabSwitchesToIt(t *testing.T) {
+	app, _, _ := newTwoBufferApp(t, "uno", "dos")
+	resizeApp(app, 80, 8)
+	app.redraw()
+	if got := app.ws.ActiveIndex(); got != 0 {
+		t.Fatalf("ActiveIndex() inicial = %d, se esperaba 0", got)
+	}
+
+	app.handleEvent(tcell.NewEventMouse(7, 0, tcell.Button1, tcell.ModNone))
+	if got := app.ws.ActiveIndex(); got != 1 {
+		t.Fatalf("ActiveIndex() = %d tras el clic en la segunda pestaña, se esperaba 1", got)
+	}
+	if got := app.ws.Active().Path(); got == "" {
+		t.Fatal("la pestaña activa debe estar abierta")
+	}
+
+	app.handleEvent(tcell.NewEventMouse(1, 0, tcell.Button1, tcell.ModNone))
+	if got := app.ws.ActiveIndex(); got != 0 {
+		t.Fatalf("ActiveIndex() = %d tras el clic en la primera pestaña, se esperaba 0", got)
+	}
+}
+
+// TestClickOnATabWithThePanelVisible: con el panel a la izquierda la fila de
+// pestañas arranca en la columna del editor; el clic se traduce igual y un clic
+// sobre la fila del árbol no activa ninguna pestaña.
+func TestClickOnATabWithThePanelVisible(t *testing.T) {
+	app, _, _ := newTwoBufferApp(t, "uno", "dos")
+	resizeApp(app, 80, 8)
+	press(app, tcell.KeyCtrlB) // panel visible: la barra arranca en x=24
+	app.redraw()
+
+	// "b.txt" ocupa 24+6 .. 24+10.
+	app.handleEvent(tcell.NewEventMouse(24+7, 0, tcell.Button1, tcell.ModNone))
+	if got := app.ws.ActiveIndex(); got != 1 {
+		t.Fatalf("ActiveIndex() = %d, se esperaba 1 (clic traducido por la columna del panel)", got)
+	}
+
+	// Un clic sobre la fila del árbol (x < panelW) no activa pestañas: la fila
+	// de pestañas no vive sobre el panel.
+	app.handleEvent(tcell.NewEventMouse(1, 0, tcell.Button1, tcell.ModNone))
+	if got := app.ws.ActiveIndex(); got != 1 {
+		t.Fatalf("ActiveIndex() = %d tras un clic sobre el árbol en la fila 0, no debía cambiar", got)
+	}
+}
+
+// TestWheelOverTheTabBarSwitchesTabs: la rueda sobre la fila de pestañas cambia
+// de pestaña (abajo = siguiente, arriba = anterior), como en un navegador.
+func TestWheelOverTheTabBarSwitchesTabs(t *testing.T) {
+	app, _, _ := newTwoBufferApp(t, "uno", "dos")
+	resizeApp(app, 80, 8)
+	app.redraw()
+
+	app.handleEvent(tcell.NewEventMouse(2, 0, tcell.WheelDown, tcell.ModNone))
+	if got := app.ws.ActiveIndex(); got != 1 {
+		t.Fatalf("ActiveIndex() = %d tras la rueda abajo, se esperaba 1", got)
+	}
+	app.handleEvent(tcell.NewEventMouse(2, 0, tcell.WheelUp, tcell.ModNone))
+	if got := app.ws.ActiveIndex(); got != 0 {
+		t.Fatalf("ActiveIndex() = %d tras la rueda arriba, se esperaba 0", got)
+	}
+}
+
+// TestSaveAsPromptOwnsTheMouse: mientras el pedido de Save As está abierto, el
+// mouse es del pedido: un clic sobre la fila de pestañas no cambia de pestaña
+// por debajo de lo que el usuario está escribiendo.
+func TestSaveAsPromptOwnsTheMouse(t *testing.T) {
+	app, _, _ := newTwoBufferApp(t, "uno", "dos")
+	resizeApp(app, 80, 8)
+	app.redraw()
+
+	pressSaveAs(app)
+	if !app.promptActive {
+		t.Fatal("el pedido de Save As debía quedar abierto")
+	}
+
+	app.handleEvent(tcell.NewEventMouse(7, 0, tcell.Button1, tcell.ModNone))
+	if got := app.ws.ActiveIndex(); got != 0 {
+		t.Fatalf("ActiveIndex() = %d: el pedido debe ser dueño del mouse y no cambiar de pestaña por debajo", got)
+	}
+	if !app.promptActive {
+		t.Fatal("el clic no debe cerrar el pedido")
+	}
+}

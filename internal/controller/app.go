@@ -422,11 +422,12 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		}
 
 	case *tcell.EventMouse:
-		// Con el menú abierto el mouse es del menú como el teclado: se ignora
-		// por completo —el controlador no traduce nada ni redibuja— y el clic
-		// no puede seleccionar una pestaña ni raspar el documento por
-		// accidente.
-		if a.menuActive {
+		// Con el menú abierto el mouse es del menú como el teclado, y con un
+		// pedido activo (Save As) el mouse es del pedido: se ignora por completo
+		// —el controlador no traduce nada ni redibuja— y el clic no puede
+		// cambiar de pestaña, seleccionar un archivo ni raspar el documento por
+		// debajo de lo que el usuario está escribiendo.
+		if a.menuActive || a.promptActive {
 			return false
 		}
 
@@ -439,6 +440,22 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		// sin columna que restar).
 		width, _ := a.screen.Size()
 		x, y := ev.Position()
+
+		// La fila de pestañas es del EDITOR —vive sobre su área, nunca sobre el
+		// árbol—: un clic en una pestaña la activa y la rueda cambia de
+		// pestaña. Se traduce la x a la región de la barra restando la columna
+		// del panel, como todo lo demás de la composición.
+		if y == 0 {
+			if idx, handled := a.tabBar.HandleMouse(x-a.explorerColumn(), y, ev.Buttons(), a.ws, a.tabBarWidth()); handled {
+				a.explorerFocused = false
+				if idx >= 0 {
+					a.activateTab(idx)
+				}
+				a.redraw()
+				return false
+			}
+		}
+
 		column := 0
 		if a.explorerVisible {
 			panelW := panelWidth(width)
@@ -846,16 +863,29 @@ func (a *App) toggleMenu() {
 // permiso de pisar, reencuadra la fila de pestañas y cierra el menú. Elegir la
 // pestaña ya activa es no-op salvo por el cierre.
 func (a *App) menuSwitchTab() {
-	idx := a.menu.Selected()
+	a.menuActive = false
+	a.activateTab(a.menu.Selected())
+}
+
+// activateTab hace activa la pestaña del índice idx y deja la composición
+// consistente: desarma las confirmaciones (cambiar de pestaña es "seguir
+// trabajando"), revoca el permiso de pisar, reencuadra el strip y sincroniza la
+// barra. Es el camino compartido del menú (Ctrl+T), del clic en una pestaña y
+// de la rueda sobre la fila de pestañas.
+func (a *App) activateTab(idx int) {
+	if idx < 0 || idx >= a.ws.Len() {
+		return
+	}
 	if idx != a.ws.ActiveIndex() {
-		a.ws.SetActive(idx)
+		if err := a.ws.SetActive(idx); err != nil {
+			return
+		}
 	}
 	a.confirmQuit = false
 	a.confirmClose = false
 	a.clearForceSave()
 	a.tabBar.EnsureActive(a.ws, a.tabBarWidth())
 	a.syncStatus()
-	a.menuActive = false
 }
 
 // sessionPath es la ubicación fija de la sesión de un root de trabajo.
