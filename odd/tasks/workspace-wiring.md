@@ -127,3 +127,4 @@ construir la App.
 - **Detalle de performance corregido:** `clearForceSave` reusa el mapa con `clear()` en
   lugar de asignar uno nuevo. Ese camino corre en cada tecla que no sea un atajo, así que
   asignar un mapa por tecla era un costo por nada.
+- **Commit de unidad de trabajo:** `8433084`.
