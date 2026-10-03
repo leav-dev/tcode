@@ -28,15 +28,19 @@ type Theme struct {
 }
 
 // DefaultTheme es la paleta por defecto: estilo oscuro, tipo VSCode Dark+.
+// Los roles "activos" (TabActive, TreeCursor) conservan el atributo Reverse
+// del diseño original y le suman un color de acento: así el "de qué está
+// seleccionado" nunca depende solo del color de la terminal.
 func DefaultTheme() Theme {
 	fg := func(c tcell.Color) tcell.Style { return tcell.StyleDefault.Foreground(c) }
 	on := func(fg, bg tcell.Color) tcell.Style { return tcell.StyleDefault.Foreground(fg).Background(bg) }
+	active := func(c tcell.Color) tcell.Style { return tcell.StyleDefault.Reverse(true).Foreground(c) }
 	return Theme{
 		Text:         tcell.StyleDefault,
 		CursorLineBg: tcell.PaletteColor(236),
-		TabActive:    fg(tcell.PaletteColor(45)),
+		TabActive:    active(tcell.PaletteColor(45)),
 		TabIdle:      tcell.StyleDefault,
-		TreeCursor:   on(tcell.ColorDefault, tcell.PaletteColor(237)),
+		TreeCursor:   active(tcell.ColorDefault),
 		Status:       on(tcell.PaletteColor(15), tcell.PaletteColor(24)),
 		Message:      on(tcell.PaletteColor(220), tcell.PaletteColor(24)),
 		Modified:     fg(tcell.PaletteColor(208)),
@@ -96,6 +100,15 @@ func LoadTheme(data []byte) Theme {
 		}
 	}
 	return t
+}
+
+// themeOr devuelve el tema activo: el inyectado por SetTheme o el default.
+// Los componentes dibujan con esto; el valor cero del campo significa default.
+func themeOr(th Theme) Theme {
+	if th == (Theme{}) {
+		return DefaultTheme()
+	}
+	return th
 }
 
 // StyleForRole mapea un rol de sintaxis al estilo del tema: es el único punto

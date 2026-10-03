@@ -14,7 +14,13 @@ type TabBar struct {
 	// start es el índice de la primera pestaña visible, la ventana de
 	// desplazamiento horizontal. Lo mueve EnsureActive, nunca Draw.
 	start int
+
+	// theme es la paleta por rol; el valor cero usa la default.
+	theme Theme
 }
+
+// SetTheme reemplaza la paleta del componente.
+func (tb *TabBar) SetTheme(th Theme) { tb.theme = th }
 
 func NewTabBar() *TabBar {
 	return &TabBar{}
@@ -146,11 +152,12 @@ func (tb *TabBar) Draw(sc Surface, ws *model.Workspace, width int) {
 	}
 
 	active := ws.ActiveIndex()
+	th := themeOr(tb.theme)
 	for _, s := range slots {
 		label := tabLabel(ws.BufferAt(s.index))
-		style := tcell.StyleDefault
+		style := th.TabIdle
 		if s.index == active {
-			style = tcell.StyleDefault.Reverse(true)
+			style = th.TabActive
 		}
 		if s.truncated {
 			// Se muestra el inicio de la etiqueta y la elipsis en la última

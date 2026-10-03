@@ -98,6 +98,10 @@ type App struct {
 	// núcleo; los hooks se emiten desde open/save/close.
 	ext *ext.Manager
 
+	// theme es la paleta por rol del editor, cargada de ~/.tcode/theme.json o
+	// la default; se aplica a las vistas (y a cada editor bajo demanda).
+	theme view.Theme
+
 	// extensionRoots son los directorios donde se buscan extensiones, en orden
 	// de precedencia: el primero gana en caso de ids duplicados. Por defecto,
 	// las del usuario y las del proyecto actual; los tests los reemplazan.
@@ -203,6 +207,10 @@ func NewAppWithScreen(s tcell.Screen, path string) (*App, error) {
 	app.extensionRoots = defaultExtensionRoots(app.ws.Root())
 	app.loadExtensions()
 
+	// El tema se aplica a todas las vistas en el arranque; los editores que se
+	// creen bajo demanda lo reciben en activeEditor.
+	app.loadTheme()
+
 	// Los built-ins tcode.* se registran después de armar el App completo: los
 	// handlers cierran sobre el App ya construido.
 	app.registerBuiltins()
@@ -288,6 +296,32 @@ func (a *App) registerBuiltins() {
 		a.switchTab(a.ws.Prev)
 		return nil
 	})
+}
+
+// themeFilePath resuelve el archivo de tema del usuario; es variable para que
+// los tests lo apunten a un directorio temporal.
+var themeFilePath = func() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".tcode", "theme.json")
+}
+
+// loadTheme lee ~/.tcode/theme.json al arranque y aplica la paleta a todas las
+// vistas. Si el archivo falta o el JSON está roto, se usa la default: el tema
+// del usuario jamás rompe el editor.
+func (a *App) loadTheme() {
+	a.theme = view.DefaultTheme()
+	if path := themeFilePath(); path != "" {
+		if data, err := os.ReadFile(path); err == nil {
+			a.theme = view.LoadTheme(data)
+		}
+	}
+	a.statusBar.SetTheme(a.theme)
+	a.tabBar.SetTheme(a.theme)
+	a.explorer.SetTheme(a.theme)
+	a.menu.SetTheme(a.theme)
 }
 
 // defaultExtensionRoots devuelve los directorios de extensiones por defecto:
@@ -469,6 +503,7 @@ func (a *App) activeEditor() *view.EditorView {
 	}
 	width, height := a.screen.Size()
 	ev := view.NewEditorView(buf, editorHeight(height), width-a.explorerColumn())
+	ev.SetTheme(a.theme)
 	a.editors[buf] = ev
 	return ev
 }

@@ -14,12 +14,13 @@ type StatusBar struct {
 	modified bool
 	message  string
 	prompt   string
-	style    tcell.Style
+	theme    Theme
 }
 
-func NewStatusBar() *StatusBar {
-	return &StatusBar{style: tcell.StyleDefault.Reverse(true)}
-}
+func NewStatusBar() *StatusBar { return &StatusBar{} }
+
+// SetTheme reemplaza la paleta del componente.
+func (s *StatusBar) SetTheme(th Theme) { s.theme = th }
 
 // SetFile actualiza el archivo mostrado y su estado de modificación.
 func (s *StatusBar) SetFile(path string, modified bool) {
@@ -69,14 +70,18 @@ func (s *StatusBar) Draw(sc tcell.Screen, y, width int) {
 		return
 	}
 
+	th := themeOr(s.theme)
+	status := th.Status
+	message := th.Message
+
 	// Fondo de la barra: se limpia la fila con su estilo.
 	for x := 0; x < width; x++ {
-		sc.SetContent(x, y, ' ', nil, s.style)
+		sc.SetContent(x, y, ' ', nil, status)
 	}
 
 	label := s.label()
 	if s.message == "" {
-		writeString(sc, 0, y, label, s.style, width)
+		writeString(sc, 0, y, label, status, width)
 		return
 	}
 
@@ -86,15 +91,15 @@ func (s *StatusBar) Draw(sc tcell.Screen, y, width int) {
 	// perdido: la confirmación de «cambios sin guardar» tiene que verse siempre.
 	msgWidth := displayWidth(s.message)
 	if msgWidth >= width {
-		writeString(sc, 0, y, s.message, s.style, width-1)
-		sc.SetContent(width-1, y, '…', nil, s.style)
+		writeString(sc, 0, y, s.message, message, width-1)
+		sc.SetContent(width-1, y, '…', nil, message)
 		return
 	}
 
 	start := width - msgWidth
 	// La etiqueta cede: como mucho ocupa hasta la celda anterior al mensaje.
-	writeString(sc, 0, y, label, s.style, start-1)
-	writeString(sc, start, y, s.message, s.style, msgWidth)
+	writeString(sc, 0, y, label, status, start-1)
+	writeString(sc, start, y, s.message, message, msgWidth)
 }
 
 // writeString escribe s en la fila y desde la columna x, respetando maxWidth

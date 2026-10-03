@@ -108,3 +108,36 @@ func TestThemeOverrideReachesRender(t *testing.T) {
 		t.Fatalf("'func' con tema custom = %v, esperaba red", got)
 	}
 }
+
+// TestStatusBarUsesTheme: la barra de estado dibuja con el rol Status del tema
+// (y el mensaje con el rol Message).
+func TestStatusBarUsesTheme(t *testing.T) {
+	s := newTestScreen(t, 20, 1)
+	sb := NewStatusBar()
+	th := DefaultTheme()
+	th.Status = tcell.StyleDefault.Foreground(tcell.ColorRed).Background(tcell.ColorNavy)
+	sb.SetTheme(th)
+	sb.SetFile("doc.go", false)
+	sb.Draw(s, 0, 20)
+	s.Show()
+
+	cells, _, _ := s.GetContents()
+	fg, bg, _ := cells[0].Style.Decompose()
+	if fg != tcell.ColorRed || bg != tcell.ColorNavy {
+		t.Fatalf("celda 0 = fg %v bg %v, esperaba el tema custom (red on navy)", fg, bg)
+	}
+}
+
+// TestStatusBarDefaultWithoutSetTheme: sin SetTheme la barra usa la default.
+func TestStatusBarDefaultWithoutSetTheme(t *testing.T) {
+	s := newTestScreen(t, 20, 1)
+	sb := NewStatusBar()
+	sb.SetFile("doc.go", false)
+	sb.Draw(s, 0, 20)
+	s.Show()
+
+	cells, _, _ := s.GetContents()
+	if cells[0].Style != DefaultTheme().Status {
+		t.Fatalf("la barra sin tema debe usar el default")
+	}
+}

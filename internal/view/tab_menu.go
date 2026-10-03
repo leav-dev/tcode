@@ -23,7 +23,11 @@ type TabMenu struct {
 	top    int // primera pestaña visible
 	width  int // ancho del panel (Resize)
 	height int // alto del panel (Resize)
+	theme  Theme
 }
+
+// SetTheme reemplaza la paleta del componente.
+func (m *TabMenu) SetTheme(th Theme) { m.theme = th }
 
 func NewTabMenu() *TabMenu {
 	return &TabMenu{}
@@ -195,9 +199,10 @@ func (m *TabMenu) Draw(s Surface, ws *model.Workspace, width int) {
 		// resaltado de ancho completo hace legible la del cursor aunque la
 		// etiqueta sea corta, tapa el editor que queda debajo (es un overlay)
 		// y limpia el resaltado viejo del redibujo anterior.
-		style := tcell.StyleDefault
+		th := themeOr(m.theme)
+		style := th.TabIdle
 		if idx == m.cursor {
-			style = tcell.StyleDefault.Reverse(true)
+			style = th.TabActive
 		}
 		for x := 0; x < width; x++ {
 			s.SetContent(x, row, ' ', nil, style)

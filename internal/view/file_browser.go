@@ -71,7 +71,11 @@ type FileBrowser struct {
 	top    int         // primer nodo visible
 	width  int
 	height int
+	theme  Theme
 }
+
+// SetTheme reemplaza la paleta del componente.
+func (fb *FileBrowser) SetTheme(th Theme) { fb.theme = th }
 
 func NewFileBrowser() *FileBrowser {
 	return &FileBrowser{}
@@ -434,9 +438,10 @@ func (fb *FileBrowser) Draw(s Surface) {
 		// selección de ancho completo hace legible la activa aunque el nombre
 		// sea corto, y el repintado por fila limpia el resaltado viejo del
 		// redibujo anterior.
-		style := tcell.StyleDefault
+		th := themeOr(fb.theme)
+		style := th.Text
 		if idx == fb.cursor {
-			style = tcell.StyleDefault.Reverse(true)
+			style = th.TreeCursor
 		}
 		for x := 0; x < fb.width; x++ {
 			s.SetContent(x, row, ' ', nil, style)
