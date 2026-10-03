@@ -13,7 +13,8 @@ del archivo (regla de la `constitution.md`: "lo que no está en pantalla no se c
 - [x] Implementar scroll por mouse (rueda vertical y horizontal) <!-- id: 4 -->
 - [x] Soportar `EventResize` y reajustar el viewport <!-- id: 5 -->
 - [x] Tests del modelo (8) y de la vista con `SimulationScreen` (12) <!-- id: 6 -->
-- [ ] Commit de unidad de trabajo (`feat(view): ...`) — **pendiente de autorización del usuario**
+- [x] Commit de unidad de trabajo en `main` <!-- id: 7 -->
+- [x] Push a `origin/main` <!-- id: 8 -->
 
 ## Evidence
 - `internal/model/piece_table.go`
@@ -38,6 +39,13 @@ del archivo (regla de la `constitution.md`: "lo que no está en pantalla no se c
   - `NewApp(path string)` carga el archivo opcional y devuelve error en lugar de `panic`.
   - Loop de eventos síncrono (sin goroutine) con un único camino de redibujado.
 - `main.go` acepta la ruta del archivo como argumento.
+
+## Commit
+- `fc07fa0` — `feat: bootstrap tcode with MVC scaffold and efficient viewport`
+  - 14 archivos, 1009 inserciones, commit raíz de `main`.
+  - Pusheado a `origin` → `git@github.com:leav-dev/tcode.git` (`refs/heads/main = fc07fa0`).
+  - Verificado con el worktree limpio: `go vet ./...`, `gofmt -l .` y
+    `go test -race -count=1 ./...` → 20 tests OK sobre ese snapshot exacto.
 
 ## Known Limitations (próxima iteración)
 - **Ancho de caracteres:** se dibuja 1 celda por runa. Los caracteres anchos (CJK,
