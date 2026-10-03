@@ -14,7 +14,9 @@ explícito del proyecto ("amigable con el mouse").
 - [x] No dibujar clusters anchos que no entren en el borde derecho <!-- id: 4 -->
 - [x] Tests de ancho: CJK, combinantes, emoji ZWJ, tabs, borde y scroll horizontal <!-- id: 5 -->
 - [x] Verificación: `go vet`, `gofmt -l`, `go test -race` <!-- id: 6 -->
-- [ ] Commit de unidad de trabajo — pendiente de autorización del usuario <!-- id: 7 -->
+- [x] Commit de unidad de trabajo — el código quedó integrado en `a33c866` (la
+  anotación de identidad quedó pendiente en su momento y se cierra en el commit de
+  cierre de U2b) <!-- id: 7 -->
 
 ## Evidence
 

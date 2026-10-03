@@ -26,7 +26,9 @@ vivir en coordenadas de documento.
 - [x] Reescribir `GetRange` en coordenadas de documento, con camino rápido cero-copia <!-- id: 4 -->
 - [x] Tests: insert/delete en inicio, medio y fin; bordes; varias piezas; multi-línea <!-- id: 5 -->
 - [x] Verificación: `go vet`, `gofmt -l`, `go test -race` <!-- id: 6 -->
-- [ ] Commit de unidad de trabajo — pendiente de autorización del usuario <!-- id: 7 -->
+- [x] Commit de unidad de trabajo — el código quedó integrado en `b1c3a58` (la
+  anotación de identidad quedó pendiente en su momento y se cierra en el commit de
+  cierre de U2b) <!-- id: 7 -->
 
 ## Evidence
 

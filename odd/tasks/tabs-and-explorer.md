@@ -30,12 +30,13 @@ Se parte en dos para que el review no mezcle refactor con feature.
   `*model.Workspace`, un `EditorView` por buffer, y el estado hoy único
   (`confirmQuit`, `forceSave`, pedido de Save As) pasa a tener semántica por buffer.
   Sin UI nueva: es el refactor habilitante.
-- **U2b — TabBar y navegación.** Fila de pestañas, `Ctrl+PageUp`/`Ctrl+PageDown` para
-  cambiar, `Ctrl+W` para cerrar con la misma confirmación no modal que la salida.
-  Debe además: (a) borrar la entrada de `editors` del buffer que se cierra, porque la
-  vista vieja conserva un puntero a un `PieceTable` ya liberado; (b) introducir la
-  costura de superficie con desplazamiento; (c) arreglar el tamaño determinista de la
-  pantalla en los tests (`SetSize` **después** de `NewAppWithScreen`).
+- **U2b — TabBar y navegación (`odd/tasks/tab-bar.md`).** Fila de pestañas,
+  `Ctrl+PageUp`/`Ctrl+PageDown` para cambiar, `Ctrl+W` para cerrar con la misma
+  confirmación no modal que la salida. Debe además: (a) borrar la entrada de
+  `editors` del buffer que se cierra, porque la vista vieja conserva un puntero a un
+  `PieceTable` ya liberado; (b) introducir la costura de superficie con desplazamiento;
+  (c) arreglar el tamaño determinista de la pantalla en los tests (`SetSize`
+  **después** de `NewAppWithScreen`). En la evidencia: `322cf62`.
 
 ### U3 — FileBrowser y modos de arranque (view + controller) — pendiente
 ### U4 — Menú de pestañas (`Ctrl+T`) y sesión JSON — pendiente

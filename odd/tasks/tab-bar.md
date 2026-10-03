@@ -44,7 +44,7 @@ Sin menú de pestañas ni sesión JSON: eso es U4. Sin explorador: eso es U3.
 - [x] Tests nuevos del controlador: navegación circular, cierre limpio, cierre con confirmación, cancelar la confirmación, cierre de la última pestaña, limpieza de `editors`/`forceSave`, composición (contenido fila 1, cursor fila 1+, pestaña fila 0), mouse traducido <!-- id: 12 -->
 - [x] Actualizar los tres tests que dependen de la geometría vieja sin debilitar aserciones: cursor `(3,1)->(3,2)`, `30x4->30x3`, `editorHeight 10->8` <!-- id: 13 -->
 - [x] Verificación: `gofmt -l .`, `go vet ./...`, tests de la unidad en verde (véase Evidence) <!-- id: 14 -->
-- [ ] Commit de unidad de trabajo <!-- id: 15 -->
+- [x] Commit de unidad de trabajo: `322cf62` <!-- id: 15 -->
 
 ## Design decisions
 
@@ -167,4 +167,4 @@ terminal escrolle por accidente mientras se cambia de pestaña.
   por el orquestador (riesgo de revisión del worker, ver arriba); su primera variante
   contaba mal el ancho de la etiqueta (21 vs 20) y asumía un `>` derecho inexistente
   cuando la ventana cabe entera sin desborde —corregido en la aserción, no en el código.
-- **Commit de unidad de trabajo:** (se registra en el commit de docs siguiente).
+- **Commit de unidad de trabajo:** `322cf62`.
