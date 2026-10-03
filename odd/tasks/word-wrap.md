@@ -31,23 +31,23 @@ Alcance v1 (modelo nano):
   ancho real.
 
 ## Tasks
-- [ ] `view/wrap.go`: `softLine`/`softLineCount`/`softLineAt`/`softLineToByte`
+- [x] `view/wrap.go`: `softLine`/`softLineCount`/`softLineAt`/`softLineToByte`
   — la línea lógica envuelta en filas visuales, corte por palabra con quiebre
   de palabras largas <!-- id: 0 -->
-- [ ] Tests de wrap: corte por palabra, palabras largas partidas, tabulaciones,
+- [x] Tests de wrap: corte por palabra, palabras largas partidas, tabulaciones,
   ancho justo, invariantes count/at/toByte <!-- id: 1 -->
-- [ ] `Draw` envuelve: cada línea lógica se pinta en sus filas visuales; el
+- [x] `Draw` envuelve: cada línea lógica se pinta en sus filas visuales; el
   clúster que no entra y no aplica wrap (desactivado) sigue cortando igual que
   hoy <!-- id: 2 -->
-- [ ] Cursor: `drawCursor` proyectado a la fila visual física; movimiento
+- [x] Cursor: `drawCursor` proyectado a la fila visual física; movimiento
   vertical sin cambio (línea lógica) — tests del render del cursor envuelto
   <!-- id: 3 -->
-- [ ] `ensureCursorVisible` vertical en unidades visuales (con el acomodo por
+- [x] `ensureCursorVisible` vertical en unidades visuales (con el acomodo por
   líneas lógicas documentado); mouse traducido a (línea, bytecol) vía las
   filas visuales <!-- id: 4 -->
-- [ ] Config: `var wordWrapEnabled` + toggle `Ctrl+Shift+W` en el controlador
+- [x] Config: `var wordWrapEnabled` + toggle `Ctrl+Shift+W` en el controlador
   con mensaje; tests <!-- id: 5 -->
-- [ ] Verificación: suite completa sin fallos nuevos vs base (parser limpio) +
+- [x] Verificación: suite completa sin fallos nuevos vs base (parser limpio) +
   docs de `memory.md` <!-- id: 6 -->
 
 ## Design decisions
@@ -79,4 +79,21 @@ podrá escribir la misma variable.
 4. Sin toggle → `TestWrapToggleKey` falla.
 
 ## Evidence
-(Rellenar por unidad.)
+
+### Wrap · `ecec825` (primitivas) + `d39ce80` (integración + toggle)
+- **RED:** los tests de filas visuales y del render envuelto.
+- **Semántica del espacio de corte:** el espacio que no cabe al borde "se pega"
+  al final de la fila anterior (invisible al pintar) y se conserva en la
+  concatenación; las filas son slices, nunca copias.
+- **Bug real (lo destapó el cursor del undo):** `softLineAt` con frontera
+  estricta proyectaba el FINAL de línea (el caso más común) a la columna 0;
+  la última fila acepta el extremo inclusive y el cursor del final quedó en su
+  columna. Fijado por test.
+- **Refactor del Draw por línea:** el render pasó de clusterizar el rango
+  completo a pintar por LÍNEA lógica (su fila visual o la línea entera sin
+  wrap), necesitado por el wrap; los tests existentes (scroll horizontal,
+  CR aislado, estilos por rol) se mantuvieron verdes —los tres de scroll
+  horizontal fijan `wordWrapEnabled=false`, pues el scroll horizontal es la
+  alternativa al wrap.
+- **Verificación:** suite completa con 0 fallos nuevos (34 ambientales de
+  este host); `go build`/`go vet` limpios.
