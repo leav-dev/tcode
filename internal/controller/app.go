@@ -2,11 +2,14 @@ package controller
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 
 	"github.com/gdamore/tcell/v2"
+	"tcode/internal/ext"
 	"tcode/internal/model"
 	"tcode/internal/view"
 )
@@ -85,6 +88,17 @@ type App struct {
 	// argumentos): el modo archivo explícito no guarda ni restaura. Se define
 	// en el arranque y cubre tanto el guardado como la restauración.
 	sessionEnabled bool
+
+	// ext es el sistema de extensiones: registro de comandos compartido
+	// (built-ins tcode.* más stubs declarados), keybindings y bus de hooks.
+	// handleEvent resuelve las teclas de extensión después de los atajos del
+	// núcleo; los hooks se emiten desde open/save/close.
+	ext *ext.Manager
+
+	// extensionRoots son los directorios donde se buscan extensiones, en orden
+	// de precedencia: el primero gana en caso de ids duplicados. Por defecto,
+	// las del usuario y las del proyecto actual; los tests los reemplazan.
+	extensionRoots []string
 }
 
 // NewApp inicializa la terminal y carga el archivo indicado (si path != "").
@@ -121,6 +135,7 @@ func NewAppWithScreen(s tcell.Screen, path string) (*App, error) {
 		tabBar:    view.NewTabBar(),
 		explorer:  view.NewFileBrowser(),
 		menu:      view.NewTabMenu(),
+		ext:       ext.NewManager(),
 
 		// La sesión es el estado de los modos explorador; el modo archivo la
 		// apaga abajo.
@@ -158,6 +173,7 @@ func NewAppWithScreen(s tcell.Screen, path string) (*App, error) {
 			s.Fini()
 			return nil, err
 		}
+		app.emitEvent(ext.EventDidOpenBuffer)
 	}
 
 	width, height := s.Size()
@@ -179,12 +195,160 @@ func NewAppWithScreen(s tcell.Screen, path string) (*App, error) {
 		app.explorer.SetRootEntries(nil)
 	}
 
+	// Las extensiones de disco se cargan ANTES de los built-ins: sus comandos
+	// declarados no pueden piser a tcode.*.
+	app.extensionRoots = defaultExtensionRoots(app.ws.Root())
+	app.loadExtensions()
+
+	// Los built-ins tcode.* se registran después de armar el App completo: los
+	// handlers cierran sobre el App ya construido.
+	app.registerBuiltins()
+
+	// El arranque activa las extensiones que lo declaran (onStartup/*). Con el
+	// registro y el keymap ya listos, los hooks de las activas participan desde
+	// el primer evento de buffer.
+	app.ext.ActivateEvent(ext.ActivateStartup)
+
 	// La sesión se restaura después de que el árbol quedó listo: SetRoot y el
 	// primer nivel ya corrieron, y la restauración nunca es fatal (pestañas
 	// muertas se saltan, JSON corrupto se descarta).
 	app.loadSession()
 	app.syncStatus()
 	return app, nil
+}
+
+// registerBuiltins expone las acciones existentes del controlador como
+// comandos tcode.* en el registro del manager: es la primera contribución
+// real que pueden invocar los keybindings y hooks de una extensión. Los que
+// requieren un buffer abierto fallan con un error legible en lugar de tocar
+// el documento; un registro fallido es un bug de programación, por eso pániquea.
+func (a *App) registerBuiltins() {
+	r := a.ext.Registry()
+	register := func(id string, fn func() error) {
+		if err := r.Register(id, fn); err != nil {
+			panic(err)
+		}
+	}
+
+	register("tcode.save", func() error {
+		if _, err := a.requireBuffer(); err != nil {
+			return err
+		}
+		a.save()
+		return nil
+	})
+	register("tcode.saveAs", func() error {
+		if _, err := a.requireBuffer(); err != nil {
+			return err
+		}
+		a.startPrompt()
+		return nil
+	})
+	register("tcode.closeTab", func() error {
+		if _, err := a.requireBuffer(); err != nil {
+			return err
+		}
+		a.closeTab()
+		return nil
+	})
+	register("tcode.toggleExplorer", func() error {
+		a.toggleExplorer()
+		return nil
+	})
+	register("tcode.undo", func() error {
+		buf, err := a.requireBuffer()
+		if err != nil {
+			return err
+		}
+		a.applyHistory(buf.Undo, "Deshecho", "Nada que deshacer")
+		return nil
+	})
+	register("tcode.redo", func() error {
+		buf, err := a.requireBuffer()
+		if err != nil {
+			return err
+		}
+		a.applyHistory(buf.Redo, "Rehecho", "Nada que rehacer")
+		return nil
+	})
+	register("tcode.switchTabNext", func() error {
+		if _, err := a.requireBuffer(); err != nil {
+			return err
+		}
+		a.switchTab(a.ws.Next)
+		return nil
+	})
+	register("tcode.switchTabPrev", func() error {
+		if _, err := a.requireBuffer(); err != nil {
+			return err
+		}
+		a.switchTab(a.ws.Prev)
+		return nil
+	})
+}
+
+// defaultExtensionRoots devuelve los directorios de extensiones por defecto:
+// las del proyecto (`.tcode/extensions` bajo la raíz de la sesión) y las del
+// usuario (~/.tcode/extensions). El primer root gana ante ids duplicados, así
+// que las del usuario preceden.
+func defaultExtensionRoots(root string) []string {
+	roots := []string{filepath.Join(root, ".tcode", "extensions")}
+	if home, err := os.UserHomeDir(); err == nil {
+		roots = append(roots, filepath.Join(home, ".tcode", "extensions"))
+	}
+	return roots
+}
+
+// loadExtensions descubre las extensiones de cada root y las agrega al
+// manager. Cada extensión rota se avisa en la barra de estado una vez; el
+// arranque nunca falla por una extensión quebrada.
+func (a *App) loadExtensions() {
+	var exts []ext.Extension
+	for _, root := range a.extensionRoots {
+		found, errs := ext.Discover(root)
+		exts = append(exts, found...)
+		for _, e := range errs {
+			a.statusBar.SetMessage("Extensión ignorada: " + e.Error())
+		}
+	}
+	a.ext.AddExtensions(exts)
+}
+
+// requireBuffer devuelve el buffer activo o un error legible cuando el
+// workspace está vacío: los comandos que editan no pueden inventarse un
+// documento.
+func (a *App) requireBuffer() (*model.PieceTable, error) {
+	buf := a.activeBuffer()
+	if buf == nil {
+		return nil, errors.New("sin buffer abierto")
+	}
+	return buf, nil
+}
+
+// runExtensionCommand ejecuta un comando resuelto por un keybinding de
+// extensión y traduce su resultado a la barra de estado: un comando que corre
+// limpio es "seguir trabajando" (desarma confirmaciones, como cualquier tecla
+// del editor), y un error se muestra sin romper nada.
+func (a *App) runExtensionCommand(cmd string) {
+	if err := a.ext.RunCommand(cmd); err != nil {
+		a.statusBar.SetMessage(err.Error())
+	} else {
+		a.confirmQuit = false
+		a.confirmClose = false
+		a.clearForceSave()
+		a.statusBar.ClearMessage()
+	}
+	a.redraw()
+}
+
+// emitEvent despacha un evento de buffer al manager de extensiones y muestra
+// el último error de hook en la barra de estado. Un hook roto nunca rompe el
+// editor: solo avisa.
+func (a *App) emitEvent(event string) {
+	errs := a.ext.Emit(event)
+	if len(errs) > 0 {
+		a.statusBar.SetMessage(errs[len(errs)-1].Error())
+	}
 }
 
 // editorHeight es el alto disponible para el editor, descontando la fila de
@@ -246,7 +410,12 @@ func (a *App) syncStatus() {
 }
 
 // Run ejecuta el loop de eventos hasta que el usuario cierra el editor.
-func (a *App) Run() error {
+func (a *App) Run() (err error) {
+	// El crash paper del runtime (fatal, pánico en goroutine, stack overflow)
+	// mata el proceso SIN desenrollar los defers: queda apuntado a crash.log
+	// para que la evidencia sobreviva aunque la terminal quede destruida.
+	setCrashPaper()
+
 	defer a.screen.Fini()
 	defer a.ws.CloseAll()
 	// La sesión se guarda como ÚLTIMO defer: al desenrollar (LIFO) corre
@@ -254,6 +423,21 @@ func (a *App) Run() error {
 	// el camino de salida, silencioso: un fallo de escritura no puede impedir
 	// cerrar el editor.
 	defer a.saveSession()
+
+	// Guard de crash: un pánico en el despacho de un evento no deja el editor
+	// muerto con la terminal en modo raw. Se vuelca el stack a crash.log y se
+	// devuelve un error que main imprime —la pantalla ya quedó restaurada
+	// cuando corre el defer de Fini, así el mensaje es legible en la consola—.
+	defer func() {
+		if r := recover(); r != nil {
+			path := writeCrashLog(r)
+			if path != "" {
+				err = fmt.Errorf("crash interno (detalle en %s): %v", path, r)
+			} else {
+				err = fmt.Errorf("crash interno: %v", r)
+			}
+		}
+	}()
 
 	a.redraw()
 
@@ -266,6 +450,59 @@ func (a *App) Run() error {
 			return nil
 		}
 	}
+}
+
+// crashLogPath resuelve la ruta del registro de crashes; es una variable de
+// función para que los tests la reemplacen por un directorio temporal.
+var crashLogPath = defaultCrashLogPath
+
+func defaultCrashLogPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".tcode", "crash.log")
+}
+
+// writeCrashLog vuelca el valor y el stack de un pánico a crash.log (append),
+// creando el directorio si hace falta, y devuelve la ruta (o "" si no se
+// pudo). Un fallo de escritura jamás impide el resto del recovery.
+func writeCrashLog(r any) string {
+	path := crashLogPath()
+	if path == "" {
+		return ""
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return path
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return path
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "tcode crash: %v\n%s\n", r, debug.Stack())
+	return path
+}
+
+// setCrashPaper redirige el crash paper del runtime al registro: los errores
+// fatales no pasan por el guard de Run, y sin esta redirección la única
+// evidencia quedaría enterrada en una terminal destruida. El archivo queda
+// abierto toda la vida del proceso, como pide SetCrashOutput — por eso es una
+// variable inyectable: los tests la reemplazan por un no-op (un archivo abierto
+// de por vida rompería el cleanup de TempDir en Windows).
+var setCrashPaper = func() {
+	path := crashLogPath()
+	if path == "" {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	debug.SetCrashOutput(f, debug.CrashOptions{})
 }
 
 // handleEvent procesa un evento y devuelve true si la aplicación debe terminar.
@@ -407,6 +644,15 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 			a.confirmQuit = true
 			a.statusBar.SetMessage("Cambios sin guardar: Ctrl+S guarda, Escape de nuevo sale igual")
 			a.redraw()
+			return false
+		}
+
+		// Las extensiones resuelven después de los atajos del núcleo —que ganan
+		// siempre— y antes de que la tecla caiga al documento. Con el workspace
+		// vacío el guard de arriba cortó antes: sin buffers no hay keybinding de
+		// extensión (solo navegación y salida), regla documentada.
+		if cmd := a.ext.Resolve(ev); cmd != "" {
+			a.runExtensionCommand(cmd)
 			return false
 		}
 
@@ -640,6 +886,7 @@ func (a *App) saveAs(target *model.PieceTable, path string) {
 		a.confirmQuit = false
 		a.clearForceSave()
 		a.statusBar.SetMessage("Guardado en " + filepath.Base(path))
+		a.emitEvent(ext.EventDidSaveBuffer)
 	}
 
 	a.syncStatus()
@@ -672,6 +919,7 @@ func (a *App) save() {
 	default:
 		a.confirmQuit = false
 		a.statusBar.SetMessage("Guardado")
+		a.emitEvent(ext.EventDidSaveBuffer)
 	}
 
 	a.syncStatus()
@@ -805,6 +1053,7 @@ func (a *App) activateExplorerEntry() {
 		a.statusBar.SetMessage("Error al abrir: " + err.Error())
 		return
 	}
+	a.emitEvent(ext.EventDidOpenBuffer)
 	a.explorerFocused = false
 	a.syncStatus()
 }
@@ -984,6 +1233,7 @@ func (a *App) closeTab() {
 	// permiso autorizó a un archivo que ya no está abierto.
 	delete(a.editors, buf)
 	delete(a.forceSave, buf)
+	a.emitEvent(ext.EventDidCloseBuffer)
 	a.confirmClose = false
 	a.statusBar.ClearMessage()
 	a.tabBar.EnsureActive(a.ws, a.tabBarWidth())

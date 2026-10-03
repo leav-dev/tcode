@@ -60,6 +60,9 @@ func (s *StatusBar) label() string {
 // Label expone la etiqueta que la barra esta mostrando. Pensado para tests.
 func (s *StatusBar) Label() string { return s.label() }
 
+// Message expone el mensaje transitorio actual. Pensado para tests.
+func (s *StatusBar) Message() string { return s.message }
+
 // Draw pinta la barra completa en la fila y.
 func (s *StatusBar) Draw(sc tcell.Screen, y, width int) {
 	if width <= 0 {
