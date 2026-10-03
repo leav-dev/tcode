@@ -717,8 +717,28 @@ func TestEscapeWarnsWhenAnyBufferIsDirty(t *testing.T) {
 	if bufferAt(app, 1).Modified() {
 		t.Fatal("el buffer activo no debía estar sucio")
 	}
-	if app.statusBar.Label() == "" {
-		t.Fatal("debe haber un aviso en la barra")
+	// El aviso tiene que quedar DIBUJADO en la barra, no solo existir como
+	// mensaje: la regla vieja lo ocultaba si no entraba al lado de la etiqueta,
+	// y un aviso invisible hace que el Escape parezca no validar nada.
+	if got := statusRow(app); !strings.Contains(got, "Cambios sin guardar") {
+		t.Fatalf("la fila de estado = %q, se esperaba el aviso de cambios sin guardar dibujado", got)
+	}
+}
+
+// TestTheQuitWarningSurvivesANarrowTerminal: con la terminal angosta el aviso
+// de la confirmación de salida se recorta con '…' pero NUNCA desaparece —la
+// barra le da prioridad al mensaje por sobre la etiqueta—: es lo que hacía que
+// un Escape pudiera parecer que no validaba nada.
+func TestTheQuitWarningSurvivesANarrowTerminal(t *testing.T) {
+	app, _ := newTestApp(t, "uno")
+	resizeApp(app, 30, 6)
+	typeRune(app, 'X')
+
+	if quit := press(app, tcell.KeyEscape); quit {
+		t.Fatal("Escape con cambios sin guardar no debe cerrar: primero avisa")
+	}
+	if got := statusRow(app); !strings.Contains(got, "Cambios sin guardar") {
+		t.Fatalf("la fila de estado = %q, se esperaba el aviso visible aunque sea recortado", got)
 	}
 }
 
@@ -1332,6 +1352,44 @@ func TestStartupWithFileArgumentKeepsTheExplorerHidden(t *testing.T) {
 	app.redraw()
 	if got := cellRune(app, 0, 1); got != 'c' {
 		t.Fatalf("(0,1) = %q, se esperaba 'c' (el inicio del documento)", got)
+	}
+}
+
+// TestTabsDoNotOverlapTheTree: la fila de pestañas se renderiza SOLO sobre el
+// área del editor —arranca en la columna del panel—, nunca sobre el árbol.
+// Con el panel oculto vuelve a la columna 0.
+func TestTabsDoNotOverlapTheTree(t *testing.T) {
+	app, _ := newTestApp(t, "uno")
+	resizeApp(app, 80, 8)
+
+	// Panel oculto: la pestaña arranca en la columna 0 de la fila de pestañas.
+	app.redraw()
+	if got := cellRune(app, 0, 0); got != 'd' {
+		t.Fatalf("(0,0) = %q, se esperaba 'd' (pestaña en el borde izquierdo sin panel)", got)
+	}
+
+	// Panel visible (24 columnas): la columna 0 de la fila queda vacía —nada
+	// de pestañas sobre el árbol— y la pestaña arranca en la columna 24.
+	press(app, tcell.KeyCtrlB)
+	app.redraw()
+	// La fila limpia queda con el espacio del Clear: nada de pestañas sobre el
+	// árbol —ni el primer carácter de la etiqueta ('d')— y la pestaña arranca
+	// en la columna 24, el borde del editor.
+	if got := cellRune(app, 0, 0); got != ' ' {
+		t.Fatalf("(0,0) = %q, se esperaba el espacio del Clear: las pestañas no deben dibujarse sobre el árbol", got)
+	}
+	if got := cellRune(app, 23, 0); got != ' ' {
+		t.Fatalf("(23,0) = %q, se esperaba vacío: la fila del árbol no tiene pestañas", got)
+	}
+	if got := cellRune(app, 24, 0); got != 'd' {
+		t.Fatalf("(24,0) = %q, se esperaba 'd': la pestaña arranca en la columna del editor", got)
+	}
+
+	// Ocultar de nuevo: la pestaña vuelve a la columna 0.
+	press(app, tcell.KeyCtrlB)
+	app.redraw()
+	if got := cellRune(app, 0, 0); got != 'd' {
+		t.Fatalf("(0,0) = %q, se esperaba 'd' tras ocultar el panel", got)
 	}
 }
 

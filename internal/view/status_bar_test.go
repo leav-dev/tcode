@@ -72,8 +72,10 @@ func TestStatusBarShowsMessageRightAligned(t *testing.T) {
 	}
 }
 
-func TestStatusBarHidesMessageWhenItWouldOverlapTheLabel(t *testing.T) {
-	// Ancho chico: el mensaje no entra sin pisar el nombre del archivo.
+func TestStatusBarMessageWinsOverTheLabelAndTruncates(t *testing.T) {
+	// Ancho chico: el mensaje no entra ni recortando la etiqueta del todo, así
+	// que se muestra recortado con '…' —un aviso no puede desaparecer por el
+	// ancho de la terminal: un aviso invisible es un aviso perdido—.
 	s := newStatusScreen(t, 12)
 	bar := NewStatusBar()
 	bar.SetFile("unarchivolargo.go", true)
@@ -81,12 +83,29 @@ func TestStatusBarHidesMessageWhenItWouldOverlapTheLabel(t *testing.T) {
 	bar.Draw(s, 0, 12)
 
 	got := statusRow(t, s)
-	if strings.Contains(got, "Cambios") {
-		t.Fatalf("barra = %q: el mensaje no debe pisar la etiqueta", got)
+	if !strings.HasPrefix(got, "Cambios sin") {
+		t.Fatalf("barra = %q, se esperaba el mensaje con prioridad sobre la etiqueta", got)
 	}
-	// El nombre se recorta al ancho disponible, pero nunca se antepone el mensaje.
-	if !strings.HasPrefix(got, "unarchivol") {
-		t.Fatalf("barra = %q, se esperaba el recorte del nombre del archivo", got)
+	if !strings.HasSuffix(got, "…") {
+		t.Fatalf("barra = %q, se esperaba la elipsis del mensaje recortado", got)
+	}
+}
+
+func TestStatusBarTruncatesTheLabelToKeepTheWholeMessage(t *testing.T) {
+	// El mensaje entra en la fila pero no al lado de la etiqueta completa: la
+	// etiqueta es la que se recorta, y el mensaje se ve entero.
+	s := newStatusScreen(t, 40)
+	bar := NewStatusBar()
+	bar.SetFile("unarchivolargo.go", true)
+	bar.SetMessage("Guardado en copia.txt")
+	bar.Draw(s, 0, 40)
+
+	got := statusRow(t, s)
+	if !strings.HasSuffix(got, "Guardado en copia.txt") {
+		t.Fatalf("barra = %q, se esperaba el mensaje completo al final", got)
+	}
+	if !strings.HasPrefix(got, "unarchivolargo.go") {
+		t.Fatalf("barra = %q, se esperaba el nombre recortado por el lugar del mensaje", got)
 	}
 }
 

@@ -128,3 +128,23 @@ construir la App.
   lugar de asignar uno nuevo. Ese camino corre en cada tecla que no sea un atajo, así que
   asignar un mapa por tecla era un costo por nada.
 - **Commit de unidad de trabajo:** `8433084`.
+
+### Ajuste posterior — el aviso de la confirmación siempre se ve (reporte del usuario)
+- **Síntoma reportado:** «no se valida que presione Escape dos veces para
+  cerrar»: el editor parecía salir con una sola pulsación.
+- **Causa:** la validación de la doble pulsación existía y funcionaba, pero
+  `StatusBar.Draw` solo dibujaba el mensaje si entraba SIN pisar la etiqueta.
+  En terminales angostas —o con nombres largos— el aviso de «Cambios sin
+  guardar» nunca se dibujaba: el primer Escape no producía ninguna señal
+  visible y el segundo cerraba, así que la confirmación se percibía inexistente.
+- **Fix:** la barra de estado le da prioridad al MENSAJE: si no entra a la
+  derecha de la etiqueta, se recorta la etiqueta (y el mensaje con `…` si
+  tampoco entra en la fila) en lugar de descartarlo. Un aviso invisible es un
+  aviso perdido.
+- **Test que dejaba pasar el bug:** `TestEscapeWarnsWhenAnyBufferIsDirty`
+  aseveraba `statusBar.Label() != ""` —la etiqueta, que nunca está vacía— en
+  vez del mensaje. Ahora asevera que «Cambios sin guardar» esté DIBUJADO en la
+  fila, y `TestTheQuitWarningSurvivesANarrowTerminal` lo exige con 30 columnas
+  (recortado, nunca ausente).
+- **Verificación:** paquete `view` completo y bajo `-race` con clang en verde,
+  tests de la confirmación de salida en verde, `go vet`/`gofmt` limpios.

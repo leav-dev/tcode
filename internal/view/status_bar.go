@@ -72,16 +72,26 @@ func (s *StatusBar) Draw(sc tcell.Screen, y, width int) {
 	}
 
 	label := s.label()
-	used := writeString(sc, 0, y, label, s.style, width)
-
 	if s.message == "" {
+		writeString(sc, 0, y, label, s.style, width)
 		return
 	}
+
+	// El MENSAJE tiene prioridad sobre la etiqueta: si no entra completo a la
+	// derecha, se recorta la etiqueta —y el mensaje mismo, con '…'— en vez de
+	// desaparecer. Un aviso invisible por el ancho de la terminal es un aviso
+	// perdido: la confirmación de «cambios sin guardar» tiene que verse siempre.
 	msgWidth := displayWidth(s.message)
-	// Solo se muestra si entra sin pisar la etiqueta.
-	if start := width - msgWidth; start > used {
-		writeString(sc, start, y, s.message, s.style, width-start)
+	if msgWidth >= width {
+		writeString(sc, 0, y, s.message, s.style, width-1)
+		sc.SetContent(width-1, y, '…', nil, s.style)
+		return
 	}
+
+	start := width - msgWidth
+	// La etiqueta cede: como mucho ocupa hasta la celda anterior al mensaje.
+	writeString(sc, 0, y, label, s.style, start-1)
+	writeString(sc, start, y, s.message, s.style, msgWidth)
 }
 
 // writeString escribe s en la fila y desde la columna x, respetando maxWidth
