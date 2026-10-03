@@ -708,6 +708,42 @@ func (pt *PieceTable) Save() error { return pt.save(false) }
 // pisar esos cambios es explícita de quien llama.
 func (pt *PieceTable) SaveForce() error { return pt.save(true) }
 
+// Reload descarta las ediciones sin guardar y vuelve a leer el archivo de
+// disco: es la respuesta al aviso de ChangedOnDisk. Desmapea PRIMERO
+// (release) y recién después re-mapea (openAndMap): el archivo viejo ya no es
+// confiable —un cambio externo pudo dejarlo más corto que el mapeo, y leer las
+// páginas sobrantes levantaría SIGBUS—, así que su contenido no se toca jamás.
+// El buffer se vacía ANTES de re-mapear y el historial arranca reiniciado: si
+// el re-mapeo falla (archivo borrado), el buffer queda vacío y limpio, nunca
+// con piezas apuntando a un mapeo ya liberado.
+func (pt *PieceTable) Reload() error {
+	if pt.path == "" {
+		return ErrNoPath
+	}
+	pt.release()
+	pt.resetDocument()
+	if err := pt.openAndMap(); err != nil {
+		return err
+	}
+	pt.undo = nil
+	pt.redo = nil
+	pt.savedAt = 0
+	return nil
+}
+
+// resetDocument deja la tabla como documento vacío, sin piezas ni historial:
+// es el estado seguro para el instante entre desmapear y re-mapear.
+func (pt *PieceTable) resetDocument() {
+	pt.originalBuffer = nil
+	pt.newBuffer = nil
+	pt.pieces = nil
+	pt.lineOffsets = []int{0}
+	pt.docLen = 0
+	pt.undo = nil
+	pt.redo = nil
+	pt.savedAt = 0
+}
+
 // Save escribe el documento a disco de forma atómica.
 //
 // Se escribe a un archivo temporal en el mismo directorio y recién entonces se

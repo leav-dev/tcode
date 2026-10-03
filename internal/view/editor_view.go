@@ -176,6 +176,34 @@ func (v *EditorView) cursorOffset() int {
 	return v.model.LineStart(v.cursor.Line) + v.cursor.ByteCol
 }
 
+// ClampCursor recorta el cursor y el viewport al documento después de una
+// recarga: el archivo pudo quedarse más corto y un cursor fuera de rango
+// paniquearía en el próximo dibujo (LineContent fuera). Un documento vacío cae
+// al origen sin leer líneas; si el cursor sigue existiendo, se recorta al
+// final de su línea y el viewport lo acompaña.
+func (v *EditorView) ClampCursor() {
+	if v.lineCount() == 0 {
+		v.cursor.Line = 0
+		v.cursor.ByteCol = 0
+		v.cursor.desiredCol = 0
+		v.viewport.TopLine = 0
+		v.viewport.LeftColumn = 0
+		return
+	}
+	// Si la línea dejó de existir, se conserva la columna y el paso siguiente la
+	// recorta al final de la nueva línea: el cursor no vuelve al inicio salvo
+	// que el documento entero sea más corto que su línea.
+	if v.cursor.Line >= v.lineCount() {
+		v.cursor.Line = v.lineCount() - 1
+	}
+	content := v.model.LineContent(v.cursor.Line)
+	if v.cursor.ByteCol > len(content) {
+		v.cursor.ByteCol = len(content)
+	}
+	v.cursor.desiredCol = columnAt(content, v.cursor.ByteCol)
+	v.ensureCursorVisible()
+}
+
 // setCursorAt coloca el cursor en un offset de documento, resolviendo la línea.
 func (v *EditorView) setCursorAt(docOffset int) {
 	line := v.model.LineAt(docOffset)
