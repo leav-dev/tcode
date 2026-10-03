@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
 )
@@ -343,6 +344,89 @@ func TestMovingTheCursorEndsTheTypingGroup(t *testing.T) {
 
 	if got := app.model.GetContent(); got != "abxy" {
 		t.Fatalf("tras un Ctrl+Z, contenido = %q, se esperaba %q", got, "abxy")
+	}
+}
+
+// writeExternally reescribe el archivo como otro editor: temporal y renombre. El
+// inodo cambia, así que nuestro mmap sigue viendo el contenido viejo.
+func writeExternally(t *testing.T, path, content string) {
+	t.Helper()
+
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".externo-*")
+	if err != nil {
+		t.Fatalf("no se pudo crear el temporal: %v", err)
+	}
+	if _, err := tmp.WriteString(content); err != nil {
+		t.Fatalf("no se pudo escribir: %v", err)
+	}
+	if err := tmp.Close(); err != nil {
+		t.Fatalf("no se pudo cerrar: %v", err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(tmp.Name(), future, future); err != nil {
+		t.Fatalf("no se pudo cambiar la fecha: %v", err)
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		t.Fatalf("no se pudo renombrar: %v", err)
+	}
+}
+
+// TestCtrlSWarnsBeforeOverwritingExternalChanges verifica la protección de punta a
+// punta: un Ctrl+S no pisa el trabajo de otro proceso, avisa.
+func TestCtrlSWarnsBeforeOverwritingExternalChanges(t *testing.T) {
+	app, path := newTestApp(t, "uno")
+
+	typeRune(app, 'X')
+
+	const externo = "escrito por otro proceso"
+	writeExternally(t, path, externo)
+
+	press(app, tcell.KeyCtrlS)
+
+	if got := readFile(t, path); got != externo {
+		t.Fatalf("el archivo fue pisado con el primer Ctrl+S: %q", got)
+	}
+	if !app.forceSave {
+		t.Fatal("debe quedar habilitado el forzado para el próximo Ctrl+S")
+	}
+	if !app.model.Modified() {
+		t.Fatal("el documento sigue teniendo cambios sin guardar")
+	}
+
+	// El segundo Ctrl+S sí pisa, que es lo que el usuario pidió.
+	press(app, tcell.KeyCtrlS)
+
+	if got := readFile(t, path); got != "Xuno" {
+		t.Fatalf("tras el segundo Ctrl+S, archivo = %q, se esperaba %q", got, "Xuno")
+	}
+	if app.model.Modified() {
+		t.Fatal("tras forzar el guardado el documento queda limpio")
+	}
+}
+
+// TestAnotherKeyCancelsTheForceSavePermission: seguir trabajando tiene que volver a
+// pedir confirmación, para que un Ctrl+S lejano no pise sin avisar.
+func TestAnotherKeyCancelsTheForceSavePermission(t *testing.T) {
+	app, path := newTestApp(t, "uno")
+
+	typeRune(app, 'X')
+	writeExternally(t, path, "ajeno")
+
+	press(app, tcell.KeyCtrlS)
+	if !app.forceSave {
+		t.Fatal("debe quedar habilitado el forzado")
+	}
+
+	press(app, tcell.KeyDown)
+	if app.forceSave {
+		t.Fatal("otra tecla debe cancelar el permiso de pisar")
+	}
+
+	// Y el próximo Ctrl+S vuelve a avisar en vez de pisar.
+	press(app, tcell.KeyCtrlS)
+	if got := readFile(t, path); got != "ajeno" {
+		t.Fatalf("archivo = %q, no debía pisarse", got)
 	}
 }
 

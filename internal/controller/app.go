@@ -1,6 +1,8 @@
 package controller
 
 import (
+	"errors"
+
 	"github.com/gdamore/tcell/v2"
 	"tcode/internal/model"
 	"tcode/internal/view"
@@ -15,6 +17,10 @@ type App struct {
 	editorView  *view.EditorView
 	statusBar   *view.StatusBar
 	confirmQuit bool
+
+	// forceSave habilita el próximo Ctrl+S a pisar cambios externos, después de
+	// haber avisado una vez.
+	forceSave bool
 }
 
 // NewApp inicializa la terminal y carga el archivo indicado (si path != "").
@@ -115,8 +121,10 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 			return false
 		}
 
-		// Cualquier otra tecla cancela la confirmación pendiente.
+		// Cualquier otra tecla cancela la confirmación pendiente y el permiso de
+		// pisar que se haya dado con un Ctrl+S previo.
 		a.confirmQuit = false
+		a.forceSave = false
 		a.statusBar.ClearMessage()
 		if a.editorView.HandleEvent(ev) {
 			a.redraw()
@@ -172,13 +180,32 @@ func (a *App) applyHistory(op func() (model.Change, bool, error), done, empty st
 }
 
 // save escribe el documento y refleja el resultado en la barra de estado.
+//
+// Si el archivo cambió en disco se avisa en lugar de pisarlo; un segundo Ctrl+S
+// seguido fuerza la escritura. La decisión de perder esos cambios queda así en
+// manos de quien usa el editor y no de un valor por defecto.
 func (a *App) save() {
-	if err := a.model.Save(); err != nil {
-		a.statusBar.SetMessage("Error al guardar: " + err.Error())
+	var err error
+	if a.forceSave {
+		a.forceSave = false
+		err = a.model.SaveForce()
 	} else {
+		err = a.model.Save()
+	}
+
+	switch {
+	case errors.Is(err, model.ErrFileChangedExternally):
+		a.forceSave = true
+		a.statusBar.SetMessage("El archivo cambió en disco: Ctrl+S de nuevo pisa esos cambios")
+
+	case err != nil:
+		a.statusBar.SetMessage("Error al guardar: " + err.Error())
+
+	default:
 		a.confirmQuit = false
 		a.statusBar.SetMessage("Guardado")
 	}
+
 	a.syncStatus()
 	a.redraw()
 }

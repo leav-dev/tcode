@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/edsrzf/mmap-go"
 )
@@ -16,6 +17,10 @@ import (
 // ErrNoPath se devuelve al intentar guardar un documento que no tiene archivo
 // asociado.
 var ErrNoPath = errors.New("el documento no tiene archivo asociado")
+
+// ErrFileChangedExternally se devuelve al intentar guardar cuando el archivo cambió
+// en disco desde la última carga o guardado: escribirlo perdería esos cambios.
+var ErrFileChangedExternally = errors.New("el archivo cambió en disco desde la última carga")
 
 // Piece es un tramo contiguo del documento que vive entero en uno de los dos
 // buffers. Una vez creada, una pieza nunca se muta: editar es crear y descartar
@@ -46,6 +51,11 @@ type PieceTable struct {
 	file *os.File    // Descriptor del archivo mapeado
 	path string      // Ruta asociada, tal como la dio el usuario
 	mode os.FileMode // Permisos a preservar al guardar
+
+	// Marca del archivo en disco al cargarlo o guardarlo, para detectar cambios
+	// hechos por otro proceso antes de pisarlo.
+	diskSize    int64
+	diskModTime time.Time
 
 	// Historial de ediciones. Guardar cambios en lugar de instantáneas del
 	// documento hace que la memoria dependa de lo editado y no del tamaño del
@@ -120,6 +130,8 @@ func (pt *PieceTable) openAndMap() error {
 
 	pt.file = f
 	pt.mode = info.Mode().Perm()
+	pt.diskSize = info.Size()
+	pt.diskModTime = info.ModTime()
 	pt.originalBuffer = nil
 	pt.newBuffer = nil
 	pt.pieces = nil
@@ -641,6 +653,36 @@ func (pt *PieceTable) GetContent() string {
 	return string(pt.slice(0, pt.docLen))
 }
 
+// ChangedOnDisk indica si el archivo cambió fuera de este editor desde la última
+// carga o guardado, comparando tamaño y fecha de modificación.
+//
+// Es una detección por metadatos: un cambio que deje el mismo tamaño y la misma
+// fecha de modificación pasa desapercibido, así que no es una garantía de
+// integridad, sino un aviso barato para el caso habitual.
+func (pt *PieceTable) ChangedOnDisk() bool {
+	if pt.path == "" {
+		return false
+	}
+
+	info, err := os.Stat(pt.path)
+	if err != nil {
+		// Si ya no se puede consultar, se trata como cambiado: avisar de más es
+		// más seguro que pisar sin decir nada.
+		return true
+	}
+	return info.Size() != pt.diskSize || !info.ModTime().Equal(pt.diskModTime)
+}
+
+// Save escribe el documento a disco de forma atómica.
+//
+// Si el archivo cambió en disco devuelve ErrFileChangedExternally en lugar de
+// pisarlo: quien llama decide si forzar con SaveForce.
+func (pt *PieceTable) Save() error { return pt.save(false) }
+
+// SaveForce guarda aunque el archivo haya cambiado en disco. La decisión de
+// pisar esos cambios es explícita de quien llama.
+func (pt *PieceTable) SaveForce() error { return pt.save(true) }
+
 // Save escribe el documento a disco de forma atómica.
 //
 // Se escribe a un archivo temporal en el mismo directorio y recién entonces se
@@ -649,12 +691,18 @@ func (pt *PieceTable) GetContent() string {
 // a medias. Escribir en el lugar sería destructivo por dos motivos: un fallo a
 // mitad de camino deja el archivo truncado, y además el archivo está mapeado en
 // memoria, así que sobrescribirlo invalidaría las páginas que estamos leyendo.
-func (pt *PieceTable) Save() error {
+func (pt *PieceTable) save(force bool) error {
 	if pt.path == "" {
 		return ErrNoPath
 	}
 	if !pt.Modified() {
+		// No hay nada que escribir. Se refresca la marca del disco para no seguir
+		// reportando un cambio externo que ya no puede perderse.
+		pt.refreshDiskState()
 		return nil
+	}
+	if !force && pt.ChangedOnDisk() {
+		return ErrFileChangedExternally
 	}
 
 	// Si la ruta es un enlace simbólico hay que escribir sobre el destino y no
@@ -717,6 +765,17 @@ func (pt *PieceTable) Save() error {
 		return fmt.Errorf("guardado en disco, pero falló la recarga: %w", err)
 	}
 	return nil
+}
+
+// refreshDiskState vuelve a leer la marca del archivo en disco.
+func (pt *PieceTable) refreshDiskState() {
+	if pt.path == "" {
+		return
+	}
+	if info, err := os.Stat(pt.path); err == nil {
+		pt.diskSize = info.Size()
+		pt.diskModTime = info.ModTime()
+	}
 }
 
 // writeContent vuelca el documento completo en w recorriendo las piezas.
