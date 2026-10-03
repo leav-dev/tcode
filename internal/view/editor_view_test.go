@@ -94,24 +94,35 @@ func TestDrawOnlyRendersLinesInsideViewport(t *testing.T) {
 	}
 }
 
-func TestScrollByKeyboardMovesViewport(t *testing.T) {
+// TestArrowKeysMoveCursor reemplaza al viejo test de scroll por teclado: las
+// flechas ahora mueven el cursor y el viewport lo acompaña.
+func TestArrowKeysMoveCursor(t *testing.T) {
 	v := newTestView(t, "uno\ndos\ntres\ncuatro", 20, 2)
 
+	if v.cursor.Line != 0 || v.cursor.ByteCol != 0 {
+		t.Fatalf("el cursor debe arrancar en (0,0), está en (%d,%d)", v.cursor.Line, v.cursor.ByteCol)
+	}
+
 	if !v.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone)) {
-		t.Fatal("KeyDown debería haber cambiado el viewport")
+		t.Fatal("KeyDown debería mover el cursor")
 	}
-	if v.viewport.TopLine != 1 {
-		t.Fatalf("TopLine = %d, se esperaba 1", v.viewport.TopLine)
-	}
-
-	v.HandleEvent(tcell.NewEventKey(tcell.KeyRune, 'j', tcell.ModNone))
-	if v.viewport.TopLine != 2 {
-		t.Fatalf("TopLine = %d, se esperaba 2", v.viewport.TopLine)
+	if v.cursor.Line != 1 {
+		t.Fatalf("cursor.Line = %d, se esperaba 1", v.cursor.Line)
 	}
 
-	v.HandleEvent(tcell.NewEventKey(tcell.KeyRune, 'k', tcell.ModNone))
-	if v.viewport.TopLine != 1 {
-		t.Fatalf("TopLine = %d, se esperaba 1 tras 'k'", v.viewport.TopLine)
+	v.HandleEvent(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone))
+	if v.cursor.ByteCol != 1 {
+		t.Fatalf("cursor.ByteCol = %d, se esperaba 1", v.cursor.ByteCol)
+	}
+
+	v.HandleEvent(tcell.NewEventKey(tcell.KeyLeft, 0, tcell.ModNone))
+	if v.cursor.ByteCol != 0 {
+		t.Fatalf("cursor.ByteCol = %d, se esperaba 0", v.cursor.ByteCol)
+	}
+
+	// Las letras ya no scrollean: tienen que llegar como texto a la edición.
+	if v.HandleEvent(tcell.NewEventKey(tcell.KeyRune, 'j', tcell.ModNone)) {
+		t.Fatal("'j' no debe mover el cursor ni el viewport")
 	}
 }
 
@@ -138,26 +149,39 @@ func TestScrollDownClampsAtDocumentEnd(t *testing.T) {
 	}
 }
 
-func TestPageDownScrollsByViewportHeight(t *testing.T) {
+// TestPageDownMovesCursorByViewportHeight: PgDn mueve el cursor y el viewport lo
+// sigue con el mínimo desplazamiento necesario.
+func TestPageDownMovesCursorByViewportHeight(t *testing.T) {
 	v := newTestView(t, "1\n2\n3\n4\n5\n6\n7\n8\n9\n10", 20, 3)
 
 	v.HandleEvent(tcell.NewEventKey(tcell.KeyPgDn, 0, tcell.ModNone))
-	if v.viewport.TopLine != 3 {
-		t.Fatalf("TopLine = %d, se esperaba 3 tras PgDn", v.viewport.TopLine)
+	if v.cursor.Line != 3 {
+		t.Fatalf("cursor.Line = %d, se esperaba 3 tras PgDn", v.cursor.Line)
+	}
+	if v.viewport.TopLine != 1 {
+		t.Fatalf("TopLine = %d, se esperaba 1: el viewport sigue al cursor", v.viewport.TopLine)
 	}
 }
 
-func TestEndAndHomeJumpToDocumentBounds(t *testing.T) {
+// TestCtrlHomeAndCtrlEndMoveCursorToDocumentBounds: Home y End ahora son de
+// línea; para el documento completo están las variantes con Ctrl.
+func TestCtrlHomeAndCtrlEndMoveCursorToDocumentBounds(t *testing.T) {
 	v := newTestView(t, "1\n2\n3\n4\n5\n6\n7\n8\n9\n10", 20, 4)
 
-	v.HandleEvent(tcell.NewEventKey(tcell.KeyEnd, 0, tcell.ModNone))
+	v.HandleEvent(tcell.NewEventKey(tcell.KeyEnd, 0, tcell.ModCtrl))
+	if v.cursor.Line != 9 {
+		t.Fatalf("cursor.Line = %d, se esperaba 9 tras Ctrl+End", v.cursor.Line)
+	}
 	if v.viewport.TopLine != 6 {
-		t.Fatalf("TopLine = %d, se esperaba 6 tras End", v.viewport.TopLine)
+		t.Fatalf("TopLine = %d, se esperaba 6 tras Ctrl+End", v.viewport.TopLine)
 	}
 
-	v.HandleEvent(tcell.NewEventKey(tcell.KeyHome, 0, tcell.ModNone))
+	v.HandleEvent(tcell.NewEventKey(tcell.KeyHome, 0, tcell.ModCtrl))
+	if v.cursor.Line != 0 || v.cursor.ByteCol != 0 {
+		t.Fatalf("cursor = (%d,%d), se esperaba (0,0) tras Ctrl+Home", v.cursor.Line, v.cursor.ByteCol)
+	}
 	if v.viewport.TopLine != 0 {
-		t.Fatalf("TopLine = %d, se esperaba 0 tras Home", v.viewport.TopLine)
+		t.Fatalf("TopLine = %d, se esperaba 0 tras Ctrl+Home", v.viewport.TopLine)
 	}
 }
 
@@ -181,7 +205,8 @@ func TestResizeClampsViewportToDocument(t *testing.T) {
 	// Con 4 líneas y alto 1, maxTopLine = 3.
 	v := newTestView(t, "uno\ndos\ntres\ncuatro", 20, 1)
 
-	v.HandleEvent(tcell.NewEventKey(tcell.KeyEnd, 0, tcell.ModNone))
+	// Ctrl+End lleva el cursor al final del documento.
+	v.HandleEvent(tcell.NewEventKey(tcell.KeyEnd, 0, tcell.ModCtrl))
 	if v.viewport.TopLine != 3 {
 		t.Fatalf("TopLine = %d, se esperaba 3", v.viewport.TopLine)
 	}
@@ -196,11 +221,7 @@ func TestResizeClampsViewportToDocument(t *testing.T) {
 func TestHorizontalScrollSkipsLeadingColumns(t *testing.T) {
 	s := newTestScreen(t, 5, 1)
 	v := newTestView(t, "abcdefghij", 5, 1)
-
-	v.HandleEvent(tcell.NewEventKey(tcell.KeyRune, 'l', tcell.ModNone))
-	if v.viewport.LeftColumn != 1 {
-		t.Fatalf("LeftColumn = %d, se esperaba 1", v.viewport.LeftColumn)
-	}
+	v.viewport.LeftColumn = 1
 
 	draw(v, s)
 	if got := screenLines(s)[0]; got != "bcdef" {

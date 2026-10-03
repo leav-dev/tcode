@@ -13,7 +13,8 @@ Este archivo registra las decisiones arquitectónicas clave, cambios estructural
 - **Carga de Archivos:** Uso estricto de `mmap` (via `edsrzf/mmap-go`) para evitar la carga de archivos completos en RAM.
 - **Manejo de Componentes:** Cada parte de la UI será una `Screen` que se carga bajo demanda, evitando inicializaciones pesadas innecesarias.
 - **Repositorio:** `git@github.com:leav-dev/tcode.git`. La rama por defecto es `main` (no `master`) por convención del autor.
-- **Commits:** Conventional Commits en inglés. Una unidad de trabajo por commit, con tests y docs junto al código. El push es siempre una decisión explícita del usuario.
+- **Commits:** Conventional Commits en inglés. Una unidad de trabajo por commit, con tests y docs junto al código.
+- **Versionado (convención del autor, `agents.md` sección 4):** el agente **commitea solo** al terminar un cambio solicitado y **no hace push inmediato**; el push ocurre únicamente cuando el usuario lo pide. Por eso el agente ya no pide autorización para commitear.
 
 ## 3. Registro de Cambios (Changelog de Memoria)
 - *2024-05-23:* Inicialización del proyecto, `go.mod` y estructura de directorios MVC. Implementación del esqueleto `tcell` con soporte de mouse. Definición de `constitution.md`.
@@ -36,6 +37,11 @@ Este archivo registra las decisiones arquitectónicas clave, cambios estructural
   - **Bug real encontrado por el test diferencial** (`TestEditsMatchReferenceString`, 400 iteraciones contra un `string` de referencia) en la iteración 91: al borrar `[start, end)`, un inicio de línea en `end` se mapeaba a `start` sin verificar que `start` fuera inicio de línea. Reproducción mínima: `"a\n\nb"` borrando `[1,2)` producía `lineOffsets [0,1,2]` con un offset no precedido por `'\n'`. El fix (`l >= end` → `l > end`) además elimina la necesidad del dedupe.
   - **Falsificación:** reintroducir la condición defectuosa hace fallar 5 tests, incluido el diferencial en la iteración 91 exacta.
   - **Gotcha:** el índice de líneas es O(cantidad de líneas) por edición por el corrimiento, y `locate` es O(cantidad de piezas). Correcto primero; la optimización siguiente es un árbol de Fenwick / piezas balanceadas.
+- *2026-10-03:* **Cursor y movimiento.** `EditorView` tiene `Cursor{Line, ByteCol, desiredCol}` en coordenadas `(línea, byte dentro de línea)`, con acceso a líneas por `LineStart`/`LineContent`/`LineBreakLen`/`LineAt` y helpers de cluster (`columnAt`, `offsetAtColumn`, `nextCluster`, `prevCluster`). Movimiento horizontal por cluster, vertical con **columna deseada**, el viewport sigue al cursor con el mínimo desplazamiento, y el clic del mouse posiciona el cursor con el ancho real. 26 tests nuevos (76 en total: 35 modelo + 41 vista).
+  - **Decisión:** se **eliminaron las teclas de scroll estilo vim** (`j`, `k`, `h`, `l`, `g`, `G`). Un editor no modal tiene que insertar esas letras como texto; la navegación queda en flechas, `PgUp`/`PgDn`, `Home`/`End`, `Ctrl+Home`/`Ctrl+End` y la rueda. Rompió a propósito 5 tests viejos de scroll, reescritos a la semántica nueva.
+  - **Decisión:** la rueda del mouse scrollea **sin** arrastrar el cursor; las teclas mueven el cursor y el viewport lo acompaña. Son dos comportamientos distintos a propósito.
+  - **Bug encontrado por los tests del mouse:** `offsetAtColumn` comparaba `at >= col` antes de sumar el ancho del cluster actual, así que clickear la mitad de un carácter ancho caía **después** del carácter. Con `"日ab"`, la columna 1 devolvía el offset 3 en vez del 0. Fix: comparar `col < at+width`. Falsificado revirtiendo la condición.
+  - **Nota:** la columna deseada se compara en **columnas de pantalla**, no en bytes, así que moverse verticalmente entre líneas con caracteres anchos cae donde la gente espera.
 
 ## 4. Aprendizajes y Notas
 - **Nota de rendimiento:** Evitar `fmt.Scan` o métodos de entrada estándar; usar exclusivamente `tcell` para no corromper el buffer de pantalla.
@@ -48,4 +54,5 @@ Este archivo registra las decisiones arquitectónicas clave, cambios estructural
 - **Gotcha de `tcell`:** `SetContent` está deprecado y aloca dos veces por celda. Usar `Put(x, y, cluster, style)`, que además es *grapheme-aware*.
 - **Gotcha de `uniseg`:** `Graphemes.Bytes()` aloca; `Graphemes.Str()` no.
 - **Deuda técnica abierta:** no existe el mapeo inverso celda → offset del documento, que el hit testing del mouse va a necesitar cuando se implemente el click.
-- **Deuda técnica abierta:** el modelo ya soporta `Insert`/`Delete`, pero el controlador todavía no los invoca: la interfaz sigue siendo de solo lectura. No hay `Save` a disco tampoco.
+- **Deuda técnica abierta:** el modelo ya soporta `Insert`/`Delete` y hay cursor, pero **el controlador todavía no invoca la edición**: la interfaz sigue siendo de solo lectura. No hay `Save` a disco tampoco.
+- **Deuda técnica cerrada:** el mapeo inverso celda → offset del documento ya existe (`offsetAtColumn`) y el clic del mouse posiciona el cursor.

@@ -81,6 +81,71 @@ func (pt *PieceTable) LoadFile(path string) error {
 // Len devuelve la longitud del documento en bytes.
 func (pt *PieceTable) Len() int { return pt.docLen }
 
+// LineStart devuelve el offset de documento donde empieza la línea indicada.
+// Un índice fuera de rango se resuelve al final del documento.
+func (pt *PieceTable) LineStart(line int) int {
+	if line <= 0 {
+		return 0
+	}
+	if line >= len(pt.lineOffsets) {
+		return pt.docLen
+	}
+	return pt.lineOffsets[line]
+}
+
+// lineSpan devuelve los offsets de documento de la línea completa, salto incluido.
+func (pt *PieceTable) lineSpan(line int) (start, end int) {
+	start = pt.LineStart(line)
+	end = pt.docLen
+	if line+1 < len(pt.lineOffsets) {
+		end = pt.lineOffsets[line+1]
+	}
+	return start, end
+}
+
+// LineBreakLen devuelve el largo del salto de línea: 1 para '\n', 2 para '\r\n'
+// y 0 en la última línea cuando el documento no termina en salto.
+func (pt *PieceTable) LineBreakLen(line int) int {
+	start, end := pt.lineSpan(line)
+	if raw := end - start; raw > 0 {
+		return raw - len(pt.LineContent(line))
+	}
+	return 0
+}
+
+// LineContent devuelve el texto de la línea sin su salto de línea.
+func (pt *PieceTable) LineContent(line int) []byte {
+	start, end := pt.lineSpan(line)
+	if end <= start {
+		return nil
+	}
+
+	raw := pt.slice(start, end)
+	// Descontar el salto: '\n' y, si está, el '\r' que lo precede.
+	if n := len(raw); n > 0 && raw[n-1] == '\n' {
+		raw = raw[:n-1]
+		if n = len(raw); n > 0 && raw[n-1] == '\r' {
+			raw = raw[:n-1]
+		}
+	}
+	return raw
+}
+
+// LineAt devuelve el índice de la línea que contiene el offset de documento dado.
+func (pt *PieceTable) LineAt(offset int) int {
+	if offset <= 0 || len(pt.lineOffsets) == 0 {
+		return 0
+	}
+	i := sort.SearchInts(pt.lineOffsets, offset+1) - 1
+	if i < 0 {
+		return 0
+	}
+	if i >= len(pt.lineOffsets) {
+		return len(pt.lineOffsets) - 1
+	}
+	return i
+}
+
 // LineCount devuelve la cantidad de líneas del documento.
 func (pt *PieceTable) LineCount() int {
 	if pt.docLen == 0 {
