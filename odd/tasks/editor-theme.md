@@ -35,23 +35,23 @@ Qué NO cambia: la semántica de edición, el layout, los tests que comparan
 runas (la pantalla sigue siendo la misma; solo cambian los estilos por celda).
 
 ## Tasks
-- [ ] `view/theme.go`: `Theme` + roles + paleta default + parse de JSON y de
-  colores (nombre/hex/índice); fallback default ante error <!-- id: 0 -->
-- [ ] Tests de tema: parse válido, inválido → default, cada formato de color
-  <!-- id: 1 -->
-- [ ] `view/highlight.go`: reglas por extensión (keywords, comentario `//` `#`
-  `/*`…, strings `"` `'` `` ` `` , números) y `lineStyleAt(pos)` por byte;
-  tokens de una línea, sin estado <!-- id: 2 -->
-- [ ] Tests de highlight: keyword/string/comment/number por lenguaje, límites
-  de la línea, extensión desconocida = solo texto <!-- id: 3 -->
-- [ ] Editor: `Draw` pinta la línea del cursor con su fondo y estila los
-  clusters por token <!-- id: 4 -->
-- [ ] Tab/status/tree/menu: estilos del tema <!-- id: 5 -->
-- [ ] Controller: carga `~/.tcode/theme.json` al arranque (fallback sin romper,
-  aviso único); tests <!-- id: 6 -->
-- [ ] Integración: render con estilos verificados vía `GetContents`; suite
+- [x] `view/theme.go`: `Theme` + roles + paleta default + parse de JSON y de
+  colores (nombre/hex/índice); fallback default ante error <!-- id: 0 --> · `20c44f4`
+- [x] Tests de tema: parse válido, inválido → default, cada formato de color
+  <!-- id: 1 --> · `20c44f4`
+- [x] `view/highlight.go`: reglas por extensión (keywords, comentario `//` `#`
+  `/*`…, strings `"` `'`, números) y `styleAt(pos)` por byte; tokens de una
+  línea, sin estado <!-- id: 2 --> · `a8e2245`
+- [x] Tests de highlight: keyword/string/comment/number por lenguaje, límites
+  de la línea, extensión desconocida = solo texto <!-- id: 3 --> · `a8e2245`
+- [x] Editor: `Draw` pinta la línea del cursor con su fondo y estila los
+  clusters por token <!-- id: 4 --> · `1b805c6`
+- [x] Tab/status/tree/menu: estilos del tema <!-- id: 5 --> · `f7964f9`
+- [x] Controller: carga `~/.tcode/theme.json` al arranque (fallback sin romper,
+  aviso único); tests <!-- id: 6 --> · `f7964f9`
+- [x] Integración: render con estilos verificados vía `GetContents`; suite
   completa sin fallos nuevos <!-- id: 7 -->
-- [ ] `docs/editor-theme.md`: formato del JSON, roles, límites del resaltado
+- [x] `docs/editor-theme.md`: formato del JSON, roles, límites del resaltado
   y roadmap (temas por proyecto, highlighter con estado multilínea)
   <!-- id: 8 -->
 
@@ -86,4 +86,31 @@ no colores.
 5. Sin carga del JSON → `TestControllerLoadsThemeFallback` falla.
 
 ## Evidence
-(Rellenar por unidad.)
+
+### U-tema · `20c44f4`
+- **RED:** `DefaultTheme`/`LoadTheme`/`parseThemeColor` no existían.
+- **Hallazgo tcell:** los índices de paleta NO son `tcell.Color(n)` (inválido
+  sin el flag); la API correcta es `tcell.PaletteColor(n)`; el getter de estilo
+  es `Decompose()` (Foreground es setter).
+- **Ajuste de expectativa:** `"244"` != `GetColor("Gray")` (el nombre es RGB
+  truecolor); el índice se verifica contra `PaletteColor(244)`.
+
+### U-highlight · `a8e2245` + `1b805c6`
+- **RED:** los unitarios del scanner y el render del editor.
+- **Bug real del scanner (mío):** `styleAt` consulta una posición puntual pero
+  retornaba el rol del PRIMER span de comentario/string sin verificar si `pos`
+  caía dentro — los clusters iniciales tomaban roles del final (el 'x' de
+  "x := 1" se pintaba Comment). Fix: cada span consulta `pos`.
+- **Bug de test (mío):** `NewEditorView(m, height, width)` — los tests pasaban
+  `(30, 3)` invertido: el viewport quedaba de 3 columnas y las celdas
+  posteriores no se dibujaban; un assert "pasó por coincidencia" (celda vacía
+  con fg default igual al esperado). Es el mismo tipo de confusión que ya
+  documentó tab-bar (pestaña sobre el editor) en su unidad.
+- **Decisión:** los roles "activos" conservan `Reverse` + color de acento, así
+  los tests de render existentes (`cellReverse`) quedaron verdes.
+
+### U-controlador · `f7964f9`
+- **GREEN:** carga con archivo, fallback con JSON roto, default sin archivo
+  (path inyectable para tests).
+- **Verificación final:** suite completa, set idéntico al base (48 ambientales,
+  0 nuevos); `go build`/`go vet` limpios; `docs/editor-theme.md` publicado.
