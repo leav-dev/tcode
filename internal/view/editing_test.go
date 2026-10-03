@@ -166,11 +166,16 @@ func TestCtrlCombinationsDoNotInsert(t *testing.T) {
 	v := newTestView(t, "uno", 20, 1)
 
 	pressKey(v, tcell.KeyEnd)
-	if v.HandleEvent(tcell.NewEventKey(tcell.KeyRune, 'a', tcell.ModCtrl)) {
-		t.Fatal("Ctrl+a no debe insertar: los modificadores quedan para atajos")
+	// Ctrl+a es ahora un atajo real (seleccionar todo): debe MANEJARSE (true)
+	// sin escribir nada en el documento — la intención original se conserva.
+	if !v.HandleEvent(tcell.NewEventKey(tcell.KeyRune, 'a', tcell.ModCtrl)) {
+		t.Fatal("Ctrl+a debe manejarse como atajo (seleccionar todo)")
 	}
 	if got := contentOf(t, v); got != "uno" {
 		t.Fatalf("contenido = %q, se esperaba sin cambios", got)
+	}
+	if !v.SelectionActive() {
+		t.Fatal("Ctrl+a debe dejar la selección activa")
 	}
 }
 
