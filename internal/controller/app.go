@@ -63,6 +63,9 @@ type App struct {
 
 	confirmQuit  bool
 	confirmClose bool
+	// confirmReload arma la confirmación no modal de Ctrl+R sobre un buffer
+	// con ediciones: la primera Ctrl+R avisa, la segunda recarga.
+	confirmReload bool
 
 	// forceSave es el permiso de pisar cambios externos, por buffer: autorizar
 	// sobrescribir UN archivo no tiene que valer para otro.
@@ -314,6 +317,58 @@ func (a *App) loadExtensions() {
 	a.ext.AddExtensions(exts)
 }
 
+// reloadActive recarga el buffer activo desde disco con la confirmación no
+// modal del proyecto: sobre un buffer limpio recarga directo; con ediciones, la
+// primera Ctrl+R avisa que se perderán y la segunda confirma. Después del
+// re-mapeo el cursor se clampa al documento nuevo (pudo encogerse) y se
+// redibuja.
+func (a *App) reloadActive() {
+	buf, err := a.requireBuffer()
+	if err != nil {
+		return
+	}
+	if buf.Modified() && !a.confirmReload {
+		a.confirmReload = true
+		a.statusBar.SetMessage("Recargar descarta los cambios sin guardar: Ctrl+R de nuevo recarga")
+		a.redraw()
+		return
+	}
+	a.confirmReload = false
+	if err := buf.Reload(); err != nil {
+		a.statusBar.SetMessage("Error al recargar: " + err.Error())
+		a.redraw()
+		return
+	}
+	if ed := a.activeEditor(); ed != nil {
+		ed.ClampCursor()
+	}
+	a.statusBar.SetMessage("Recargado")
+	a.syncStatus()
+	a.redraw()
+}
+
+// checkExternalReloads mira los buffers abiertos en cada evento de actividad:
+// si el archivo cambió en disco y el buffer está limpio, lo recarga solo —no
+// hay nada que perder— y lo anuncia; un buffer con ediciones no se toca, ahí
+// decide el Ctrl+R (confirmado) o el Ctrl+S de siempre. El stat por buffer es
+// lo que Save ya paga; en montajes de red la cadencia por evento puede costar y
+// es la limitación documentada de la detección automática.
+func (a *App) checkExternalReloads() {
+	for _, buf := range a.ws.Buffers() {
+		if !buf.ChangedOnDisk() || buf.Modified() {
+			continue
+		}
+		if err := buf.Reload(); err != nil {
+			a.statusBar.SetMessage("Error al recargar: " + err.Error())
+			continue
+		}
+		a.statusBar.SetMessage("Cambios externos recargados")
+		if ed := a.editors[buf]; ed != nil {
+			ed.ClampCursor()
+		}
+	}
+}
+
 // requireBuffer devuelve el buffer activo o un error legible cuando el
 // workspace está vacío: los comandos que editan no pueden inventarse un
 // documento.
@@ -509,6 +564,10 @@ var setCrashPaper = func() {
 func (a *App) handleEvent(ev tcell.Event) bool {
 	switch ev := ev.(type) {
 	case *tcell.EventKey:
+		// Cada evento de actividad revisa los buffers abiertos: un archivo que
+		// cambió por fuera y un buffer limpio se recargan solos. Con ediciones
+		// sin guardar no se toca nada: ahí decide el Ctrl+R (confirmado).
+		a.checkExternalReloads()
 		// Con un pedido activo el teclado es del pedido, no del documento.
 		if a.promptActive {
 			a.handlePromptKey(ev)
@@ -634,6 +693,10 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 			a.closeTab()
 			return false
 
+		case ev.Key() == tcell.KeyCtrlR && ev.Modifiers()&tcell.ModShift == 0:
+			a.reloadActive()
+			return false
+
 		case ev.Key() == tcell.KeyEscape || ev.Key() == tcell.KeyCtrlC:
 			// Salir con cambios sin guardar en CUALQUIER buffer pide
 			// confirmación: la primera vez solo se avisa, así una tecla de más
@@ -657,10 +720,11 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		}
 
 		// Cualquier otra tecla cancela las confirmaciones pendientes —la de
-		// salida y la de cierre de pestaña— y el permiso de pisar que se haya
-		// dado con un Ctrl+S previo.
+		// salida, la de cierre de pestaña y la de recarga— y el permiso de
+		// pisar que se haya dado con un Ctrl+S previo.
 		a.confirmQuit = false
 		a.confirmClose = false
+		a.confirmReload = false
 		a.clearForceSave()
 		a.statusBar.ClearMessage()
 		if ed := a.activeEditor(); ed != nil && ed.HandleEvent(ev) {
@@ -676,6 +740,7 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		if a.menuActive || a.promptActive {
 			return false
 		}
+		a.checkExternalReloads()
 
 		// La composición es dueña del layout: el mouse llega en coordenadas de
 		// pantalla y cada pane traduce su propio origen. Con el panel visible,
@@ -1086,6 +1151,7 @@ func (a *App) switchTab(move func() *model.PieceTable) {
 	move()
 	a.confirmQuit = false
 	a.confirmClose = false
+	a.confirmReload = false
 	a.clearForceSave()
 	a.syncStatus()
 	a.tabBar.EnsureActive(a.ws, a.tabBarWidth())
