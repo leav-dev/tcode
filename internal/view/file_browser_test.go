@@ -307,10 +307,12 @@ func TestFileBrowserRightActsOnFilesAndDirs(t *testing.T) {
 	}
 }
 
-// TestFileBrowserLeftCollapsesOnlyAnExpandedDirectory: Left colapsa el dir
-// expandido del cursor (ActionMove); sobre un archivo o un dir colapsado no
-// aplica y cae al flujo normal del controlador con (ActionNone, false).
-func TestFileBrowserLeftCollapsesOnlyAnExpandedDirectory(t *testing.T) {
+// TestFileBrowserLeftClosesDirectories: ← colapsa el dir expandido del cursor
+// (ActionMove); con la selección en un hijo primero sube al padre y el
+// siguiente ← colapsa (la forma de cerrar la carpeta estando dentro); y con el
+// foco en el panel la flecha es SIEMPRE del árbol —también sin nada que
+// colapsar ni subir—, nunca cae al editor.
+func TestFileBrowserLeftClosesDirectories(t *testing.T) {
 	fb := NewFileBrowser()
 	fb.Resize(10, 5)
 	fb.SetRoot("/cwd")
@@ -321,21 +323,52 @@ func TestFileBrowserLeftCollapsesOnlyAnExpandedDirectory(t *testing.T) {
 	fb.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
 	fb.SetChildren([]Entry{{Name: "hijo.txt", Path: "/cwd/docs/hijo.txt"}})
 
-	// Left sobre un archivo: no aplica → (ActionNone, false).
+	// Cursor en un hijo: el primer ← sube la selección al padre (sigue
+	// expandido) y el segundo lo colapsa.
 	fb.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone)) // hijo.txt
-	if action, handled := fb.HandleEvent(tcell.NewEventKey(tcell.KeyLeft, 0, tcell.ModNone)); action != ActionNone || handled {
-		t.Fatalf("Left sobre un archivo devolvió (action=%v, handled=%v), se esperaba (ActionNone, false)", action, handled)
-	}
-
-	// Left sobre el dir expandido: colapsa → (ActionMove, true).
-	fb.HandleEvent(tcell.NewEventKey(tcell.KeyUp, 0, tcell.ModNone)) // docs
 	if action, handled := fb.HandleEvent(tcell.NewEventKey(tcell.KeyLeft, 0, tcell.ModNone)); action != ActionMove || !handled {
-		t.Fatalf("Left sobre el dir expandido devolvió (action=%v, handled=%v), se esperaba (ActionMove, true)", action, handled)
+		t.Fatalf("Left sobre un hijo devolvió (action=%v, handled=%v), se esperaba (ActionMove, true)", action, handled)
+	}
+	if got := fb.CursorPath(); got != "/cwd/docs" {
+		t.Fatalf("CursorPath() = %q tras el primer ←, se esperaba el padre %q", got, "/cwd/docs")
+	}
+	if n := len(fb.nodes); n != 3 {
+		t.Fatalf("aplanado = %d nodos tras subir, se esperaba 3 (el dir sigue expandido)", n)
 	}
 
-	// Left sobre un dir ya colapsado: no aplica → (ActionNone, false).
-	if action, handled := fb.HandleEvent(tcell.NewEventKey(tcell.KeyLeft, 0, tcell.ModNone)); action != ActionNone || handled {
-		t.Fatalf("Left sobre un dir colapsado devolvió (action=%v, handled=%v), se esperaba (ActionNone, false)", action, handled)
+	if action, handled := fb.HandleEvent(tcell.NewEventKey(tcell.KeyLeft, 0, tcell.ModNone)); action != ActionMove || !handled {
+		t.Fatalf("el segundo ← devolvió (action=%v, handled=%v), se esperaba (ActionMove, true)", action, handled)
+	}
+	if got := fb.CursorPath(); got != "/cwd/docs" {
+		t.Fatalf("CursorPath() = %q tras colapsar, se esperaba %q", got, "/cwd/docs")
+	}
+	if n := len(fb.nodes); n != 2 {
+		t.Fatalf("aplanado = %d nodos tras colapsar, se esperaba 2", n)
+	}
+
+	// Cursor en un archivo del nivel raíz: no hay padre ni dir que colapsar,
+	// pero la flecha se come igual (no escapa al editor).
+	fb.HandleEvent(tcell.NewEventKey(tcell.KeyEnd, 0, tcell.ModNone)) // a.txt
+	if action, handled := fb.HandleEvent(tcell.NewEventKey(tcell.KeyLeft, 0, tcell.ModNone)); action != ActionMove || !handled {
+		t.Fatalf("Left sobre un archivo raíz devolvió (action=%v, handled=%v), se esperaba (ActionMove, true)", action, handled)
+	}
+	if got := fb.CursorPath(); got != "/cwd/a.txt" {
+		t.Fatalf("CursorPath() = %q, no debía moverse en el nivel raíz", got)
+	}
+
+	// Re-expandir (el dir conserva sus hijos; el controlador re-lee igual y
+	// llama SetChildren, que no duplica) y colapsar de nuevo: idéntico.
+	fb.HandleEvent(tcell.NewEventKey(tcell.KeyHome, 0, tcell.ModNone)) // docs (colapsado)
+	fb.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	fb.SetChildren([]Entry{{Name: "hijo.txt", Path: "/cwd/docs/hijo.txt"}})
+	if n := len(fb.nodes); n != 3 {
+		t.Fatalf("aplanado = %d nodos al re-expandir, se esperaba 3", n)
+	}
+	if action, handled := fb.HandleEvent(tcell.NewEventKey(tcell.KeyLeft, 0, tcell.ModNone)); action != ActionMove || !handled {
+		t.Fatalf("Left tras re-expandir devolvió (action=%v, handled=%v), se esperaba (ActionMove, true)", action, handled)
+	}
+	if n := len(fb.nodes); n != 2 {
+		t.Fatalf("aplanado = %d nodos tras re-colapsar, se esperaba 2", n)
 	}
 }
 

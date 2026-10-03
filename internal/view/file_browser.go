@@ -289,6 +289,25 @@ func (fb *FileBrowser) collapseAtCursor() bool {
 	return true
 }
 
+// selectParentAtCursor sube la selección al ancestro visible del nodo activo:
+// en el aplanado (DFS), el dir expandido que contiene al nodo es el último
+// nodo anterior con profundidad menor. Devuelve false si el nodo no tiene
+// ancestro (nivel 0).
+func (fb *FileBrowser) selectParentAtCursor() bool {
+	if len(fb.nodes) == 0 || fb.cursor == 0 {
+		return false
+	}
+	d := fb.nodes[fb.cursor].depth
+	for j := fb.cursor - 1; j >= 0; j-- {
+		if fb.nodes[j].depth < d {
+			fb.cursor = j
+			fb.ensureCursorVisible()
+			return true
+		}
+	}
+	return false
+}
+
 // HandleEvent procesa el teclado y el mouse del panel y devuelve (Action,
 // handled): handled dice si el evento era del panel y Action qué quiere el
 // panel del controlador (o nada).
@@ -338,10 +357,16 @@ func (fb *FileBrowser) HandleEvent(ev tcell.Event) (Action, bool) {
 		case tcell.KeyRight:
 			return fb.activateOrExpand()
 		case tcell.KeyLeft:
-			if fb.collapseAtCursor() {
-				return ActionMove, true
-			}
-			return ActionNone, false
+			// ← cierra la carpeta: colapsa el dir expandido del cursor; si el
+			// cursor está en un hijo, primero sube la selección al padre (el
+			// segundo ← lo colapsa), como en cualquier árbol de archivos. Con
+			// el foco en el panel, ← es SIEMPRE del árbol —también en el nivel
+			// raíz, donde no hay nada que colapsar ni subir—: la flecha nunca
+			// se escapa al editor moviendo el cursor del documento por
+			// sorpresa.
+			fb.collapseAtCursor()
+			fb.selectParentAtCursor()
+			return ActionMove, true
 		}
 
 	case *tcell.EventMouse:

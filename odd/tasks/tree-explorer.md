@@ -80,10 +80,14 @@ un enum es más legible y deja el controlador genérico: `ActionExpand` es
 "tengo el cursor sobre un dir colapsado, dame sus hijos", sin que el
 controlador sepa qué tecla lo disparó.
 
-### Enter/→ expanden, ← colapsa
+### Enter/→ expanden, ← colapsa (y sube al padre)
 Enter sobre un archivo lo abre (viene de U3); sobre un dir colapsado expande;
-sobre un dir ya expandido no hace nada (← lo colapsa). Es el árbol mínimo,
-sin alternancias sorpresa.
+sobre un dir ya expandido no hace nada. `←` cierra la carpeta con la semántica
+estándar de árbol: colapsa el dir expandido del cursor, y si el cursor está en
+un hijo, PRIMERO sube la selección al padre (el segundo `←` lo colapsa). Con el
+foco en el panel, `←` es SIEMPRE del árbol —también en el nivel raíz sin nada
+que colapsar ni subir—: la flecha nunca se escapa al editor moviendo el cursor
+por sorpresa.
 
 ## Falsificación (tests que escriben primero contra el código roto)
 1. Sin árbol (lista plana vieja) → los tests de la vista del árbol no compilan/
@@ -125,3 +129,19 @@ sin alternancias sorpresa.
   re-leer" y la carga perezosa (el toggle `Ctrl+B` tampoco relee: el árbol es
   estado en vivo).
 - **Commit de unidad de trabajo:** `75a4098`.
+
+### U3b-fix — cerrar carpetas con `←` (reportado por quien usa el editor)
+- **Bug:** `←` solo colapsaba con el cursor sobre el dir expandido; sobre un hijo
+  devolvía `(ActionNone, false)` y el evento caía al editor, que movía el cursor
+  del documento —"no me permite cerrar una carpeta"—.
+- **Fix:** `selectParentAtCursor` sube la selección al ancestro visible (el último
+  nodo anterior del aplanado con menor profundidad); con el foco en el panel, `←`
+  es siempre del árbol (`ActionMove`), también en el nivel raíz.
+- **Tests:** `TestFileBrowserLeftClosesDirectories` (colapsa sobre el dir, sube al
+  padre, segundo `←` colapsa, nivel raíz comido, re-expandir sin releer); también
+  corrige la aserción vieja que fijaba la fuga al editor.
+- **Falsificación RED:** la versión nueva del test fallaba contra el código viejo
+  (`(ActionNone, false)` sobre un hijo) y pasó tras el fix.
+- **Verificación:** `go test ./internal/view/` verde completo,
+  `go test -race ./internal/view/` con clang verde, `go vet` y `gofmt` limpios,
+  controller del explorador en verde.
