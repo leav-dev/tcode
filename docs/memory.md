@@ -29,6 +29,13 @@ Este archivo registra las decisiones arquitectónicas clave, cambios estructural
   - **Hallazgo:** `uniseg.Graphemes.Bytes()` aloca (`[]byte(g.cluster)`); `Str()` devuelve un substring sin alocar. Se usa `Str()`.
   - **Decisión:** el texto visible se expone con `unsafe.String` sobre los bytes del `mmap` para no copiar la ventana en cada frame. Seguro porque el mapeo es de solo lectura y nadie retiene la vista más allá de `Draw`.
   - **Decisión:** `uniseg` promovido de dependencia indirecta a directa (`go mod tidy`).
+- *2026-10-03:* **Edición en la Piece Table.** `Insert(offset, text)` y `Delete(start, end)` funcionando, con `GetRange` en coordenadas de documento. Se agregaron 20 tests (28 en el modelo).
+  - **Decisión:** `newBuffer` es *append-only*, así que una pieza es **inmutable** una vez creada. Editar es crear y descartar piezas, nunca mutarlas. Eso es lo que deja intactos el `mmap` y las piezas viejas, y lo que va a regalar el undo/redo.
+  - **Decisión:** se separaron explícitamente dos coordenadas que antes coincidían: *offset de documento* (lógico, el que usan vista y edición) y *offset de buffer* (interno a cada pieza). Resolverlas mezcladas era la trampa central de implementar edición.
+  - **Decisión:** `GetRange` mantiene un **camino rápido cero-copia** cuando no hay ediciones (una sola pieza del `mmap`) y materializa solo cuando el rango abarca varios buffers. El contrato queda documentado en el método porque devolver a veces una vista y a veces una copia es una trampa si no se aclara.
+  - **Bug real encontrado por el test diferencial** (`TestEditsMatchReferenceString`, 400 iteraciones contra un `string` de referencia) en la iteración 91: al borrar `[start, end)`, un inicio de línea en `end` se mapeaba a `start` sin verificar que `start` fuera inicio de línea. Reproducción mínima: `"a\n\nb"` borrando `[1,2)` producía `lineOffsets [0,1,2]` con un offset no precedido por `'\n'`. El fix (`l >= end` → `l > end`) además elimina la necesidad del dedupe.
+  - **Falsificación:** reintroducir la condición defectuosa hace fallar 5 tests, incluido el diferencial en la iteración 91 exacta.
+  - **Gotcha:** el índice de líneas es O(cantidad de líneas) por edición por el corrimiento, y `locate` es O(cantidad de piezas). Correcto primero; la optimización siguiente es un árbol de Fenwick / piezas balanceadas.
 
 ## 4. Aprendizajes y Notas
 - **Nota de rendimiento:** Evitar `fmt.Scan` o métodos de entrada estándar; usar exclusivamente `tcell` para no corromper el buffer de pantalla.
@@ -41,3 +48,4 @@ Este archivo registra las decisiones arquitectónicas clave, cambios estructural
 - **Gotcha de `tcell`:** `SetContent` está deprecado y aloca dos veces por celda. Usar `Put(x, y, cluster, style)`, que además es *grapheme-aware*.
 - **Gotcha de `uniseg`:** `Graphemes.Bytes()` aloca; `Graphemes.Str()` no.
 - **Deuda técnica abierta:** no existe el mapeo inverso celda → offset del documento, que el hit testing del mouse va a necesitar cuando se implemente el click.
+- **Deuda técnica abierta:** el modelo ya soporta `Insert`/`Delete`, pero el controlador todavía no los invoca: la interfaz sigue siendo de solo lectura. No hay `Save` a disco tampoco.
