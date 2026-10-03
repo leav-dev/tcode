@@ -119,6 +119,13 @@ func pressFromEvent(ev *tcell.EventKey) press {
 	if ev.Modifiers()&tcell.ModAlt != 0 {
 		m |= ModAlt
 	}
+	// Ctrl+letra sin otros modificadores llega como tecla especial KeyCtrlA..
+	// KeyCtrlZ (con Shift o Alt tcell la reporta como KeyRune); se normaliza
+	// a la identidad de runa con ModCtrl para que "ctrl+k" matchee ambas
+	// formas de llegada.
+	if ev.Key() >= tcell.KeyCtrlA && ev.Key() <= tcell.KeyCtrlZ {
+		return press{isRune: true, r: rune('a' + int(ev.Key()-tcell.KeyCtrlA)), mods: m | ModCtrl}
+	}
 	p := press{mods: m}
 	if r := ev.Rune(); r != 0 {
 		p.isRune = true
