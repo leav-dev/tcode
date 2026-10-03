@@ -648,6 +648,47 @@ func TestWorkspaceBuffersReturnsCopy(t *testing.T) {
 	}
 }
 
+// TestWorkspaceBufferAtReturnsTheSameBuffer: BufferAt es la pareja de Len()
+// para iterar sin copiar el slice interno. Tiene que devolver el MISMO puntero
+// que la copia de Buffers(), que es la única referencia con la que se puede
+// comparar identidad.
+func TestWorkspaceBufferAtReturnsTheSameBuffer(t *testing.T) {
+	w, _ := openThree(t)
+	t.Cleanup(w.CloseAll)
+
+	bs := w.Buffers() // copia a propósito
+	for i := 0; i < w.Len(); i++ {
+		if got := w.BufferAt(i); got != bs[i] {
+			t.Fatalf("BufferAt(%d) = %v, se esperaba el buffer %v (el mismo puntero, sin copia)", i, got, bs[i])
+		}
+	}
+	if got := w.BufferAt(w.ActiveIndex()); got != w.Active() {
+		t.Fatalf("BufferAt(activo) = %v, se esperaba el buffer activo %v", got, w.Active())
+	}
+}
+
+func TestWorkspaceBufferAtOutOfRangeReturnsNil(t *testing.T) {
+	w, _ := openThree(t)
+	t.Cleanup(w.CloseAll)
+
+	for _, i := range []int{-1, 3, 10} {
+		if got := w.BufferAt(i); got != nil {
+			t.Fatalf("BufferAt(%d) = %v, se esperaba nil (fuera de rango)", i, got)
+		}
+	}
+}
+
+func TestWorkspaceBufferAtEmptyWorkspaceReturnsNil(t *testing.T) {
+	w := NewWorkspace()
+
+	if got := w.BufferAt(0); got != nil {
+		t.Fatalf("BufferAt(0) sobre workspace vacío = %v, se esperaba nil", got)
+	}
+	if got, want := w.Len(), 0; got != want {
+		t.Fatalf("Len() = %d, se esperaba %d", got, want)
+	}
+}
+
 func TestWorkspaceOutOfRangeIndexes(t *testing.T) {
 	w, _ := openThree(t)
 

@@ -11,19 +11,33 @@ import (
 )
 
 // statusHeight es la cantidad de filas que ocupa la barra de estado.
-const statusHeight = 1
+// tabBarHeight es la que ocupa la fila de pestañas.
+const (
+	statusHeight = 1
+	tabBarHeight = 1
+)
 
 type App struct {
 	screen    tcell.Screen
 	ws        *model.Workspace
 	statusBar *view.StatusBar
+	tabBar    *view.TabBar
+
+	// editorSurf es la superficie recortada sobre la que dibuja el editor
+	// activo. Se reusa entre redibujos: el controlador la reencuadra con
+	// SetRegion cuando cambia el tamaño de la terminal, en lugar de alocar una
+	// superficie por tecla.
+	editorSurf *view.OffsetSurface
 
 	// editors guarda una vista por buffer. La clave es el puntero del buffer:
 	// el workspace ya deduplica por ruta, así que el mapa no puede desincronizarse
-	// de él como podría hacerlo un slice mantenido a mano.
+	// de él como podría hacerlo un slice mantenido a mano. La entrada se borra
+	// cuando el buffer se cierra: la vista vieja conservaría un puntero a un
+	// PieceTable ya desmapeado.
 	editors map[*model.PieceTable]*view.EditorView
 
-	confirmQuit bool
+	confirmQuit  bool
+	confirmClose bool
 
 	// forceSave es el permiso de pisar cambios externos, por buffer: autorizar
 	// sobrescribir UN archivo no tiene que valer para otro.
@@ -72,17 +86,20 @@ func NewAppWithScreen(s tcell.Screen, path string) (*App, error) {
 		editors:   make(map[*model.PieceTable]*view.EditorView),
 		forceSave: make(map[*model.PieceTable]bool),
 		statusBar: view.NewStatusBar(),
+		tabBar:    view.NewTabBar(),
 	}
 	app.syncStatus()
 	return app, nil
 }
 
-// editorHeight es el alto disponible para el editor, descontando la barra.
+// editorHeight es el alto disponible para el editor, descontando la fila de
+// pestañas y la barra de estado. Nunca baja de 1: un área de cero filas no
+// tendría dónde dibujar el cursor.
 func editorHeight(height int) int {
-	if height <= statusHeight {
-		return 1
+	if h := height - statusHeight - tabBarHeight; h >= 1 {
+		return h
 	}
-	return height - statusHeight
+	return 1
 }
 
 // activeBuffer devuelve el buffer activo, o nil si el workspace está vacío.
@@ -151,6 +168,7 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		switch {
 		case ev.Key() == tcell.KeyCtrlS:
 			a.confirmQuit = false
+			a.confirmClose = false
 			a.save()
 			return false
 
@@ -160,12 +178,29 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 
 		case isRedoKey(ev):
 			a.confirmQuit = false
+			a.confirmClose = false
 			a.applyHistory(buf.Redo, "Rehecho", "Nada que rehacer")
 			return false
 
 		case isUndoKey(ev):
 			a.confirmQuit = false
+			a.confirmClose = false
 			a.applyHistory(buf.Undo, "Deshecho", "Nada que deshacer")
+			return false
+
+		case ev.Key() == tcell.KeyPgDn && ev.Modifiers()&tcell.ModCtrl != 0:
+			// Ctrl+PageDown/PageUp cambian de pestaña (con wrap). El scroll de
+			// página dentro del documento es PgUp/PgDn sin Ctrl, que cae en la
+			// vista.
+			a.switchTab(a.ws.Next)
+			return false
+
+		case ev.Key() == tcell.KeyPgUp && ev.Modifiers()&tcell.ModCtrl != 0:
+			a.switchTab(a.ws.Prev)
+			return false
+
+		case ev.Key() == tcell.KeyCtrlW:
+			a.closeTab()
 			return false
 
 		case ev.Key() == tcell.KeyEscape || ev.Key() == tcell.KeyCtrlC:
@@ -181,9 +216,11 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 			return false
 		}
 
-		// Cualquier otra tecla cancela la confirmación pendiente y el permiso de
-		// pisar que se haya dado con un Ctrl+S previo.
+		// Cualquier otra tecla cancela las confirmaciones pendientes —la de
+		// salida y la de cierre de pestaña— y el permiso de pisar que se haya
+		// dado con un Ctrl+S previo.
 		a.confirmQuit = false
+		a.confirmClose = false
 		a.clearForceSave()
 		a.statusBar.ClearMessage()
 		if ed := a.activeEditor(); ed != nil && ed.HandleEvent(ev) {
@@ -191,8 +228,16 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		}
 
 	case *tcell.EventMouse:
-		if ed := a.activeEditor(); ed != nil && ed.HandleEvent(ev) {
-			a.redraw()
+		// La composición es dueña del layout: el mouse llega en coordenadas de
+		// pantalla y la fila de pestañas no es parte del documento. Se traduce
+		// restando esa fila antes de pasárselo al editor, que dibuja desde la
+		// fila 1 (y en U3 le restará también la columna del explorador).
+		if ed := a.activeEditor(); ed != nil {
+			x, y := ev.Position()
+			viewEv := tcell.NewEventMouse(x, y-tabBarHeight, ev.Buttons(), ev.Modifiers())
+			if ed.HandleEvent(viewEv) {
+				a.redraw()
+			}
 		}
 
 	case *tcell.EventResize:
@@ -204,6 +249,9 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		for _, ed := range a.editors {
 			ed.Resize(width, editorHeight(height))
 		}
+		// El ancho nuevo también reencuadra la fila de pestañas: entra más (o
+		// menos) de ella, y la activa tiene que seguir visible.
+		a.tabBar.EnsureActive(a.ws, width)
 		a.redraw()
 	}
 	return false
@@ -261,6 +309,7 @@ func isSaveAsKey(ev *tcell.EventKey) bool {
 // acá: no depende de qué pestaña esté activa cuando se termine de tipear.
 func (a *App) startPrompt() {
 	a.confirmQuit = false
+	a.confirmClose = false
 	a.clearForceSave()
 	a.promptActive = true
 	a.promptBuf = a.activeBuffer().Path()
@@ -394,14 +443,87 @@ func (a *App) save() {
 	a.redraw()
 }
 
-// redraw limpia y vuelve a dibujar todas las Screens activas. Con el workspace
-// vacío solo dibuja la barra de estado: es un estado válido, no un error.
+// redraw limpia y vuelve a dibujar toda la composición: pestañas en la fila 0,
+// el editor activo en la región que queda desde la fila 1 y la barra de estado
+// al final. Con el workspace vacío no hay editor: solo las pestañas (vacías), la
+// barra y el cursor escondido.
 func (a *App) redraw() {
 	width, height := a.screen.Size()
 	a.screen.Clear()
+
+	// La composición es dueña del layout: la vista del editor dibuja desde
+	// (0,0) de SU región y nunca se entera de dónde está compuesta.
+	a.tabBar.Draw(a.screen, a.ws, width)
+
 	if ed := a.activeEditor(); ed != nil {
-		ed.Draw(a.screen)
+		// La superficie del editor se reusa: se crea la primera vez y después
+		// solo se reencuadra con SetRegion. Alocar una superficie por redibujo
+		// —un struct con origen y región por tecla— sería el mismo tipo de
+		// costo por nada que se corrigió en U2a con el mapa de vistas.
+		if a.editorSurf == nil {
+			a.editorSurf = view.NewOffsetSurface(a.screen)
+		}
+		a.editorSurf.SetRegion(0, tabBarHeight, width, editorHeight(height))
+		ed.Draw(a.editorSurf)
+	} else {
+		// Sin editor no hay cursor que dibujar: si quedara uno de una pestaña
+		// cerrada, el terminal lo mostraría flotando sobre la barra.
+		a.screen.HideCursor()
 	}
+
 	a.statusBar.Draw(a.screen, height-statusHeight, width)
 	a.screen.Show()
+}
+
+// switchTab cambia de pestaña (adelante o atrás, con wrap) y deja la
+// composición consistente: desarma las confirmaciones pendientes (la de salida
+// muere al seguir trabajando; la de cierre no viaja a otra pestaña), revoca los
+// permisos de pisar, reencuadra la fila de pestañas y redibuja. handleEvent ya
+// filtró el workspace vacío, así que acá siempre hay un buffer al que ir.
+func (a *App) switchTab(move func() *model.PieceTable) {
+	move()
+	a.confirmQuit = false
+	a.confirmClose = false
+	a.clearForceSave()
+	a.syncStatus()
+	width, _ := a.screen.Size()
+	a.tabBar.EnsureActive(a.ws, width)
+	a.redraw()
+}
+
+// closeTab cierra la pestaña activa con la misma confirmación no modal que la
+// salida: sobre una pestaña con cambios sin guardar, la primera vez solo avisa
+// y arma la confirmación; la segunda cierra sin guardar. Cualquier otra tecla o
+// cambio de pestaña la desarma. El modelo sigue siendo la única fuente de
+// verdad sobre el estado sucio: se consulta Close y solo se usa CloseForce
+// después de que el humano confirmó.
+func (a *App) closeTab() {
+	buf := a.activeBuffer()
+	err := a.ws.Close(a.ws.ActiveIndex())
+	switch {
+	case errors.Is(err, model.ErrBufferModified) && !a.confirmClose:
+		a.confirmClose = true
+		a.statusBar.SetMessage("Cambios sin guardar: Ctrl+S guarda, Ctrl+W de nuevo cierra esta pestaña")
+		a.redraw()
+		return
+	case errors.Is(err, model.ErrBufferModified):
+		err = a.ws.CloseForce(a.ws.ActiveIndex())
+	}
+	if err != nil {
+		a.statusBar.SetMessage("Error al cerrar: " + err.Error())
+		a.redraw()
+		return
+	}
+
+	// El buffer cerró: su vista y su permiso de pisar dejan de existir. La
+	// entrada vieja del mapa apuntaría a un PieceTable ya desmapeado, y el
+	// permiso autorizó a un archivo que ya no está abierto.
+	delete(a.editors, buf)
+	delete(a.forceSave, buf)
+	a.confirmClose = false
+	a.statusBar.ClearMessage()
+	width, _ := a.screen.Size()
+	a.tabBar.EnsureActive(a.ws, width)
+	a.syncStatus()
+	a.redraw()
 }

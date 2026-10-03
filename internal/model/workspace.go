@@ -60,6 +60,19 @@ func (w *Workspace) Buffers() []*PieceTable {
 	return out
 }
 
+// BufferAt devuelve el buffer del índice i, o nil si i está fuera de rango.
+// Es la pareja de Len() para iterar sobre las pestañas SIN copiar el slice
+// interno: la TabBar dibuja en cada redibujo, y la copia de Buffers() —que
+// existe para los llamadores que quieren tomar posesión del slice— sería una
+// alocación por tecla. El resultado es de solo lectura: la vista no debe
+// retenerlo más allá del dibujo ni esperar que sobreviva a un cierre.
+func (w *Workspace) BufferAt(i int) *PieceTable {
+	if i < 0 || i >= len(w.buffers) {
+		return nil
+	}
+	return w.buffers[i]
+}
+
 // Active devuelve el buffer activo, o nil si el workspace está vacío.
 func (w *Workspace) Active() *PieceTable {
 	if w.activeAt < 0 || w.activeAt >= len(w.buffers) {

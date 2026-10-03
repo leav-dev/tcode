@@ -421,7 +421,7 @@ func (v *EditorView) deleteForward() bool {
 // La columna lógica se cuenta en celdas de terminal, no en runas: un cluster
 // puede ocupar 0 celdas (combinante huérfano), 1 (ASCII), 2 (CJK, emoji) o más.
 // Contar runas desalinea las columnas y rompe el hit testing del mouse.
-func (v *EditorView) Draw(s tcell.Screen) {
+func (v *EditorView) Draw(s Surface) {
 	content := v.model.GetRange(v.viewport.TopLine, v.viewport.TopLine+v.viewport.Height)
 	if len(content) > 0 {
 		// Vista de string sin copia sobre los bytes del mmap. Es segura porque el
@@ -472,7 +472,7 @@ func (v *EditorView) Draw(s tcell.Screen) {
 }
 
 // drawCursor ubica el cursor del terminal en la celda que le corresponde.
-func (v *EditorView) drawCursor(s tcell.Screen) {
+func (v *EditorView) drawCursor(s Surface) {
 	row := v.cursor.Line - v.viewport.TopLine
 	if row < 0 || row >= v.viewport.Height {
 		s.HideCursor()
@@ -526,8 +526,18 @@ func (v *EditorView) handleKey(ev *tcell.EventKey) bool {
 	case tcell.KeyRight:
 		return v.moveHorizontal(1)
 	case tcell.KeyPgUp:
+		// Ctrl+PageUp/PageDown cambian de pestaña y son del controlador, no
+		// scroll de página: la vista los ignora con ModCtrl para que ninguna
+		// variante de terminal escrolle por accidente mientras se cambia de
+		// pestaña.
+		if ev.Modifiers()&tcell.ModCtrl != 0 {
+			return false
+		}
 		return v.moveVertical(-page)
 	case tcell.KeyPgDn:
+		if ev.Modifiers()&tcell.ModCtrl != 0 {
+			return false
+		}
 		return v.moveVertical(page)
 	case tcell.KeyHome:
 		if ev.Modifiers()&tcell.ModCtrl != 0 {

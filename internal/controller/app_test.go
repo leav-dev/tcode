@@ -294,8 +294,8 @@ func TestUndoPlacesTheCursorAtTheChange(t *testing.T) {
 	if !visible {
 		t.Fatal("el cursor debe quedar visible")
 	}
-	if x != 3 || y != 1 {
-		t.Fatalf("cursor en (%d,%d), se esperaba (3,1): el final de \"dos\"", x, y)
+	if x != 3 || y != 2 {
+		t.Fatalf("cursor en (%d,%d), se esperaba (3,2): el final de \"dos\" en la fila del editor", x, y)
 	}
 }
 
@@ -786,8 +786,8 @@ func TestResizeUpdatesEveryEditor(t *testing.T) {
 		if ed == nil {
 			t.Fatalf("la vista de %v es nil", buf)
 		}
-		if w, h := ed.Size(); w != 30 || h != 4 {
-			t.Fatalf("la vista de %v quedó con %dx%d, se esperaba 30x4", buf, w, h)
+		if w, h := ed.Size(); w != 30 || h != 3 {
+			t.Fatalf("la vista de %v quedó con %dx%d, se esperaba 30x3", buf, w, h)
 		}
 	}
 }
@@ -855,7 +855,7 @@ func TestEditorHeightReservesTheStatusRow(t *testing.T) {
 	for _, tc := range []struct {
 		height, want int
 	}{
-		{10, 9},
+		{10, 8},
 		{2, 1},
 		{1, 1},
 		{0, 1},
@@ -863,5 +863,282 @@ func TestEditorHeightReservesTheStatusRow(t *testing.T) {
 		if got := editorHeight(tc.height); got != tc.want {
 			t.Fatalf("editorHeight(%d) = %d, se esperaba %d", tc.height, got, tc.want)
 		}
+	}
+}
+
+// --- U2b: pestañas y navegación ---
+
+// resizeApp fija el tamaño de la pantalla DESPUÉS de construir la app: Init()
+// reinicia la pantalla simulada a 80x25 (simulation.go), así que un SetSize
+// anterior es letra muerta. Disparar además el EventResize propaga la geometría
+// a las vistas.
+func resizeApp(app *App, w, h int) {
+	sim := app.screen.(tcell.SimulationScreen)
+	sim.SetSize(w, h)
+	app.handleEvent(tcell.NewEventResize(w, h))
+}
+
+// cellRune devuelve la runa principal de la celda (x, y) de la pantalla
+// simulada de la app, o 0 si la celda está vacía.
+func cellRune(app *App, x, y int) rune {
+	sim := app.screen.(tcell.SimulationScreen)
+	cells, w, _ := sim.GetContents()
+	c := cells[y*w+x]
+	if len(c.Runes) == 0 {
+		return 0
+	}
+	return c.Runes[0]
+}
+
+// statusRow devuelve el texto de la fila de estado de la pantalla simulada.
+// La barra dibuja su mensaje a la derecha de la etiqueta, así que el texto
+// completo de la fila es la forma de asertar sobre los avisos.
+func statusRow(app *App) string {
+	sim := app.screen.(tcell.SimulationScreen)
+	cells, w, h := sim.GetContents()
+	var sb strings.Builder
+	for x := 0; x < w; x++ {
+		c := cells[(h-1)*w+x]
+		if len(c.Runes) == 0 {
+			sb.WriteRune(' ')
+			continue
+		}
+		sb.WriteRune(c.Runes[0])
+	}
+	return sb.String()
+}
+
+// newThreeBufferApp abre tres archivos como tres pestañas. Devuelve la app
+// con el buffer 2 activo (el último abierto).
+func newThreeBufferApp(t *testing.T, c0, c1, c2 string) *App {
+	t.Helper()
+
+	dir := t.TempDir()
+	contents := []string{c0, c1, c2}
+	var paths [3]string
+	for i, name := range []string{"a.txt", "b.txt", "c.txt"} {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(contents[i]), 0o644); err != nil {
+			t.Fatalf("no se pudo crear el archivo: %v", err)
+		}
+		paths[i] = p
+	}
+
+	s := tcell.NewSimulationScreen("UTF-8")
+	if err := s.Init(); err != nil {
+		t.Fatalf("no se pudo inicializar la pantalla simulada: %v", err)
+	}
+	s.SetSize(40, 10)
+
+	app, err := NewAppWithScreen(s, paths[0])
+	if err != nil {
+		t.Fatalf("NewAppWithScreen falló: %v", err)
+	}
+	for _, p := range paths[1:] {
+		if _, err := app.ws.Open(p); err != nil {
+			t.Fatalf("Open falló: %v", err)
+		}
+	}
+	t.Cleanup(func() {
+		app.ws.CloseAll()
+		s.Fini()
+	})
+	return app
+}
+
+// TestCtrlPageDownSwitchesTabs: la navegación entre pestañas es circular y
+// reencuadra la fila. Con el buffer 2 activo, Ctrl+PageDown vuelve al 0 y
+// Ctrl+PageUp a la última.
+func TestCtrlPageDownSwitchesTabs(t *testing.T) {
+	app := newThreeBufferApp(t, "uno", "dos", "tres")
+	if got := app.ws.ActiveIndex(); got != 2 {
+		t.Fatalf("ActiveIndex() = %d, se esperaba 2", got)
+	}
+
+	app.handleEvent(tcell.NewEventKey(tcell.KeyPgDn, 0, tcell.ModCtrl))
+
+	if got := app.ws.ActiveIndex(); got != 0 {
+		t.Fatalf("tras Ctrl+PageDown, ActiveIndex() = %d, se esperaba 0 (wrap)", got)
+	}
+
+	app.handleEvent(tcell.NewEventKey(tcell.KeyPgUp, 0, tcell.ModCtrl))
+
+	if got := app.ws.ActiveIndex(); got != 2 {
+		t.Fatalf("tras Ctrl+PageUp, ActiveIndex() = %d, se esperaba 2 (el último)", got)
+	}
+}
+
+// TestCtrlWClosesACleanTab: una pestaña limpia se cierra sin confirmación y su
+// vista sale del mapa de vistas.
+func TestCtrlWClosesACleanTab(t *testing.T) {
+	app, _, _ := newTwoBufferApp(t, "uno", "dos")
+	buf := bufferAt(app, 0)
+	app.redraw() // materializar la vista del buffer 0
+
+	if quit := press(app, tcell.KeyCtrlW); quit {
+		t.Fatal("Ctrl+W no debe cerrar el editor")
+	}
+	if got := app.ws.Len(); got != 1 {
+		t.Fatalf("Len() = %d tras cerrar una pestaña limpia, se esperaba 1", got)
+	}
+	if _, ok := app.editors[buf]; ok {
+		t.Fatal("la vista del buffer cerrado debe eliminarse del mapa")
+	}
+	if got := app.ws.ActiveIndex(); got != 0 {
+		t.Fatalf("ActiveIndex() = %d, se esperaba 0 (la pestaña que queda)", got)
+	}
+}
+
+// TestCtrlWAsksBeforeClosingADirtyTab: la confirmación de cierre es no modal:
+// la primera vez avisa, la segunda cierra sin guardar, y en el camino nada se
+// escribe a disco.
+func TestCtrlWAsksBeforeClosingADirtyTab(t *testing.T) {
+	app, path := newTestApp(t, "uno")
+	// El aviso mide más de 60 columnas, así que con la pantalla 80x25 la
+	// regla de la barra ("solo entra si no pisa la etiqueta") lo ocultaría;
+	// una terminal ancha es la condición real de dibujo.
+	resizeApp(app, 110, 8)
+	typeRune(app, 'X')
+
+	press(app, tcell.KeyCtrlW)
+
+	if got := app.ws.Len(); got != 1 {
+		t.Fatalf("el primer Ctrl+W no debe cerrar: Len() = %d, se esperaba 1", got)
+	}
+	if !strings.Contains(statusRow(app), "Cambios sin guardar") {
+		t.Fatalf("la barra debe avisar de los cambios sin guardar: %q", statusRow(app))
+	}
+	if got := readFile(t, path); got != "uno" {
+		t.Fatalf("el archivo no debía tocarse: %q", got)
+	}
+
+	press(app, tcell.KeyCtrlW)
+
+	if got := app.ws.Len(); got != 0 {
+		t.Fatalf("el segundo Ctrl+W debe cerrar: Len() = %d, se esperaba 0", got)
+	}
+	if got := readFile(t, path); got != "uno" {
+		t.Fatalf("cerrar sin guardar no debe escribir el archivo: %q", got)
+	}
+}
+
+// TestAnotherKeyCancelsTheCloseConfirmation: seguir trabajando desarma la
+// confirmación de cierre, como la de salida: el próximo Ctrl+W vuelve a avisar
+// en lugar de cerrar.
+func TestAnotherKeyCancelsTheCloseConfirmation(t *testing.T) {
+	app, _ := newTestApp(t, "uno")
+	resizeApp(app, 110, 8)
+	typeRune(app, 'X')
+
+	press(app, tcell.KeyCtrlW)
+	if !strings.Contains(statusRow(app), "Cambios sin guardar") {
+		t.Fatalf("el primer Ctrl+W debe armar la confirmación: %q", statusRow(app))
+	}
+
+	press(app, tcell.KeyDown)
+
+	press(app, tcell.KeyCtrlW)
+	if got := app.ws.Len(); got != 1 {
+		t.Fatalf("tras cancelar, Ctrl+W debe volver a avisar y no cerrar: Len() = %d", got)
+	}
+	if !strings.Contains(statusRow(app), "Cambios sin guardar") {
+		t.Fatalf("tras cancelar, Ctrl+W debe volver a armar la confirmación: %q", statusRow(app))
+	}
+}
+
+// TestClosingTheLastTabLeavesAnEmptyWorkspace: cerrar la última pestaña deja
+// el workspace vacío sin pánico, y Escape sigue saliendo.
+func TestClosingTheLastTabLeavesAnEmptyWorkspace(t *testing.T) {
+	app, _ := newTestApp(t, "uno")
+	typeRune(app, 'X')
+
+	press(app, tcell.KeyCtrlW)
+	if quit := press(app, tcell.KeyCtrlW); quit {
+		t.Fatal("Ctrl+W no debe cerrar el editor")
+	}
+	app.redraw() // no debe entrar en pánico con el workspace vacío
+
+	if got := app.ws.Len(); got != 0 {
+		t.Fatalf("Len() = %d, se esperaba 0", got)
+	}
+	if app.ws.Active() != nil || app.ws.ActiveIndex() != -1 {
+		t.Fatalf("workspace vacío: Active()=%v ActiveIndex()=%d", app.ws.Active(), app.ws.ActiveIndex())
+	}
+
+	if quit := press(app, tcell.KeyEscape); !quit {
+		t.Fatal("Escape sobre el workspace vacío debe cerrar el editor")
+	}
+}
+
+// TestClosingATabRemovesItsEditorAndPermission: al cerrar, el controlador
+// borra la vista del buffer (una vista vieja conservaría un puntero a un
+// PieceTable ya desmapeado) y el permiso de pisar (autorizó a un archivo que
+// ya no está abierto). Es la deuda (a) de U2a, que queda pagada acá.
+func TestClosingATabRemovesItsEditorAndPermission(t *testing.T) {
+	app, _, _ := newTwoBufferApp(t, "uno", "dos")
+
+	// Estado en el que la deuda se vuelve observable: el buffer 0 activo, con
+	// vista materializada, sucio y autorizado a pisar cambios externos. El
+	// permiso se arma con saveAsFor directamente: writeExternally renombra
+	// sobre el archivo mapeado y en Windows eso falla (acceso denegado), y
+	// este test no quiere depender del disco.
+	typeRune(app, 'X')
+	app.redraw()
+	buf0 := bufferAt(app, 0)
+	app.saveAsFor(buf0)
+	if _, ok := app.editors[buf0]; !ok {
+		t.Fatal("el test requiere una vista materializada del buffer 0")
+	}
+	if !app.forceSave[buf0] {
+		t.Fatal("el test requiere el permiso de pisar del buffer 0")
+	}
+
+	// El buffer 0 está sucio: cerrarlo pide confirmación dos veces.
+	press(app, tcell.KeyCtrlW)
+	press(app, tcell.KeyCtrlW)
+
+	if _, ok := app.editors[buf0]; ok {
+		t.Fatal("la entrada del editor debe borrarse al cerrar el buffer")
+	}
+	if app.forceSave[buf0] {
+		t.Fatal("el permiso de pisar debe borrarse al cerrar el buffer")
+	}
+}
+
+// TestRedrawComposesTabsAboveTheEditor: la fila 0 es de las pestañas y el
+// documento arranca en la fila 1; el cursor del documento también se traduce.
+func TestRedrawComposesTabsAboveTheEditor(t *testing.T) {
+	app, _ := newTestApp(t, "uno\ndos")
+	resizeApp(app, 24, 6) // tamaño determinista, DESPUÉS de construir la app
+
+	app.redraw()
+
+	// El primer carácter de la etiqueta de la pestaña ("doc.txt" → 'd') va en
+	// (0,0); el primer carácter del documento va en (0,1), la primera fila del
+	// editor.
+	if got := cellRune(app, 0, 0); got != 'd' {
+		t.Fatalf("(0,0) = %q, se esperaba 'd' (inicio de la pestaña)", got)
+	}
+	if got := cellRune(app, 0, 1); got != 'u' {
+		t.Fatalf("(0,1) = %q, se esperaba 'u' (inicio del documento)", got)
+	}
+
+	sim := app.screen.(tcell.SimulationScreen)
+	if x, y, vis := sim.GetCursor(); !vis || x != 0 || y != 1 {
+		t.Fatalf("cursor = (%d,%d,vis=%v), se esperaba (0,1,true)", x, y, vis)
+	}
+}
+
+// TestMouseClickIsTranslatedPastTheTabBar: la fila de pestañas no es parte del
+// documento. Un clic en la fila 2 de pantalla cae en la línea 1 del documento
+// (la fila 0 es la de pestañas), y eso se observa tipiando después del clic.
+func TestMouseClickIsTranslatedPastTheTabBar(t *testing.T) {
+	app, _ := newTestApp(t, "uno\ndos\ntres")
+
+	app.handleEvent(tcell.NewEventMouse(0, 2, tcell.Button1, tcell.ModNone))
+	typeRune(app, 'X')
+
+	if got := app.ws.Active().GetContent(); got != "uno\nXdos\ntres" {
+		t.Fatalf("contenido = %q, se esperaba %q", got, "uno\nXdos\ntres")
 	}
 }
