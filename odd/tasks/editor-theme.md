@@ -55,7 +55,7 @@ runas (la pantalla sigue siendo la misma; solo cambian los estilos por celda).
   y roadmap (temas por proyecto, highlighter con estado multilínea)
   <!-- id: 8 -->
 
-### Ampliación posterior: variables, tipos y funciones · `*commit*`
+### Ampliación posterior: variables, tipos y funciones · `2e050f8`
 - [x] Roles `type`/`function`/`variable` en el scanner (sets de tipos por
   lenguaje; función = identificador con `(` pegado; el resto variable), en el
   `Theme` (defaults + JSON) y en `StyleForRole` <!-- id: 9 -->
@@ -118,7 +118,7 @@ no colores.
 - **Decisión:** los roles "activos" conservan `Reverse` + color de acento, así
   los tests de render existentes (`cellReverse`) quedaron verdes.
 
-### Ampliación sintaxis (variables/tipos/funciones) · `*hash*`
+### Ampliación sintaxis (variables/tipos/funciones) · `2e050f8`
 - **RED:** los tests del scanner y del tema no compilaban (roles inexistentes).
 - **Semántica nueva ajustada en tests viejos (a propósito):** lo que era Text
   ahora es `variable` (identificadores: `funcXYZ`, `abc123`, y en archivos sin
