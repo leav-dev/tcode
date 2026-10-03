@@ -758,6 +758,18 @@ func (pt *PieceTable) Reload() error {
 	return nil
 }
 
+// Unmap libera el mapeo y el descriptor SIN tocar la ruta ni el historial de
+// intención, dejando el buffer como documento vacío y limpio (piezas
+// descartadas) hasta un Reload/Save. Windows no permite renombrar sobre un
+// archivo con una sección mapeada abierta por el MISMO proceso; un buffer que
+// ocupa el destino de un Save As debe desmapear así antes de que el rename
+// ocurra. El buffer queda re-mapeable y seguro (nada apunta a memoria
+// liberada; solo pierde el contenido hasta su próximo Reload).
+func (pt *PieceTable) Unmap() {
+	pt.release()
+	pt.resetDocument()
+}
+
 // resetDocument deja la tabla como documento vacío, sin piezas ni historial:
 // es el estado seguro para el instante entre desmapear y re-mapear.
 func (pt *PieceTable) resetDocument() {
@@ -862,8 +874,21 @@ func (pt *PieceTable) writeAndReload() error {
 		os.Remove(tmpName)
 		return err
 	}
+
+	// Windows NO permite renombrar sobre un archivo con una sección mapeada
+	// abierta por el MISMO proceso (ERROR_USER_MAPPED_FILE, reportado como
+	// "Acceso denegado"): el mapeo viejo se libera ANTES del rename. El
+	// contenido ya está escrito en el temporal (writeContent leyó del mapeo
+	// viejo sin riesgo: la escritura fue a otro inodo), así que desmapear acá
+	// no invalida nada. Si el rename falla por una causa real (permisos), el
+	// buffer se recarga del archivo en disco para no quedar con piezas
+	// apuntando a un mapeo ya liberado (la edición sin guardar de ese caso
+	// raro se pierde y el error lo comunica).
+	pt.release()
 	if err := os.Rename(tmpName, target); err != nil {
 		os.Remove(tmpName)
+		pt.resetDocument()
+		_ = pt.openAndMap() // restaurar el respaldo del disco, best effort
 		return err
 	}
 
@@ -875,7 +900,6 @@ func (pt *PieceTable) writeAndReload() error {
 	// El mapeo y el descriptor siguen apuntando al inodo viejo, que quedó
 	// reemplazado: hay que reabrir para que las piezas vuelvan a apoyarse en algo
 	// válido y el documento quede en una sola pieza.
-	pt.release()
 	if err := pt.openAndMap(); err != nil {
 		return fmt.Errorf("guardado en disco, pero falló la recarga: %w", err)
 	}

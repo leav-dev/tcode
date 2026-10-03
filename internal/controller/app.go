@@ -415,19 +415,16 @@ func (a *App) bufferAtPath(path string) *model.PieceTable {
 }
 
 // dedupSaveAsConsolidates resuelve el último pendiente de la feature de
-// pestañas: tras un Save As exitoso, si la ruta destino ya estaba abierta en
-// otra pestaña, no puede quedar otro buffer sobre el mismo archivo. El buffer
-// recién guardado se cierra (quedó limpio: su documento ya está en disco) y el
-// existente queda activo, recargado desde disco para ver lo que el Save As
-// acaba de escribir. Declina si el target ya no es la pestaña activa (closeTab
-// cerraría otra) o si la ruta no estaba abierta, y devuelve si consolidó.
-func (a *App) dedupSaveAsConsolidates(target *model.PieceTable, path string) bool {
-	other := a.bufferAtPath(path)
-	if other == nil || other == target {
+// pestañas: tras un Save As exitoso a una ruta que ya estaba abierta en otra
+// pestaña, no puede quedar otro buffer sobre el mismo archivo. other es el
+// buffer que ya ocupaba la ruta, capturado ANTES del SaveAs (después, el target
+// re-apunta su path al destino y una búsqueda por ruta sería ambigua). El
+// buffer recién guardado —la pestaña activa del prompt— se cierra (quedó
+// limpio: su documento ya está en disco) y el existente queda activo y
+// recargado para ver lo escrito. Devuelve si consolidó.
+func (a *App) dedupSaveAsConsolidates(other *model.PieceTable) bool {
+	if other == nil {
 		return false
-	}
-	if a.ws.Active() != target {
-		return false // el flujo raro de Save As: no arriesgar cerrar la pestaña equivocada
 	}
 	a.closeTab()
 	if err := other.Reload(); err != nil {
@@ -436,6 +433,14 @@ func (a *App) dedupSaveAsConsolidates(target *model.PieceTable, path string) boo
 	if ed := a.editors[other]; ed != nil {
 		ed.ClampCursor()
 	}
+	// El buffer existente queda activo (puede no ser el vecino de la activa).
+	for i := 0; i < a.ws.Len(); i++ {
+		if a.ws.BufferAt(i) == other {
+			a.ws.SetActive(i)
+			break
+		}
+	}
+	a.tabBar.EnsureActive(a.ws, a.tabBarWidth())
 	return true
 }
 
@@ -1016,12 +1021,25 @@ func (a *App) saveAs(target *model.PieceTable, path string) {
 		return
 	}
 
+	// Windows no deja renombrar sobre un archivo con una sección mapeada abierta
+	// por el MISMO proceso (ERROR_USER_MAPPED_FILE → "Acceso denegado"): si la
+	// ruta destino ya está abierta en otra pestaña, ese buffer mantiene el mmap
+	// y el rename del Save As fallaría. Se desmapea antes de escribir; el dedup
+	// posterior lo recarga con lo recién escrito. El otro buffer se CAPTURA acá:
+	// después del SaveAs el target re-apunta su path al destino y una búsqueda
+	// por ruta encontraría al target primero (no al existente).
+	var other *model.PieceTable
+	if b := a.bufferAtPath(path); b != nil && b != target {
+		b.Unmap()
+		other = b
+	}
+
 	if err := target.SaveAs(path); err != nil {
 		a.statusBar.SetMessage("Error al guardar como: " + err.Error())
 	} else {
 		a.confirmQuit = false
 		a.clearForceSave()
-		if a.dedupSaveAsConsolidates(target, path) {
+		if a.dedupSaveAsConsolidates(other) {
 			// La ruta ya estaba abierta en otra pestaña: se consolidó en una sola.
 			a.statusBar.SetMessage("Guardado en " + filepath.Base(path) + " — ruta ya abierta: una sola pestaña")
 		} else {
