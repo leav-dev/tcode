@@ -46,10 +46,8 @@ evolución siguiente (palette, y el backend de scripting).
 - [x] `internal/ext` hooks + activación: bus `onDidOpenBuffer`/`onDidSaveBuffer`/`onDidCloseBuffer`; activación por `onCommand:<id>`/`onDidOpenBuffer`/`onStartup`/`*` <!-- id: 4 -->
 - [x] Controller: `App` crea el `Manager` con `NewAppWithScreen`; built-ins `tcode.*` (save, saveAs, closeTab, toggleExplorer, undo, redo, switchTabNext/Prev) registrados contra acciones existentes; resolución de keybindings en `handleEvent` después de los atajos del núcleo; emisión de hooks en open/save/close; mensajes de estado (activación, comando desconocido, error) <!-- id: 5 -->
 - [x] Rutas reales de descubrimiento (usuario `~/.tcode/extensions` + proyecto `.tcode/extensions`) con override para tests; `docs/extension-system.md` (spec del manifest, ejemplo completo, referencia de keybindings, roadmap a backend WASM/Lua y palette) <!-- id: 6 -->
-
-*U6 (raíces + docs) — hash en el próximo update.*
-- [ ] Tests de integración del controlador (`SimulationScreen`): built-in por keybinding de extensión, chord de dos tiempos, hook en save/open/close, activación diferida, extensión rota en disco no rompe el arranque <!-- id: 7 -->
-- [ ] Verificación final: `gofmt -l .`, `go vet ./...`, `go build ./...`, `go test ./...` completo en verde <!-- id: 8 -->
+- [x] Tests de integración del controlador (`SimulationScreen`): built-in por keybinding de extensión, chord de dos tiempos, hook en save/open/close, activación diferida, extensión rota en disco no rompe el arranque <!-- id: 7 -->
+- [x] Verificación final: build/vet/gofmt limpios y `go test ./...` sin fallos nuevos (iguales al base) <!-- id: 8 -->
 
 ## Design decisions
 
@@ -138,6 +136,27 @@ suficiente para que el parser sea honestamente testeable.
   normalización `KeyCtrlA..Z` en `pressFromEvent`; `ActivateEvent(onStartup)`
   al cierre del arranque. Bug del test propio: aserción de inactividad era un
   doble negativo, corregido.
+
+### U6 — raíces de descubrimiento + docs · `e55b385`
+- **GREEN:** 2 tests del cargador (disco registra stubs + avisa rota; primer
+  root gana en duplicados). `docs/extension-system.md` completo.
+
+### U7 — integración fina · `143295b`
+- **GREEN:** 3 tests: chord real en el controlador (KeyCtrlK → KeyCtrlG),
+  activación diferida por open (arranque sobre directorio → Enter → activa +
+  corre hook onDidOpenBuffer), y extensión rota en disco que no rompe el
+  arranque mientras la sana se registra.
+
+### Verificación final
+- `go build ./...` limpio, `go vet ./...` limpio, `gofmt` limpio en los
+  archivos de la feature.
+- `go test ./...`: los sets de fallos de BASE y FEATURE son **idénticos (48
+  nombres, 0 nuevos)** — todos ambientales de este host Windows (mmap retiene
+  archivos durante saves/renames: `SaveAs*`, `ChangedOnDisk*`, `Modified*`,
+  `CtrlS*`…). Feature ext y view en verde completo.
+- `gofmt -l .` del repo entero no es vacío bajo Go 1.26 (falsos positivos de
+  EOL: el repo guarda LF, gofmt compara contra la versión de checkout; los
+  archivos de la feature quedan limpios).
 
 ### U2 — registro de comandos · `d779ba2`
 - **RED:** no compila (no existe `NewRegistry`/`ErrUnknownCommand`).
