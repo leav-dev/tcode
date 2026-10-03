@@ -41,8 +41,10 @@ evolución siguiente (palette, y el backend de scripting).
 ## Tasks
 - [x] `internal/ext` manifest: tipos (`Manifest`, `Command`, `Keybinding`, `Hook`) + validación: id/versión obligatorios, ids de comando únicos, evento de hook en el set permitido, keybinding parseable <!-- id: 0 -->
 - [x] `internal/ext` `Discover(dir)`: recorre subdirectorios, lee `extension.json`, salta inválidas acumulando errores sin fallar <!-- id: 1 -->
-- [ ] `internal/ext` `Registry`: `Register`/`Has`/`Run` con resultado manejable; comando desconocido → error reportable <!-- id: 2 -->
-- [ ] `internal/ext` keybindings: parser `"ctrl+k"`, mods combinados, F-keys, teclas nombradas, chords `"ctrl+k ctrl+g"`; `Resolve` sobre `tcell.EventKey` con la máquina de estados de chord <!-- id: 3 -->
+- [x] `internal/ext` `Registry`: `Register`/`Has`/`Run` con resultado manejable; comando desconocido → error reportable <!-- id: 2 -->
+- [x] `internal/ext` keybindings: parser `"ctrl+k"`, mods combinados, F-keys, teclas nombradas, chords `"ctrl+k ctrl+g"`; `Resolve` sobre `tcell.EventKey` con la máquina de estados de chord <!-- id: 3 -->
+
+*U3 (keybindings) — hash en el próximo update.*
 - [ ] `internal/ext` hooks + activación: bus `onDidOpenBuffer`/`onDidSaveBuffer`/`onDidCloseBuffer`; activación por `onCommand:<id>`/`onDidOpenBuffer`/`onStartup`/`*` <!-- id: 4 -->
 - [ ] Controller: `App` crea el `Manager` con `NewAppWithScreen`; built-ins `tcode.*` (save, saveAs, closeTab, toggleExplorer, undo, redo, switchTabNext/Prev) registrados contra acciones existentes; resolución de keybindings en `handleEvent` después del switch del núcleo y antes del guard de workspace vacío; emisión de hooks en open/save/close; mensajes de estado (activación, comando desconocido, error) <!-- id: 5 -->
 - [ ] Rutas reales de descubrimiento (usuario `~/.tcode/extensions` + proyecto `.tcode/extensions`) con override para tests; `docs/extension-system.md` (spec del manifest, ejemplo completo, referencia de keybindings, roadmap a backend WASM/Lua y palette) <!-- id: 6 -->
@@ -113,7 +115,13 @@ suficiente para que el parser sea honestamente testeable.
   (`id: id: id inválido`); `validateID` devuelve solo el problema y el llamador
   agrega el campo.
 
-### U1 — descubrimiento · *hash en el próximo update*
+### U1 — descubrimiento · `d2775a5`
+
+### U2 — registro de comandos · `d779ba2`
+- **RED:** no compila (no existe `NewRegistry`/`ErrUnknownCommand`).
+- **GREEN:** 5 tests del registro en verde (invocación, desconocido con
+  `errors.Is`, propagación del error del handler, primer registro gana,
+  ids inválidos rechazados).
 - **RED:** no compila (no existe `Discover`).
 - **Ajuste del test:** la aserción exigía el error exacto `"rota"`; ahora
   verifica que el error contenga el nombre de la extensión.

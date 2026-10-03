@@ -142,34 +142,15 @@ func validateID(id string) error {
 	return nil
 }
 
-// validateBindingKey valida la gramática mínima de teclas del manifest. Un
-// binding es uno o dos tiempos separados por espacio; cada tiempo son mods
-// (ctrl/shift/alt, sin repetir) más una tecla (letra, dígito, F1-F24 o
-// nombrada). Un chord de dos tiempos exige que al menos uno lleve mod: sin
-// eso, "k k" sería un chord ambiguo contra el tecleo normal del documento.
+// validateBindingKey valida la gramática de teclas del manifest: uno o dos
+// tiempos separados por espacio, cada tiempo con mods (ctrl/shift/alt, sin
+// repetir) más una tecla (letra, dígito, F1-F24 o nombrada), y un chord de
+// dos tiempos exige al menos un mod: sin eso, "k k" sería ambiguo contra el
+// tecleo normal del documento. La gramática vive en parseKeybinding; acá solo
+// se descarta el resultado.
 func validateBindingKey(key string) error {
-	if key == "" {
-		return errors.New("keybinding: key vacía")
-	}
-	chords := strings.Split(key, " ")
-	if len(chords) > 2 {
-		return fmt.Errorf("keybinding: %d tiempos (máximo 2)", len(chords))
-	}
-	anyMod := false
-	for i, ch := range chords {
-		mods, k, err := splitChord(ch)
-		if err != nil {
-			return fmt.Errorf("keybinding: tiempo %d: %v", i, err)
-		}
-		if !validKey(k) {
-			return fmt.Errorf("keybinding: tiempo %d: tecla inválida %q", i, k)
-		}
-		anyMod = anyMod || len(mods) > 0
-	}
-	if len(chords) == 2 && !anyMod {
-		return errors.New("keybinding: un chord de dos tiempos necesita al menos un mod")
-	}
-	return nil
+	_, err := parseKeybinding(key)
+	return err
 }
 
 // splitChord separa mods de la tecla y verifica los mods (conocidos y sin
@@ -194,21 +175,6 @@ func splitChord(ch string) ([]string, string, error) {
 	return mods, parts[len(parts)-1], nil
 }
 
-// validKey acepta una letra minúscula, un dígito, una F-key o una tecla
-// nombrada del set.
-func validKey(k string) bool {
-	if len(k) == 1 && k[0] >= 'a' && k[0] <= 'z' {
-		return true
-	}
-	if len(k) == 1 && k[0] >= '0' && k[0] <= '9' {
-		return true
-	}
-	if fKeyRe.MatchString(k) {
-		return true
-	}
-	return namedKeys[k]
-}
-
 var (
 	idRe       = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 	semverRe   = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
@@ -218,11 +184,5 @@ var (
 		EventDidOpenBuffer:  true,
 		EventDidSaveBuffer:  true,
 		EventDidCloseBuffer: true,
-	}
-	namedKeys = map[string]bool{
-		"enter": true, "tab": true, "escape": true, "space": true,
-		"backspace": true, "delete": true, "insert": true,
-		"home": true, "end": true, "pageup": true, "pagedown": true,
-		"up": true, "down": true, "left": true, "right": true,
 	}
 )
