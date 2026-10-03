@@ -37,6 +37,21 @@ func typeRune(app *App, r rune) {
 	app.handleEvent(tcell.NewEventKey(tcell.KeyRune, r, tcell.ModNone))
 }
 
+// typeString tipea s con los eventos que entrega un terminal real para los saltos:
+// Enter llega como KeyEnter y el tab como KeyTab, no como runas.
+func typeString(app *App, s string) {
+	for _, r := range s {
+		switch r {
+		case '\n':
+			press(app, tcell.KeyEnter)
+		case '\t':
+			press(app, tcell.KeyTab)
+		default:
+			typeRune(app, r)
+		}
+	}
+}
+
 func press(app *App, key tcell.Key) bool {
 	return app.handleEvent(tcell.NewEventKey(key, 0, tcell.ModNone))
 }
