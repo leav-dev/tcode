@@ -46,7 +46,7 @@ vivo, no de archivo.
   puede tener `.tcode/session.json` <!-- id: 8 -->
 - [x] Verificación: `go vet`, `gofmt -l` en las superficies, paquete `view` y
   tests de la unidad bajo `-race` con clang <!-- id: 9 -->
-- [ ] Commit de unidad de trabajo <!-- id: 10 -->
+- [x] Commit de unidad de trabajo: `4c10e21` <!-- id: 10 -->
 
 ## Design decisions
 
@@ -135,4 +135,4 @@ el estado por defecto (explorador, sin buffers) es siempre el respaldo.
 - **Pendiente conocido (de U1, sigue fuera de scope):** un Save As a una ruta ya
   abierta en otra pestaña no deduplica entre buffers; es el último pendiente de la
   feature y quedaría para una unidad futura.
-- **Commit de unidad de trabajo:** (se registra en el commit de docs siguiente).
+- **Commit de unidad de trabajo:** `4c10e21`.

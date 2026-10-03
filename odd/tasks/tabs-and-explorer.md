@@ -46,7 +46,15 @@ U2b. Modos de arranque: sin argumento → explorador sobre cwd; directorio →
 explorador sobre ese dir; archivo → edición clásica con panel oculto. En la
 evidencia: `2355846`.
 
-### U4 — Menú de pestañas (`Ctrl+T`) y sesión JSON — pendiente
+### U4 — Menú de pestañas (`Ctrl+T`) y sesión JSON (`odd/tasks/tab-menu-session.md`)
+`Ctrl+T` abre un superpuesto transitorio que lista todas las pestañas (cursor
+navegable, `Enter` cambia, cualquier otra tecla cierra y descarta). La sesión
+persiste root, pestañas en orden y activa (por ruta) en `/.tcode/session.json`
+al salir, y restaura al arrancar sobre un directorio o sin argumentos; el modo
+archivo explícito ni guarda ni restaura. En la evidencia: `4c10e21`.
+
+**La feature está completa** (U1–U4). Pendiente conocido: un Save As a una ruta
+ya abierta en otra pestaña no deduplica entre buffers (anotado en U1).
 
 ## Roadmap de decisión
 
