@@ -559,6 +559,12 @@ func TestSaveAsForADocumentWithoutPath(t *testing.T) {
 	}
 	defer func() { app.ws.CloseAll(); s.Fini() }()
 
+	// El arranque sin argumentos ya no crea un documento (decisión A→B1): el
+	// explorador es el camino de entrada y el workspace queda vacío. Este test
+	// es sobre Save As, así que el buffer sin ruta se crea explícitamente,
+	// como haría el usuario al abrirlo. Las aserciones de abajo no cambian.
+	app.ws.NewUntitled()
+
 	typeString(app, "contenido nuevo")
 
 	dest := filepath.Join(t.TempDir(), "creado.txt")
@@ -1140,5 +1146,502 @@ func TestMouseClickIsTranslatedPastTheTabBar(t *testing.T) {
 
 	if got := app.ws.Active().GetContent(); got != "uno\nXdos\ntres" {
 		t.Fatalf("contenido = %q, se esperaba %q", got, "uno\nXdos\ntres")
+	}
+}
+
+// --- U3: explorador de archivos y modos de arranque ---
+
+// newExplorerApp arranca sobre un directorio (el modo "sin buffers"): la
+// pantalla queda en el 80x25 que Init() deja tras construir la app; un test
+// que necesite otra geometría usa resizeApp después, como en U2b.
+func newExplorerApp(t *testing.T, dir string) *App {
+	t.Helper()
+	s := tcell.NewSimulationScreen("UTF-8")
+	if err := s.Init(); err != nil {
+		t.Fatalf("no se pudo inicializar la pantalla simulada: %v", err)
+	}
+	app, err := NewAppWithScreen(s, dir)
+	if err != nil {
+		t.Fatalf("NewAppWithScreen falló: %v", err)
+	}
+	t.Cleanup(func() {
+		app.ws.CloseAll()
+		s.Fini()
+	})
+	return app
+}
+
+// panelRow devuelve el texto visible de la fila y del panel del explorador en
+// la pantalla simulada: de la columna 0 al borde derecho del panel. Es la
+// forma de observar el listado que dibuja el controlador al componer.
+func panelRow(app *App, y int) string {
+	sim := app.screen.(tcell.SimulationScreen)
+	cells, w, _ := sim.GetContents()
+	panelW := 0
+	if app.explorerVisible {
+		panelW = panelWidth(w)
+	}
+	var sb strings.Builder
+	for x := 0; x < panelW; x++ {
+		c := cells[(y+tabBarHeight)*w+x]
+		if len(c.Runes) == 0 {
+			sb.WriteRune(' ')
+			continue
+		}
+		sb.WriteRune(c.Runes[0])
+	}
+	return strings.TrimRight(sb.String(), " ")
+}
+
+// TestPanelWidthKeepsTheEditorAtLeastSixteenColumns: la fórmula del ancho del
+// panel es determinista para los tests y deja al editor al menos 16 columnas:
+// 80 → 24, 30 → 14 (16 era la errata del contrato), 20 → 4, y el panel nunca
+// desaparece (mínimo 1).
+func TestPanelWidthKeepsTheEditorAtLeastSixteenColumns(t *testing.T) {
+	for _, tc := range []struct {
+		width, want int
+	}{
+		{80, 24},
+		{30, 14},
+		{20, 4},
+		{16, 1},
+	} {
+		if got := panelWidth(tc.width); got != tc.want {
+			t.Fatalf("panelWidth(%d) = %d, se esperaba %d", tc.width, got, tc.want)
+		}
+	}
+}
+
+// TestStartupWithoutArguments: sin argumento el explorador arranca sobre el
+// directorio actual, visible y enfocado, y el workspace queda SIN buffers —el
+// estado a propósito vacío que la feature declaró en U1—.
+func TestStartupWithoutArguments(t *testing.T) {
+	s := tcell.NewSimulationScreen("UTF-8")
+	if err := s.Init(); err != nil {
+		t.Fatalf("no se pudo inicializar la pantalla simulada: %v", err)
+	}
+	app, err := NewAppWithScreen(s, "")
+	if err != nil {
+		t.Fatalf("NewAppWithScreen falló: %v", err)
+	}
+	t.Cleanup(func() { app.ws.CloseAll(); s.Fini() })
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("no se pudo leer el directorio de trabajo: %v", err)
+	}
+	if got := app.ws.Root(); got != cwd {
+		t.Fatalf("Root() = %q, se esperaba el directorio actual %q", got, cwd)
+	}
+	if !app.explorerVisible {
+		t.Fatal("sin argumentos el explorador debe arrancar visible")
+	}
+	if !app.explorerFocused {
+		t.Fatal("sin argumentos el foco debe estar en el explorador")
+	}
+	if got := app.ws.Len(); got != 0 {
+		t.Fatalf("Len() = %d, se esperaba 0: sin argumentos no hay buffers", got)
+	}
+}
+
+// TestStartupWithDirectoryArgument: un directorio como argumento arranca el
+// explorador sobre él —visible y enfocado, sin buffers— y su listado ya está
+// leído: el archivo del directorio figura entre las entradas.
+func TestStartupWithDirectoryArgument(t *testing.T) {
+	dir := t.TempDir()
+	doc := filepath.Join(dir, "doc.txt")
+	if err := os.WriteFile(doc, []byte("contenido"), 0o644); err != nil {
+		t.Fatalf("no se pudo crear el archivo: %v", err)
+	}
+
+	app := newExplorerApp(t, dir)
+
+	if got := app.ws.Root(); got != dir {
+		t.Fatalf("Root() = %q, se esperaba %q", got, dir)
+	}
+	if !app.explorerVisible || !app.explorerFocused {
+		t.Fatal("arrancar sobre un directorio deja el explorador visible y enfocado")
+	}
+	if got := app.ws.Len(); got != 0 {
+		t.Fatalf("Len() = %d, se esperaba 0", got)
+	}
+
+	// El archivo está entre las entradas: es la única del listado, el cursor
+	// ya está sobre ella y el panel la dibuja.
+	app.redraw()
+	if got := app.explorer.CursorPath(); got != doc {
+		t.Fatalf("CursorPath() = %q, se esperaba %q", got, doc)
+	}
+	if got := panelRow(app, 0); got != "doc.txt" {
+		t.Fatalf("fila 0 del panel = %q, se esperaba %q", got, "doc.txt")
+	}
+}
+
+// TestStartupWithFileArgumentKeepsTheExplorerHidden: el arranque clásico de
+// editor. El panel queda oculto —no desplaza el documento—, el archivo se abre
+// y la raíz de la sesión es su directorio padre.
+func TestStartupWithFileArgumentKeepsTheExplorerHidden(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "doc.txt")
+	if err := os.WriteFile(path, []byte("contenido"), 0o644); err != nil {
+		t.Fatalf("no se pudo crear el archivo: %v", err)
+	}
+
+	s := tcell.NewSimulationScreen("UTF-8")
+	if err := s.Init(); err != nil {
+		t.Fatalf("no se pudo inicializar la pantalla simulada: %v", err)
+	}
+	app, err := NewAppWithScreen(s, path)
+	if err != nil {
+		t.Fatalf("NewAppWithScreen falló: %v", err)
+	}
+	t.Cleanup(func() { app.ws.CloseAll(); s.Fini() })
+
+	if got := app.ws.Root(); got != dir {
+		t.Fatalf("Root() = %q, se esperaba %q (el directorio padre)", got, dir)
+	}
+	if got := app.ws.Len(); got != 1 {
+		t.Fatalf("Len() = %d, se esperaba 1 (el archivo abierto)", got)
+	}
+	if app.explorerVisible {
+		t.Fatal("el explorador debe arrancar oculto con un archivo como argumento")
+	}
+
+	// El documento arranca en (0,1): el panel oculto no desplaza nada y la
+	// geometría de los tests existentes se conserva.
+	resizeApp(app, 24, 6)
+	app.redraw()
+	if got := cellRune(app, 0, 1); got != 'c' {
+		t.Fatalf("(0,1) = %q, se esperaba 'c' (el inicio del documento)", got)
+	}
+}
+
+// TestCtrlBTogglesTheExplorer: Ctrl+B muestra y oculta el panel. Mostrar
+// redimensiona las vistas del editor al ancho restante y desplaza el documento
+// a la columna del panel; ocultar lo devuelve a la columna 0 y desenfoca el
+// panel.
+func TestCtrlBTogglesTheExplorer(t *testing.T) {
+	app, _ := newTestApp(t, "uno")
+	resizeApp(app, 80, 8)
+
+	// Materializar la vista del editor: el toggle redimensiona las vistas
+	// EXISTENTES, así que la vista tiene que existir primero.
+	app.redraw()
+	ed := app.activeEditor()
+	if w, _ := ed.Size(); w != 80 {
+		t.Fatalf("la vista del editor = %d columnas, se esperaba 80 (panel oculto)", w)
+	}
+
+	if quit := press(app, tcell.KeyCtrlB); quit {
+		t.Fatal("Ctrl+B no debe cerrar el editor")
+	}
+	if !app.explorerVisible {
+		t.Fatal("Ctrl+B debe mostrar el explorador")
+	}
+	if !app.explorerFocused {
+		t.Fatal("al mostrar, el foco debe ir al explorador")
+	}
+	// El editor conserva 80-24 columnas y el documento arranca en la columna 24.
+	if w, h := ed.Size(); w != 56 || h != 6 {
+		t.Fatalf("vista del editor = %dx%d, se esperaba 56x6", w, h)
+	}
+	if got := cellRune(app, 24, 1); got != 'u' {
+		t.Fatalf("(24,1) = %q, se esperaba 'u': el documento desplazado por el panel", got)
+	}
+
+	if quit := press(app, tcell.KeyCtrlB); quit {
+		t.Fatal("Ctrl+B no debe cerrar el editor")
+	}
+	if app.explorerVisible {
+		t.Fatal("el segundo Ctrl+B debe ocultar el explorador")
+	}
+	if app.explorerFocused {
+		t.Fatal("al ocultar, el explorador debe desenfocarse")
+	}
+	if w, _ := ed.Size(); w != 80 {
+		t.Fatalf("la vista del editor = %d columnas tras ocultar, se esperaba 80", w)
+	}
+	if got := cellRune(app, 0, 1); got != 'u' {
+		t.Fatalf("(0,1) = %q, se esperaba 'u': el documento de vuelta en la columna 0", got)
+	}
+}
+
+// TestEnterOpensTheSelectedFile: Enter sobre un archivo lo abre en el
+// workspace —con su contenido— y devuelve el foco al editor.
+func TestEnterOpensTheSelectedFile(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "carpeta")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatalf("no se pudo crear el directorio: %v", err)
+	}
+	doc := filepath.Join(dir, "doc.txt")
+	if err := os.WriteFile(doc, []byte("contenido seteado"), 0o644); err != nil {
+		t.Fatalf("no se pudo crear el archivo: %v", err)
+	}
+
+	app := newExplorerApp(t, dir)
+
+	// Listado: [carpeta, doc.txt]. Bajar hasta el archivo y abrirlo.
+	press(app, tcell.KeyDown)
+	press(app, tcell.KeyEnter)
+
+	if got := app.ws.Len(); got != 1 {
+		t.Fatalf("Len() = %d, se esperaba 1", got)
+	}
+	if got := app.ws.Active().GetContent(); got != "contenido seteado" {
+		t.Fatalf("contenido = %q, se esperaba %q", got, "contenido seteado")
+	}
+	if app.explorerFocused {
+		t.Fatal("abrir un archivo debe devolver el foco al editor")
+	}
+}
+
+// TestEnterDescendsIntoADirectory: Enter sobre un directorio baja el listado a
+// ese directorio: el ".." sintético queda al frente (el directorio actual ya
+// no es el root de la sesión) y los archivos del directorio aparecen debajo.
+func TestEnterDescendsIntoADirectory(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "carpeta")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatalf("no se pudo crear el directorio: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "fuente.txt"), []byte("adentro"), 0o644); err != nil {
+		t.Fatalf("no se pudo crear el archivo: %v", err)
+	}
+
+	app := newExplorerApp(t, dir)
+
+	press(app, tcell.KeyEnter) // desciende a carpeta
+
+	app.redraw()
+	// El cursor quedó en la primera entrada del listado nuevo: ".." (el
+	// directorio corriente ya no es el root), cuya ruta es el padre.
+	if got := app.explorer.CursorPath(); got != dir {
+		t.Fatalf("CursorPath() = %q, se esperaba %q (la entrada \"..\" → el padre)", got, dir)
+	}
+	if got := panelRow(app, 0); got != "../" {
+		t.Fatalf("fila 0 del panel = %q, se esperaba %q (\"..\" como directorio)", got, "../")
+	}
+	if got := panelRow(app, 1); got != "fuente.txt" {
+		t.Fatalf("fila 1 del panel = %q, se esperaba %q", got, "fuente.txt")
+	}
+}
+
+// TestUpEntryGoesBackToTheRoot: la entrada ".." sube al directorio padre y,
+// en el root de la sesión, desaparece: el panel nunca escapa de su límite.
+func TestUpEntryGoesBackToTheRoot(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "carpeta")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatalf("no se pudo crear el directorio: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "fuente.txt"), []byte("adentro"), 0o644); err != nil {
+		t.Fatalf("no se pudo crear el archivo: %v", err)
+	}
+
+	app := newExplorerApp(t, dir)
+
+	press(app, tcell.KeyEnter) // desciende a carpeta: el cursor queda en ".."
+	press(app, tcell.KeyEnter) // ".." sube al root
+
+	app.redraw()
+	// De vuelta en el root: el listado es el directorio de la raíz, sin "..".
+	if got := app.explorer.CursorPath(); got != sub {
+		t.Fatalf("CursorPath() = %q, se esperaba %q (el directorio de la raíz)", got, sub)
+	}
+	if got := panelRow(app, 0); got != "carpeta/" {
+		t.Fatalf("fila 0 del panel = %q, se esperaba %q", got, "carpeta/")
+	}
+}
+
+// TestTabReturnsFocusToTheEditor: con el foco en el explorador, Tab lo
+// devuelve al editor; al revés no aplica —con el foco en el editor Tab inserta
+// tabulación (ver TestTabInsertsInTheDocumentWhileTheExplorerIsVisible)—:
+// volver al panel es con clic o re-mostrándolo con Ctrl+B.
+func TestTabReturnsFocusToTheEditor(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a"), 0o644); err != nil {
+		t.Fatalf("no se pudo crear el archivo: %v", err)
+	}
+
+	app := newExplorerApp(t, dir)
+	if !app.explorerFocused {
+		t.Fatal("arrancar sobre un directorio enfoca el explorador")
+	}
+
+	if quit := press(app, tcell.KeyTab); quit {
+		t.Fatal("Tab no debe cerrar el editor")
+	}
+	if app.explorerFocused {
+		t.Fatal("Tab con el foco en el explorador debe llevarlo al editor")
+	}
+}
+
+// TestTabInsertsInTheDocumentWhileTheExplorerIsVisible: con el foco en el
+// editor y el panel visible, Tab inserta tabulación en el documento: el foco
+// del panel nunca le roba al editor su tecla de indentación.
+func TestTabInsertsInTheDocumentWhileTheExplorerIsVisible(t *testing.T) {
+	dir := t.TempDir()
+	doc := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(doc, []byte(""), 0o644); err != nil {
+		t.Fatalf("no se pudo crear el archivo: %v", err)
+	}
+	app := newExplorerApp(t, dir)
+
+	press(app, tcell.KeyEnter) // abre a.txt: el foco vuelve al editor
+	if app.explorerFocused {
+		t.Fatal("abrir un archivo devuelve el foco al editor")
+	}
+
+	press(app, tcell.KeyTab)
+	if got := app.ws.Active().GetContent(); got != "\t" {
+		t.Fatalf("contenido = %q, se esperaba %q: Tab inserta con el panel visible", got, "\t")
+	}
+	if app.explorerFocused {
+		t.Fatal("Tab con el foco en el editor no debe cambiar el foco")
+	}
+}
+
+// TestCtrlBTogglesWithAnEmptyWorkspace: el toggle del panel funciona también
+// sin ningún buffer abierto —el camino de entrada de U3 es el arranque sobre
+// un directorio con el workspace vacío, y ocultar el panel para ganar ancho
+// no puede exigir abrir primero un archivo.
+func TestCtrlBTogglesWithAnEmptyWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a"), 0o644); err != nil {
+		t.Fatalf("no se pudo crear el archivo: %v", err)
+	}
+	app := newExplorerApp(t, dir)
+	if !app.explorerVisible || !app.explorerFocused {
+		t.Fatal("el arranque sobre un directorio muestra y enfoca el panel")
+	}
+
+	press(app, tcell.KeyCtrlB)
+	if app.explorerVisible {
+		t.Fatal("Ctrl+B debe ocultar el panel también con el workspace vacío")
+	}
+
+	press(app, tcell.KeyCtrlB)
+	if !app.explorerVisible || !app.explorerFocused {
+		t.Fatal("el segundo Ctrl+B debe volver a mostrar y enfocar el panel")
+	}
+}
+
+// TestExplorerNavigationCancelsThePendingConfirmations: navegar el panel es
+// "seguir trabajando", como cualquier otra tecla del documento: una
+// confirmación de salida armada con Escape se desarma, y sin eso el próximo
+// Escape cerraría sin avisar.
+func TestExplorerNavigationCancelsThePendingConfirmations(t *testing.T) {
+	dir := t.TempDir()
+	doc := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(doc, []byte("uno"), 0o644); err != nil {
+		t.Fatalf("no se pudo crear el archivo: %v", err)
+	}
+	app := newExplorerApp(t, dir)
+
+	press(app, tcell.KeyEnter) // abre a.txt: foco al editor
+	typeRune(app, 'X')         // ensuciar
+	press(app, tcell.KeyEscape)
+	if !app.confirmQuit {
+		t.Fatal("el test requiere la confirmación de salida armada")
+	}
+
+	// Foco al panel con un clic y navegar la lista: es otro "trabajo".
+	app.handleEvent(tcell.NewEventMouse(1, tabBarHeight, tcell.Button1, tcell.ModNone))
+	press(app, tcell.KeyDown)
+
+	if app.confirmQuit {
+		t.Fatal("navegar el explorador debe desarmar la confirmación de salida")
+	}
+
+	// La prueba de punta a punta: Escape vuelve a avisar en vez de cerrar.
+	if quit := press(app, tcell.KeyEscape); quit {
+		t.Fatal("tras navegar el panel, Escape debe volver a avisar y no cerrar")
+	}
+	if !app.confirmQuit {
+		t.Fatal("Escape debe haber vuelto a armar la confirmación, no cerrar")
+	}
+}
+
+// TestClickInThePanelFocusesIt: un clic dentro del panel lo enfoca y
+// selecciona la fila clicada.
+func TestClickInThePanelFocusesIt(t *testing.T) {
+	dir := t.TempDir()
+	doc := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(doc, []byte("a"), 0o644); err != nil {
+		t.Fatalf("no se pudo crear el archivo: %v", err)
+	}
+
+	app := newExplorerApp(t, dir)
+
+	// Quitar el foco del explorador para que el clic tenga que devolverlo.
+	press(app, tcell.KeyTab)
+	if app.explorerFocused {
+		t.Fatal("el test requiere el foco en el editor primero")
+	}
+
+	// Clic en la fila 0 del panel: (1, tabBarHeight) de pantalla.
+	app.handleEvent(tcell.NewEventMouse(1, tabBarHeight, tcell.Button1, tcell.ModNone))
+	if !app.explorerFocused {
+		t.Fatal("un clic dentro del panel debe enfocarlo")
+	}
+	if got := app.explorer.CursorPath(); got != doc {
+		t.Fatalf("CursorPath() = %q, se esperaba %q: el clic selecciona la fila", got, doc)
+	}
+}
+
+// TestCtrlPageSwitchingWorksWithTheExplorerFocused: cambiar de pestaña con
+// Ctrl+PageUp/PageDown sigue funcionando con el foco en el panel: el
+// explorador no consume esos Pg con ModCtrl (son del controlador, de U2b), o
+// la navegación de pestañas moriría mientras la lista está enfocada.
+func TestCtrlPageSwitchingWorksWithTheExplorerFocused(t *testing.T) {
+	dir := t.TempDir()
+	nameA := filepath.Join(dir, "a.txt")
+	nameB := filepath.Join(dir, "b.txt")
+	for path, c := range map[string]string{nameA: "uno", nameB: "dos"} {
+		if err := os.WriteFile(path, []byte(c), 0o644); err != nil {
+			t.Fatalf("no se pudo crear el archivo: %v", err)
+		}
+	}
+	app := newExplorerApp(t, dir)
+
+	// Abrir a.txt (Enter) y volver el foco al panel con un clic; abrir b.txt
+	// y volver a clicar: dos pestañas abiertas con el explorador enfocado.
+	// Volver al panel es con clic —Tab con el foco en el editor inserta
+	// tabulación y no cambia de pane—.
+	press(app, tcell.KeyEnter)
+	app.handleEvent(tcell.NewEventMouse(1, tabBarHeight, tcell.Button1, tcell.ModNone))
+	press(app, tcell.KeyDown)
+	press(app, tcell.KeyEnter)
+	app.handleEvent(tcell.NewEventMouse(1, tabBarHeight, tcell.Button1, tcell.ModNone))
+	if !app.explorerFocused {
+		t.Fatal("el test requiere el foco en el explorador")
+	}
+	if got := app.ws.Len(); got != 2 {
+		t.Fatalf("Len() = %d, se esperaban 2 pestañas", got)
+	}
+
+	// Ctrl+PageUp con el panel enfocado cambia a la pestaña anterior.
+	app.handleEvent(tcell.NewEventKey(tcell.KeyPgUp, 0, tcell.ModCtrl))
+	if got := app.ws.Active().Path(); got != nameA {
+		t.Fatalf("tras Ctrl+PageUp, la activa = %q, se esperaba %q", got, nameA)
+	}
+}
+
+// TestMouseClickInTheEditorIsTranslatedPastThePanel: con el panel visible, el
+// clic de pantalla en (24+1, 2) cae en la columna 1 de la línea 1 del
+// documento; sin la traducción por la columna del panel habría caído en otra
+// columna y eso se observa tipeando después del clic.
+func TestMouseClickInTheEditorIsTranslatedPastThePanel(t *testing.T) {
+	app, _ := newTestApp(t, "uno\ndos\ntres")
+	resizeApp(app, 80, 8)
+	press(app, tcell.KeyCtrlB) // mostrar el panel: el editor arranca en x=24
+
+	// Pantalla (25, 2): el editor recibe (1, 1) — línea 1, columna 1 de "dos".
+	app.handleEvent(tcell.NewEventMouse(25, 2, tcell.Button1, tcell.ModNone))
+	typeRune(app, 'X')
+
+	if got := app.ws.Active().GetContent(); got != "uno\ndXos\ntres" {
+		t.Fatalf("contenido = %q, se esperaba %q", got, "uno\ndXos\ntres")
 	}
 }

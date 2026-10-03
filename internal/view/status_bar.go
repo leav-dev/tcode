@@ -87,7 +87,13 @@ func (s *StatusBar) Draw(sc tcell.Screen, y, width int) {
 // writeString escribe s en la fila y desde la columna x, respetando maxWidth
 // columnas. Avanza por *grapheme cluster* para que los caracteres anchos no
 // desalineen. Devuelve las columnas usadas.
-func writeString(sc tcell.Screen, x, y int, s string, style tcell.Style, maxWidth int) int {
+//
+// Recibe una Surface y no una tcell.Screen (aditivo, sin cambio de
+// comportamiento: solo usa Put, que la interfaz expone; los callers pasan
+// tcell.Screen, que ya la satisface). Es la misma evolución que EditorView.Draw
+// hizo en U2b: el explorador (U3) la usa para dibujar sobre la superficie
+// compuesta, sin enterarse del layout.
+func writeString(sc Surface, x, y int, s string, style tcell.Style, maxWidth int) int {
 	col := 0
 	for s != "" && col < maxWidth {
 		var width int
