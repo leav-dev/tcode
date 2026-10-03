@@ -41,13 +41,13 @@ type App struct {
 	// la visibilidad del panel, en lugar de alocar una superficie por tecla.
 	editorSurf *view.OffsetSurface
 
-	// explorer es el panel lateral de archivos. El controlador lee el
-	// directorio corriente (os.ReadDir) y deposita el listado con SetEntries;
-	// la vista solo dibuja y navega. explorerDir es el directorio que el panel
-	// está mostrando: el root de la sesión (ws.Root) es su límite hacia
-	// arriba, y el ".." sintético deja de aparecer al llegar a él.
+	// explorer es el panel lateral de archivos: el árbol de la raíz de la
+	// sesión, anclado al root y cargado por nivel. El controlador lee los
+	// directorios (os.ReadDir) y deposita los listados en la vista con
+	// SetRootEntries (primer nivel, al arrancar) y SetChildren (hijos de un
+	// dir al expandir); la vista solo dibuja, navega y colapsa. El root es la
+	// cima implícita y nunca cambia: el panel no tiene subida ni "..".
 	explorer        *view.FileBrowser
-	explorerDir     string
 	explorerVisible bool
 	explorerFocused bool
 
@@ -103,8 +103,8 @@ func NewApp(path string) (*App, error) {
 // el explorador es el camino de entrada natural —raíz en cwd o en ese
 // directorio, sin buffers y con el foco en el panel— y un archivo arranca el
 // editor clásico con el explorador oculto y la raíz de la sesión en su
-// directorio padre. Siempre queda SetRoot: el panel no puede escapar de su
-// límite.
+// directorio padre. El árbol queda anclado a esa raíz (SetRoot): la base es
+// fija y la navegación solo expande y colapsa, sin cambiar de carpeta.
 func NewAppWithScreen(s tcell.Screen, path string) (*App, error) {
 	if err := s.Init(); err != nil {
 		return nil, err
@@ -160,17 +160,28 @@ func NewAppWithScreen(s tcell.Screen, path string) (*App, error) {
 		}
 	}
 
-	// El listado del root se lee SIEMPRE —también con el panel oculto—: eso
-	// hace que mostrarlo después con Ctrl+B aparezca poblado, y el panel
-	// oculto no dibuja, así que la geometría de los tests existentes no cambia.
-	app.explorerDir = ws.Root()
-	app.relist(app.explorerDir)
-
 	width, height := s.Size()
 	app.explorer.Resize(panelWidth(width), editorHeight(height))
-	// La sesión se restaura después de que el explorador quedó listo: relist y
-	// resize ya corrieron, y la restauración nunca es fatal (pestañas muertas
-	// se saltan, JSON corrupto se descarta).
+
+	// El árbol se ancla al root de la sesión y su primer nivel se lee SIEMPRE
+	// —también con el panel oculto—: eso hace que mostrarlo después con Ctrl+B
+	// aparezca poblado, y el panel oculto no dibuja, así que la geometría de
+	// los tests existentes no cambia. Los SUBdirectorios no se leen acá: su
+	// carga es perezosa, al expandir (ActionExpand → SetChildren) —leer el
+	// árbol completo al arrancar cargaría proyectos enteros sin estar en
+	// pantalla—.
+	app.explorer.SetRoot(app.ws.Root())
+	if entries, err := readEntries(app.ws.Root()); err == nil {
+		app.explorer.SetRootEntries(entries)
+	} else {
+		// Root inaccesible (permisos o borrado ajeno): árbol vacío, como el
+		// relist de U3 sobre un directorio ilegible.
+		app.explorer.SetRootEntries(nil)
+	}
+
+	// La sesión se restaura después de que el árbol quedó listo: SetRoot y el
+	// primer nivel ya corrieron, y la restauración nunca es fatal (pestañas
+	// muertas se saltan, JSON corrupto se descarta).
 	app.loadSession()
 	app.syncStatus()
 	return app, nil
@@ -275,24 +286,28 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		}
 
 		// El explorador enfocado consume su teclado ANTES del guard del
-		// workspace vacío: la navegación del panel tiene que funcionar sin
+		// workspace vacío: la navegación del árbol tiene que funcionar sin
 		// ningún buffer abierto —el arranque sobre un directorio no abre
-		// buffers y el foco ya está en el panel—. (true,true) activa la
-		// entrada (Enter); (true,false) solo redibuja; lo no consumido cae al
-		// flujo normal: atajos, documento y salida.
+		// buffers y el foco ya está en el panel—. ActionMove solo redibuja;
+		// ActionActivate abre el archivo del nodo; ActionExpand pide los hijos
+		// del dir del cursor (SetChildren es la única E/S de expansión). Lo no
+		// consumido cae al flujo normal: atajos, documento y salida.
 		if a.explorerVisible && a.explorerFocused {
-			handled, activate := a.explorer.HandleEvent(ev)
+			action, handled := a.explorer.HandleEvent(ev)
 			if handled {
 				// Navegar el panel es "seguir trabajando": desarma las
 				// confirmaciones pendientes y el permiso de pisar, como
 				// cualquier otra tecla del documento —si no, un Escape armado
-				// por error seguiría activo tras navegar la lista—.
+				// por error seguiría activo tras navegar el árbol—.
 				a.confirmQuit = false
 				a.confirmClose = false
 				a.clearForceSave()
 				a.statusBar.ClearMessage()
-				if activate {
+				switch action {
+				case view.ActionActivate:
 					a.activateExplorerEntry()
+				case view.ActionExpand:
+					a.explorerExpand()
 				}
 				a.redraw()
 				return false
@@ -420,8 +435,7 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		if a.explorerVisible {
 			panelW := panelWidth(width)
 			if x < panelW {
-				handled, _ := a.explorer.HandleEvent(tcell.NewEventMouse(x, y-tabBarHeight, ev.Buttons(), ev.Modifiers()))
-				if handled {
+				if _, handled := a.explorer.HandleEvent(tcell.NewEventMouse(x, y-tabBarHeight, ev.Buttons(), ev.Modifiers())); handled {
 					a.explorerFocused = true
 					a.redraw()
 					return false
@@ -716,24 +730,16 @@ func (a *App) resizeEditors() {
 	}
 }
 
-// relist lee el directorio corriente con os.ReadDir y deposita su listado en la
-// vista del explorador. El controlador es quien toca el filesystem: el modelo
-// es PieceTable y texto, y la vista solo dibuja. Directorios primero y luego
-// archivos, ambos alfabéticos (os.ReadDir ya ordena), ocultos incluidos; lo que
-// no es directorio ni archivo regular queda fuera. El ".." sintético
-// —Entry{"..", padre, true}— aparece solo cuando el directorio corriente no es
-// el root de la sesión: el panel nunca escapa de su límite.
-func (a *App) relist(dir string) {
-	entries := make([]view.Entry, 0, 16)
-	if dir != a.ws.Root() {
-		entries = append(entries, view.Entry{Name: "..", Path: filepath.Dir(dir), IsDir: true})
-	}
-
+// readEntries lee un directorio con las reglas del árbol: directorios primero
+// y luego archivos, ambos alfabéticos (os.ReadDir ya ordena), ocultos
+// incluidos; lo que no es directorio ni archivo regular queda fuera. Sin la
+// entrada sintética "..": la base del árbol es la cima fija de la sesión y
+// nunca se sube. El error se devuelve para que el llamador decida —el arranque
+// muestra el primer nivel vacío, la expansión es un no-op silencioso—.
+func readEntries(dir string) ([]view.Entry, error) {
 	infos, err := os.ReadDir(dir)
 	if err != nil {
-		// Directorio inaccesible (permisos o borrado ajeno): listado vacío.
-		a.explorer.SetEntries(nil)
-		return
+		return nil, err
 	}
 
 	var dirs, files []view.Entry
@@ -752,33 +758,17 @@ func (a *App) relist(dir string) {
 			files = append(files, e)
 		}
 	}
-	entries = append(entries, dirs...)
-	entries = append(entries, files...)
-	a.explorer.SetEntries(entries)
+	return append(dirs, files...), nil
 }
 
-// activateExplorerEntry actúa sobre la entrada activa del panel —la rama
-// (true,true) del explorador—. Un directorio se desciende: se re-lee su
-// listado y el explorador sigue enfocado. Un archivo se abre en el workspace
-// (con la dedupe por ruta normalizada de Open) y el foco vuelve al editor. El
-// ".." es un directorio más: sube hasta el root de la sesión, donde deja de
-// existir.
+// activateExplorerEntry abre el archivo del nodo activo del árbol —la rama
+// ActionActivate—. Ya NO hace stat ni desciende: el nodo sabe si es un
+// directorio (la expansión la dispara ActionExpand) y la carga perezosa evitó
+// leerlo. Un archivo se abre en el workspace (con la dedupe por ruta
+// normalizada de Open) y el foco vuelve al editor. El caller redibuja.
 func (a *App) activateExplorerEntry() {
 	path := a.explorer.CursorPath()
 	if path == "" {
-		return
-	}
-
-	info, err := os.Stat(path)
-	if err != nil {
-		// La entrada desapareció entre el listado y la activación: el panel
-		// queda como está, sin mensaje ni cambio.
-		return
-	}
-
-	if info.IsDir() {
-		a.explorerDir = path
-		a.relist(path)
 		return
 	}
 
@@ -788,6 +778,25 @@ func (a *App) activateExplorerEntry() {
 	}
 	a.explorerFocused = false
 	a.syncStatus()
+}
+
+// explorerExpand responde a ActionExpand: lee el directorio del nodo activo
+// (el controlador es quien toca el filesystem: el modelo es PieceTable y
+// texto, y la vista solo dibuja) y deposita sus hijos en el árbol con
+// SetChildren, que marca el nodo expandido y re-aplana. Un error de lectura
+// —directorio borrado entre el listado y la expansión, o sin permisos— es un
+// no-op silencioso: el árbol queda como estaba y el usuario puede colapsar.
+func (a *App) explorerExpand() {
+	path := a.explorer.CursorPath()
+	if path == "" {
+		return
+	}
+
+	entries, err := readEntries(path)
+	if err != nil {
+		return
+	}
+	a.explorer.SetChildren(entries)
 }
 
 // switchTab cambia de pestaña (adelante o atrás, con wrap) y deja la

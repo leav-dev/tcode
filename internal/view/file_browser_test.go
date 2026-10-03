@@ -7,52 +7,56 @@ import (
 	"github.com/gdamore/tcell/v2"
 )
 
-// newList devuelve n entradas de prueba con nombres estables ("e00", "e01",
-// ...) y rutas inventadas. Los tests de la vista construyen las entradas a
-// mano: el explorador solo dibuja y mueve el cursor, nunca lee el filesystem.
+// newList devuelve n nodos-raíz de prueba con nombres estables ("e00", "e01",
+// ...) y rutas inventadas (archivos). Los tests de la vista construyen las
+// entradas a mano: el explorador solo dibuja, navega y colapsa, nunca lee el
+// filesystem.
 func newList(n int) []Entry {
 	entries := make([]Entry, n)
 	for i := range entries {
 		entries[i] = Entry{
 			Name: fmt.Sprintf("e%02d", i),
-			Path: fmt.Sprintf("/tmp/e%02d.txt", i),
+			Path: fmt.Sprintf("/cwd/e%02d.txt", i),
 		}
 	}
 	return entries
 }
 
-// TestFileBrowserDrawsDirsWithSlash: los directorios se dibujan con el sufijo
-// "/" y los archivos sin él, cada uno en su fila.
-func TestFileBrowserDrawsDirsWithSlash(t *testing.T) {
+// TestFileBrowserDrawsIndentedWithPrefixes: cada nodo se dibuja con su
+// indentación (2 celdas por nivel) y su prefijo —"▸ " dir colapsado, "▾ "
+// dir expandido, "  " archivo—, y los directorios con el sufijo "/".
+func TestFileBrowserDrawsIndentedWithPrefixes(t *testing.T) {
 	fb := NewFileBrowser()
-	fb.Resize(20, 5)
-	fb.SetEntries([]Entry{
+	fb.Resize(20, 6)
+	fb.SetRoot("/cwd")
+	fb.SetRootEntries([]Entry{
 		{Name: "docs", Path: "/cwd/docs", IsDir: true},
 		{Name: "notas.txt", Path: "/cwd/notas.txt"},
 	})
 
-	s := newTestScreen(t, 20, 5)
+	s := newTestScreen(t, 20, 6)
 	fb.Draw(s)
 	s.Show()
 
-	if got := screenLines(s)[0]; got != "docs/" {
-		t.Fatalf("fila 0 = %q, se esperaba %q (directorio con sufijo)", got, "docs/")
+	if got := screenLines(s)[0]; got != "▸ docs/" {
+		t.Fatalf("fila 0 = %q, se esperaba %q (dir colapsado con prefijo y sufijo)", got, "▸ docs/")
 	}
-	if got := screenLines(s)[1]; got != "notas.txt" {
-		t.Fatalf("fila 1 = %q, se esperaba %q (archivo sin sufijo)", got, "notas.txt")
+	if got := screenLines(s)[1]; got != "  notas.txt" {
+		t.Fatalf("fila 1 = %q, se esperaba %q (archivo con prefijo de 2 celdas)", got, "  notas.txt")
 	}
 	if got := screenLines(s)[2]; got != "" {
-		t.Fatalf("fila 2 = %q, se esperaba vacía: la lista termina", got)
+		t.Fatalf("fila 2 = %q, se esperaba vacía: el árbol termina", got)
 	}
 }
 
 // TestFileBrowserHighlightsTheCursorRow: la fila del cursor va en estilo
 // invertido (a todo el ancho) y las demás con el estilo por defecto; el cursor
-// por defecto es la primera entrada.
+// por defecto es el primer nodo.
 func TestFileBrowserHighlightsTheCursorRow(t *testing.T) {
 	fb := NewFileBrowser()
 	fb.Resize(20, 5)
-	fb.SetEntries([]Entry{
+	fb.SetRoot("/cwd")
+	fb.SetRootEntries([]Entry{
 		{Name: "a.txt", Path: "/cwd/a.txt"},
 		{Name: "b.txt", Path: "/cwd/b.txt"},
 	})
@@ -73,9 +77,9 @@ func TestFileBrowserHighlightsTheCursorRow(t *testing.T) {
 		t.Fatal("las demás filas deben ir con el estilo por defecto")
 	}
 
-	handled, activate := fb.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
-	if !handled || activate {
-		t.Fatalf("Down devolvió (handled=%v, activate=%v), se esperaba (true, false)", handled, activate)
+	action, handled := fb.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
+	if action != ActionMove || !handled {
+		t.Fatalf("Down devolvió (action=%v, handled=%v), se esperaba (ActionMove, true)", action, handled)
 	}
 	fb.Draw(s)
 	s.Show()
@@ -87,13 +91,384 @@ func TestFileBrowserHighlightsTheCursorRow(t *testing.T) {
 	}
 }
 
-// TestFileBrowserScrollKeepsTheActiveVisible: con más entradas que el alto,
-// mover el cursor corre el scroll vertical lo mínimo para que la activa siga
+// TestFileBrowserExpandingShowsChildrenIndented: SetChildren inyecta los hijos
+// del dir del cursor con depth+1, el dir queda expandido ("▾"), los hijos se
+// aplanan a continuación con su indentación y el cursor queda en el dir.
+func TestFileBrowserExpandingShowsChildrenIndented(t *testing.T) {
+	fb := NewFileBrowser()
+	fb.Resize(20, 8)
+	fb.SetRoot("/cwd")
+	fb.SetRootEntries([]Entry{{Name: "src", Path: "/cwd/src", IsDir: true}})
+
+	action, handled := fb.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	if action != ActionExpand || !handled {
+		t.Fatalf("Enter sobre el dir colapsado devolvió (action=%v, handled=%v), se esperaba (ActionExpand, true)", action, handled)
+	}
+	// El controlador leyó el dir y deposita los hijos: el cursor sigue sobre el
+	// dir expandido, con sus hijos a continuación.
+	fb.SetChildren([]Entry{
+		{Name: "main.go", Path: "/cwd/src/main.go"},
+		{Name: "internal", Path: "/cwd/src/internal", IsDir: true},
+	})
+	if got := fb.CursorPath(); got != "/cwd/src" {
+		t.Fatalf("CursorPath() = %q tras expandir, se esperaba %q (el cursor en el dir)", got, "/cwd/src")
+	}
+
+	// Nivel 2: bajar a internal y expandir con SetChildren.
+	fb.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone)) // main.go
+	fb.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone)) // internal
+	fb.SetChildren([]Entry{{Name: "code.go", Path: "/cwd/src/internal/code.go"}})
+
+	s := newTestScreen(t, 20, 8)
+	fb.Draw(s)
+	s.Show()
+	lines := screenLines(s)
+	// Un nodo de profundidad d lleva d*2 celdas de indentación MÁS las 2 del
+	// prefijo (la columna de la flecha se alinea en todos los niveles): un
+	// archivo de profundidad 1 va con 4 espacios y uno de profundidad 2 con 6.
+	want := []string{
+		"▾ src/",
+		"    main.go",
+		"  ▾ internal/",
+		"      code.go",
+	}
+	for i, w := range want {
+		if lines[i] != w {
+			t.Fatalf("fila %d = %q, se esperaba %q", i, lines[i], w)
+		}
+	}
+	if lines[4] != "" {
+		t.Fatalf("fila 4 = %q, se esperaba vacía: el árbol termina", lines[4])
+	}
+}
+
+// TestFileBrowserCollapsingHidesChildrenAndKeepsTheCursorOnTheDir: Left sobre
+// el dir expandido del cursor lo colapsa INTERNAMENTE (sin E/S): el aplanado
+// se reconstruye sin los hijos y el cursor queda en el dir colapsado, con su
+// ruta intacta. Los hijos se CONSERVAN en el nodo: re-expandir no los relee.
+func TestFileBrowserCollapsingHidesChildrenAndKeepsTheCursorOnTheDir(t *testing.T) {
+	fb := NewFileBrowser()
+	fb.Resize(20, 8)
+	fb.SetRoot("/cwd")
+	fb.SetRootEntries([]Entry{{Name: "docs", Path: "/cwd/docs", IsDir: true}})
+	fb.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	fb.SetChildren([]Entry{{Name: "a.txt", Path: "/cwd/docs/a.txt"}})
+
+	// Bajar al hijo y volver al dir: el colapso es sobre el dir del cursor.
+	fb.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
+	fb.HandleEvent(tcell.NewEventKey(tcell.KeyUp, 0, tcell.ModNone))
+
+	action, handled := fb.HandleEvent(tcell.NewEventKey(tcell.KeyLeft, 0, tcell.ModNone))
+	if action != ActionMove || !handled {
+		t.Fatalf("Left sobre el dir expandido devolvió (action=%v, handled=%v), se esperaba (ActionMove, true)", action, handled)
+	}
+	if got := fb.CursorPath(); got != "/cwd/docs" {
+		t.Fatalf("CursorPath() = %q, se esperaba %q (el cursor en el dir colapsado)", got, "/cwd/docs")
+	}
+
+	s := newTestScreen(t, 20, 8)
+	fb.Draw(s)
+	s.Show()
+	if got := screenLines(s)[0]; got != "▸ docs/" {
+		t.Fatalf("fila 0 = %q, se esperaba %q (dir colapsado)", got, "▸ docs/")
+	}
+	if got := screenLines(s)[1]; got != "" {
+		t.Fatalf("fila 1 = %q, se esperaba vacía: los hijos desaparecieron del aplanado", got)
+	}
+
+	// Re-expandir sin re-leer: SetChildren de nuevo no duplica los hijos que el
+	// nodo conserva; solo re-expande.
+	fb.SetChildren([]Entry{{Name: "a.txt", Path: "/cwd/docs/a.txt"}})
+	fb.Draw(s)
+	s.Show()
+	if got := screenLines(s)[0]; got != "▾ docs/" {
+		t.Fatalf("fila 0 = %q tras re-expandir, se esperaba %q (dir expandido)", got, "▾ docs/")
+	}
+	if got := screenLines(s)[1]; got != "    a.txt" {
+		t.Fatalf("fila 1 = %q tras re-expandir, se esperaba %q (única, con su indentación)", got, "    a.txt")
+	}
+	if got := screenLines(s)[2]; got != "" {
+		t.Fatalf("fila 2 = %q, se esperaba vacía: los hijos no se duplican", got)
+	}
+}
+
+// TestFileBrowserSetChildrenIsDefensive: SetChildren es no-op si el nodo del
+// cursor no es un dir, y si el dir ya cargó sus hijos no los duplica. Sin
+// nodos no hace nada.
+func TestFileBrowserSetChildrenIsDefensive(t *testing.T) {
+	fb := NewFileBrowser()
+	fb.Resize(10, 5)
+	fb.SetRoot("/cwd")
+	fb.SetRootEntries([]Entry{{Name: "a.txt", Path: "/cwd/a.txt"}})
+
+	// El nodo del cursor es un archivo: SetChildren no inyecta nada.
+	fb.SetChildren([]Entry{{Name: "hijo", Path: "/cwd/a.txt/hijo"}})
+	if got := fb.CursorPath(); got != "/cwd/a.txt" {
+		t.Fatalf("CursorPath() = %q, el nodo archivo no debía cambiar", got)
+	}
+
+	// Dir expandido con hijos: un SetChildren posterior no duplica.
+	fb.SetRootEntries([]Entry{{Name: "docs", Path: "/cwd/docs", IsDir: true}})
+	fb.SetChildren([]Entry{{Name: "a.txt", Path: "/cwd/docs/a.txt"}})
+	fb.SetChildren([]Entry{{Name: "b.txt", Path: "/cwd/docs/b.txt"}})
+
+	s := newTestScreen(t, 10, 5)
+	fb.Draw(s)
+	s.Show()
+	if got := screenLines(s)[1]; got != "    a.txt" {
+		t.Fatalf("fila 1 = %q, se esperaba %q (un solo hijo, con su indentación)", got, "    a.txt")
+	}
+	if got := screenLines(s)[2]; got != "" {
+		t.Fatalf("fila 2 = %q, se esperaba vacía: el segundo SetChildren no duplicó", got)
+	}
+
+	// Sin nodos: no-op total.
+	fb.SetRootEntries(nil)
+	fb.SetChildren([]Entry{{Name: "x", Path: "/cwd/x"}})
+	if got := fb.CursorPath(); got != "" {
+		t.Fatalf("CursorPath() = %q sin nodos, se esperaba \"\"", got)
+	}
+}
+
+// TestFileBrowserSetRootResetsTheTree: SetRoot descarta el estado anterior del
+// árbol —nodos, cursor y scroll—; el nuevo primer nivel se carga con
+// SetRootEntries y el cursor arranca en 0.
+func TestFileBrowserSetRootResetsTheTree(t *testing.T) {
+	fb := NewFileBrowser()
+	fb.Resize(10, 5)
+	fb.SetRoot("/cwd")
+	fb.SetRootEntries([]Entry{{Name: "docs", Path: "/cwd/docs", IsDir: true}})
+	fb.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	fb.SetChildren([]Entry{{Name: "a.txt", Path: "/cwd/docs/a.txt"}})
+	fb.HandleEvent(tcell.NewEventKey(tcell.KeyEnd, 0, tcell.ModNone))
+
+	fb.SetRoot("/otro")
+	if got := fb.CursorPath(); got != "" {
+		t.Fatalf("CursorPath() = %q tras SetRoot, se esperaba \"\" (el árbol quedó vacío)", got)
+	}
+	if fb.cursor != 0 || fb.top != 0 {
+		t.Fatalf("tras SetRoot: cursor=%d top=%d, se esperaban 0 y 0", fb.cursor, fb.top)
+	}
+
+	fb.SetRootEntries([]Entry{{Name: "b.txt", Path: "/otro/b.txt"}})
+	if got := fb.CursorPath(); got != "/otro/b.txt" {
+		t.Fatalf("CursorPath() = %q tras SetRootEntries, se esperaba el nuevo primer nivel", got)
+	}
+}
+
+// TestFileBrowserEnterExpandsACollapsedDirectory: Enter sobre un dir colapsado
+// pide sus hijos con ActionExpand; sobre el mismo dir ya expandido devuelve
+// ActionNone (manejado: sin E/S ni relectura, ← es el que colapsa).
+func TestFileBrowserEnterExpandsACollapsedDirectory(t *testing.T) {
+	fb := NewFileBrowser()
+	fb.Resize(10, 5)
+	fb.SetRoot("/cwd")
+	fb.SetRootEntries([]Entry{{Name: "docs", Path: "/cwd/docs", IsDir: true}})
+
+	action, handled := fb.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	if action != ActionExpand || !handled {
+		t.Fatalf("Enter sobre un dir colapsado devolvió (action=%v, handled=%v), se esperaba (ActionExpand, true)", action, handled)
+	}
+
+	fb.SetChildren([]Entry{{Name: "a.txt", Path: "/cwd/docs/a.txt"}})
+	if action, handled := fb.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone)); action != ActionNone || !handled {
+		t.Fatalf("Enter sobre un dir ya expandido devolvió (action=%v, handled=%v), se esperaba (ActionNone, true)", action, handled)
+	}
+}
+
+// TestFileBrowserRightActsOnFilesAndDirs: Right es la otra tecla de avance:
+// sobre un archivo activa (ActionActivate), sobre un dir colapsado expande
+// (ActionExpand) y sobre un dir expandido no hace nada (ActionNone).
+func TestFileBrowserRightActsOnFilesAndDirs(t *testing.T) {
+	fb := NewFileBrowser()
+	fb.Resize(10, 5)
+	fb.SetRoot("/cwd")
+	fb.SetRootEntries([]Entry{
+		{Name: "docs", Path: "/cwd/docs", IsDir: true},
+		{Name: "a.txt", Path: "/cwd/a.txt"},
+	})
+
+	// Right sobre un archivo → ActionActivate.
+	fb.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone)) // a.txt
+	if action, handled := fb.HandleEvent(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone)); action != ActionActivate || !handled {
+		t.Fatalf("Right sobre un archivo devolvió (action=%v, handled=%v), se esperaba (ActionActivate, true)", action, handled)
+	}
+
+	// Right sobre un dir colapsado → ActionExpand.
+	fb.HandleEvent(tcell.NewEventKey(tcell.KeyUp, 0, tcell.ModNone)) // docs
+	if action, handled := fb.HandleEvent(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone)); action != ActionExpand || !handled {
+		t.Fatalf("Right sobre un dir colapsado devolvió (action=%v, handled=%v), se esperaba (ActionExpand, true)", action, handled)
+	}
+
+	// Right sobre el dir ya expandido → ActionNone.
+	fb.SetChildren([]Entry{{Name: "a.txt", Path: "/cwd/docs/a.txt"}})
+	if action, handled := fb.HandleEvent(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone)); action != ActionNone || !handled {
+		t.Fatalf("Right sobre un dir ya expandido devolvió (action=%v, handled=%v), se esperaba (ActionNone, true)", action, handled)
+	}
+}
+
+// TestFileBrowserLeftCollapsesOnlyAnExpandedDirectory: Left colapsa el dir
+// expandido del cursor (ActionMove); sobre un archivo o un dir colapsado no
+// aplica y cae al flujo normal del controlador con (ActionNone, false).
+func TestFileBrowserLeftCollapsesOnlyAnExpandedDirectory(t *testing.T) {
+	fb := NewFileBrowser()
+	fb.Resize(10, 5)
+	fb.SetRoot("/cwd")
+	fb.SetRootEntries([]Entry{
+		{Name: "docs", Path: "/cwd/docs", IsDir: true},
+		{Name: "a.txt", Path: "/cwd/a.txt"},
+	})
+	fb.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	fb.SetChildren([]Entry{{Name: "hijo.txt", Path: "/cwd/docs/hijo.txt"}})
+
+	// Left sobre un archivo: no aplica → (ActionNone, false).
+	fb.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone)) // hijo.txt
+	if action, handled := fb.HandleEvent(tcell.NewEventKey(tcell.KeyLeft, 0, tcell.ModNone)); action != ActionNone || handled {
+		t.Fatalf("Left sobre un archivo devolvió (action=%v, handled=%v), se esperaba (ActionNone, false)", action, handled)
+	}
+
+	// Left sobre el dir expandido: colapsa → (ActionMove, true).
+	fb.HandleEvent(tcell.NewEventKey(tcell.KeyUp, 0, tcell.ModNone)) // docs
+	if action, handled := fb.HandleEvent(tcell.NewEventKey(tcell.KeyLeft, 0, tcell.ModNone)); action != ActionMove || !handled {
+		t.Fatalf("Left sobre el dir expandido devolvió (action=%v, handled=%v), se esperaba (ActionMove, true)", action, handled)
+	}
+
+	// Left sobre un dir ya colapsado: no aplica → (ActionNone, false).
+	if action, handled := fb.HandleEvent(tcell.NewEventKey(tcell.KeyLeft, 0, tcell.ModNone)); action != ActionNone || handled {
+		t.Fatalf("Left sobre un dir colapsado devolvió (action=%v, handled=%v), se esperaba (ActionNone, false)", action, handled)
+	}
+}
+
+// TestFileBrowserEnterActivatesFilesAndFallsOtherwise: Enter sobre un archivo
+// devuelve (ActionActivate, true); sin nodos, Enter y toda tecla ajena caen al
+// flujo normal con (ActionNone, false); el movimiento se consume aunque el
+// cursor no se mueva: con el foco en el panel, Up/Down son del explorador, no
+// del documento.
+func TestFileBrowserEnterActivatesFilesAndFallsOtherwise(t *testing.T) {
+	fb := NewFileBrowser()
+	fb.Resize(10, 5)
+	fb.SetRoot("/cwd")
+	fb.SetRootEntries([]Entry{{Name: "a.txt", Path: "/cwd/a.txt"}})
+
+	action, handled := fb.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	if action != ActionActivate || !handled {
+		t.Fatalf("Enter sobre un archivo devolvió (action=%v, handled=%v), se esperaba (ActionActivate, true)", action, handled)
+	}
+
+	// Sin nodos: Enter no activa nada.
+	fb.SetRootEntries(nil)
+	if action, handled := fb.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone)); action != ActionNone || handled {
+		t.Fatalf("Enter sin nodos devolvió (action=%v, handled=%v), se esperaba (ActionNone, false)", action, handled)
+	}
+
+	// Una tecla de texto, Escape y Ctrl+S no son del explorador.
+	fb.SetRootEntries(newList(3))
+	for _, ev := range []tcell.Event{
+		tcell.NewEventKey(tcell.KeyRune, 'a', tcell.ModNone),
+		tcell.NewEventKey(tcell.KeyEscape, 0, tcell.ModNone),
+		tcell.NewEventKey(tcell.KeyCtrlS, 0, tcell.ModNone),
+	} {
+		if action, handled := fb.HandleEvent(ev); action != ActionNone || handled {
+			t.Fatalf("%v devolvió (action=%v, handled=%v), se esperaba (ActionNone, false)", ev, action, handled)
+		}
+	}
+
+	// Down al final se consume igual: el foco está en el panel.
+	fb.HandleEvent(tcell.NewEventKey(tcell.KeyEnd, 0, tcell.ModNone))
+	fb.SetRootEntries(newList(3))
+	if action, handled := fb.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone)); action != ActionMove || !handled {
+		t.Fatalf("Down al final devolvió (action=%v, handled=%v), se esperaba (ActionMove, true)", action, handled)
+	}
+}
+
+// TestFileBrowserPages: PageUp/PageDown saltan una página (el alto del panel)
+// y se clamps a los bordes del árbol.
+func TestFileBrowserPages(t *testing.T) {
+	fb := NewFileBrowser()
+	fb.Resize(10, 5)
+	fb.SetRoot("/cwd")
+	fb.SetRootEntries(newList(20))
+
+	action, handled := fb.HandleEvent(tcell.NewEventKey(tcell.KeyPgDn, 0, tcell.ModNone))
+	if action != ActionMove || !handled {
+		t.Fatalf("PgDn devolvió (action=%v, handled=%v), se esperaba (ActionMove, true)", action, handled)
+	}
+	if fb.cursor != 5 {
+		t.Fatalf("cursor = %d tras PgDn, se esperaba 5 (una página)", fb.cursor)
+	}
+
+	fb.HandleEvent(tcell.NewEventKey(tcell.KeyPgUp, 0, tcell.ModNone))
+	if fb.cursor != 0 {
+		t.Fatalf("cursor = %d tras PgUp, se esperaba 0", fb.cursor)
+	}
+
+	fb.HandleEvent(tcell.NewEventKey(tcell.KeyEnd, 0, tcell.ModNone))
+	fb.HandleEvent(tcell.NewEventKey(tcell.KeyPgDn, 0, tcell.ModNone))
+	if fb.cursor != 19 {
+		t.Fatalf("cursor = %d tras PgDn al final, se esperaba 19 (clamp a la última)", fb.cursor)
+	}
+}
+
+// TestFileBrowserMouseSelectsAndScrollsAtAnyDepth: el clic selecciona la fila
+// —también un nodo anidado que esté en el aplanado— y la rueda scrollea sin
+// tocar el cursor fuera de la ventana.
+func TestFileBrowserMouseSelectsAndScrollsAtAnyDepth(t *testing.T) {
+	fb := NewFileBrowser()
+	fb.Resize(10, 5)
+	fb.SetRoot("/cwd")
+	fb.SetRootEntries([]Entry{{Name: "docs", Path: "/cwd/docs", IsDir: true}})
+	fb.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	fb.SetChildren([]Entry{{Name: "a.txt", Path: "/cwd/docs/a.txt"}})
+	// Aplanado: [docs, a.txt].
+
+	action, handled := fb.HandleEvent(tcell.NewEventMouse(1, 1, tcell.Button1, tcell.ModNone))
+	if action != ActionMove || !handled {
+		t.Fatalf("clic devolvió (action=%v, handled=%v), se esperaba (ActionMove, true)", action, handled)
+	}
+	if got := fb.CursorPath(); got != "/cwd/docs/a.txt" {
+		t.Fatalf("CursorPath() = %q tras el clic en la fila 1, se esperaba el nodo anidado", got)
+	}
+
+	// Un clic fuera de las filas del panel no selecciona nada.
+	action, handled = fb.HandleEvent(tcell.NewEventMouse(1, 50, tcell.Button1, tcell.ModNone))
+	if action != ActionNone || handled {
+		t.Fatalf("clic fuera del panel devolvió (action=%v, handled=%v), se esperaba (ActionNone, false)", action, handled)
+	}
+	if got := fb.CursorPath(); got != "/cwd/docs/a.txt" {
+		t.Fatalf("CursorPath() = %q tras el clic fuera del panel, no debía cambiar", got)
+	}
+
+	// La rueda mueve la selección y la activa sigue visible: 3 filas abajo del
+	// clic. SetRootEntries resetea el cursor a 0, así que el clic en la fila 2
+	// lo deja en 2 y la rueda lo lleva a 5, con la activa en la última fila.
+	fb.SetRootEntries(newList(15))
+	action, handled = fb.HandleEvent(tcell.NewEventMouse(1, 2, tcell.Button1, tcell.ModNone))
+	if action != ActionMove || !handled {
+		t.Fatalf("clic devolvió (action=%v, handled=%v), se esperaba (ActionMove, true)", action, handled)
+	}
+	if fb.cursor != 2 {
+		t.Fatalf("cursor = %d tras el clic en la fila 2, se esperaba 2", fb.cursor)
+	}
+	action, handled = fb.HandleEvent(tcell.NewEventMouse(0, 0, tcell.WheelDown, tcell.ModNone))
+	if action != ActionMove || !handled {
+		t.Fatalf("la rueda devolvió (action=%v, handled=%v), se esperaba (ActionMove, true)", action, handled)
+	}
+	if fb.cursor != 5 {
+		t.Fatalf("cursor = %d tras la rueda, se esperaba 5", fb.cursor)
+	}
+	if fb.top != 1 {
+		t.Fatalf("top = %d tras la rueda, se esperaba 1 (la activa en la última fila)", fb.top)
+	}
+}
+
+// TestFileBrowserScrollKeepsTheActiveVisible: con más nodos que el alto, mover
+// el cursor corre el scroll vertical lo mínimo para que la activa siga
 // visible, y la fila visible del cursor siempre existe.
 func TestFileBrowserScrollKeepsTheActiveVisible(t *testing.T) {
 	fb := NewFileBrowser()
 	fb.Resize(10, 5)
-	fb.SetEntries(newList(30))
+	fb.SetRoot("/cwd")
+	fb.SetRootEntries(newList(30))
 
 	fb.HandleEvent(tcell.NewEventKey(tcell.KeyEnd, 0, tcell.ModNone))
 	if fb.cursor != 29 {
@@ -106,7 +481,7 @@ func TestFileBrowserScrollKeepsTheActiveVisible(t *testing.T) {
 	s := newTestScreen(t, 10, 5)
 	fb.Draw(s)
 	s.Show()
-	if got := screenLines(s)[4]; got != "e29" {
+	if got := screenLines(s)[4]; got != "  e29" {
 		t.Fatalf("última fila visible = %q, se esperaba la entrada 29", got)
 	}
 	if !cellReverse(s, 0, 4) {
@@ -130,157 +505,60 @@ func TestFileBrowserScrollKeepsTheActiveVisible(t *testing.T) {
 	}
 }
 
-// TestFileBrowserSetEntriesClampsTheCursor: una lista nueva clampa cursor y
-// top al rango (la activa no puede quedar fuera), y una lista vacía vuelve el
-// cursor a 0 y no dibuja nada.
-func TestFileBrowserSetEntriesClampsTheCursor(t *testing.T) {
+// TestFileBrowserSetRootEntriesClampsTheCursor: un primer nivel nuevo clampa
+// cursor y top al rango (la activa no puede quedar fuera), y un nivel vacío
+// vuelve el cursor a 0 y no dibuja nada.
+func TestFileBrowserSetRootEntriesClampsTheCursor(t *testing.T) {
 	fb := NewFileBrowser()
 	fb.Resize(10, 5)
-	fb.SetEntries(newList(10))
+	fb.SetRoot("/cwd")
+	fb.SetRootEntries(newList(10))
 	fb.HandleEvent(tcell.NewEventKey(tcell.KeyEnd, 0, tcell.ModNone))
 	if fb.cursor != 9 {
 		t.Fatalf("cursor = %d tras End, se esperaba 9", fb.cursor)
 	}
 
-	fb.SetEntries(newList(3))
-	if fb.cursor != 2 {
-		t.Fatalf("cursor = %d tras recortar a 3 entradas, se esperaba 2", fb.cursor)
+	// SetRootEntries RESETEA cursor y scroll (a diferencia del SetEntries de U3,
+	// que clampaba): el primer nivel nuevo es un estado nuevo, no un recorte.
+	fb.SetRootEntries(newList(3))
+	if fb.cursor != 0 {
+		t.Fatalf("cursor = %d tras SetRootEntries con 3 entradas, se esperaba 0 (reseteado)", fb.cursor)
 	}
 	if fb.top != 0 {
-		t.Fatalf("top = %d tras recortar, se esperaba 0", fb.top)
+		t.Fatalf("top = %d tras SetRootEntries, se esperaba 0", fb.top)
 	}
 
-	fb.SetEntries(nil)
+	fb.SetRootEntries(nil)
 	if fb.cursor != 0 || fb.top != 0 {
 		t.Fatalf("con lista vacía cursor=%d top=%d, se esperaban 0 y 0", fb.cursor, fb.top)
 	}
 
-	// Con lista vacía no se dibuja nada, aunque el panel tenga alto.
+	// Con el primer nivel vacío no se dibuja nada, aunque el panel tenga alto.
 	s := newTestScreen(t, 10, 5)
 	fb.Draw(s)
 	s.Show()
 	for y := 0; y < 5; y++ {
 		if got := cellRuneAt(s, 0, y); got != 0 {
-			t.Fatalf("fila %d = %q, con lista vacía no debe dibujarse nada", y, got)
+			t.Fatalf("fila %d = %q, con el árbol vacío no debe dibujarse nada", y, got)
 		}
-	}
-}
-
-// TestFileBrowserPages: PageUp/PageDown saltan una página (el alto del panel)
-// y se clamps a los bordes de la lista.
-func TestFileBrowserPages(t *testing.T) {
-	fb := NewFileBrowser()
-	fb.Resize(10, 5)
-	fb.SetEntries(newList(20))
-
-	handled, activate := fb.HandleEvent(tcell.NewEventKey(tcell.KeyPgDn, 0, tcell.ModNone))
-	if !handled || activate {
-		t.Fatalf("PgDn devolvió (handled=%v, activate=%v), se esperaba (true, false)", handled, activate)
-	}
-	if fb.cursor != 5 {
-		t.Fatalf("cursor = %d tras PgDn, se esperaba 5 (una página)", fb.cursor)
-	}
-
-	fb.HandleEvent(tcell.NewEventKey(tcell.KeyPgUp, 0, tcell.ModNone))
-	if fb.cursor != 0 {
-		t.Fatalf("cursor = %d tras PgUp, se esperaba 0", fb.cursor)
-	}
-
-	fb.HandleEvent(tcell.NewEventKey(tcell.KeyEnd, 0, tcell.ModNone))
-	fb.HandleEvent(tcell.NewEventKey(tcell.KeyPgDn, 0, tcell.ModNone))
-	if fb.cursor != 19 {
-		t.Fatalf("cursor = %d tras PgDn al final, se esperaba 19 (clamp a la última)", fb.cursor)
-	}
-}
-
-// TestFileBrowserMouseSelectsAndScrolls: el clic selecciona la fila y la rueda
-// scrollea la lista sin tocar el cursor fuera de la ventana.
-func TestFileBrowserMouseSelectsAndScrolls(t *testing.T) {
-	fb := NewFileBrowser()
-	fb.Resize(10, 5)
-	fb.SetEntries(newList(15))
-
-	handled, activate := fb.HandleEvent(tcell.NewEventMouse(1, 2, tcell.Button1, tcell.ModNone))
-	if !handled || activate {
-		t.Fatalf("clic devolvió (handled=%v, activate=%v), se esperaba (true, false)", handled, activate)
-	}
-	if fb.cursor != 2 {
-		t.Fatalf("cursor = %d tras el clic en la fila 2, se esperaba 2", fb.cursor)
-	}
-
-	// Un clic fuera de las filas del panel no selecciona nada.
-	fb.HandleEvent(tcell.NewEventMouse(1, 50, tcell.Button1, tcell.ModNone))
-	if fb.cursor != 2 {
-		t.Fatalf("cursor = %d tras el clic fuera del panel, no debía cambiar", fb.cursor)
-	}
-
-	// La rueda mueve la selección y la activa sigue visible: 3 filas abajo.
-	handled, _ = fb.HandleEvent(tcell.NewEventMouse(0, 0, tcell.WheelDown, tcell.ModNone))
-	if !handled {
-		t.Fatal("la rueda debe manejarse")
-	}
-	if fb.cursor != 5 {
-		t.Fatalf("cursor = %d tras la rueda, se esperaba 5", fb.cursor)
-	}
-	if fb.top != 1 {
-		t.Fatalf("top = %d tras la rueda, se esperaba 1 (la activa en la última fila)", fb.top)
-	}
-}
-
-// TestFileBrowserEnterActivatesTheActiveEntry: Enter sobre una entrada devuelve
-// (true, true) —la señal para que el controlador abra o descienda—; sin
-// entradas, Enter y cualquier tecla ajena caen al flujo normal con (false,
-// false). Las teclas de movimiento se consumen aunque el cursor no se mueva:
-// con el foco en el panel, Up/Down son del explorador, no del documento.
-func TestFileBrowserEnterActivatesTheActiveEntry(t *testing.T) {
-	fb := NewFileBrowser()
-	fb.Resize(10, 5)
-	fb.SetEntries([]Entry{{Name: "a.txt", Path: "/cwd/a.txt"}})
-
-	handled, activate := fb.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
-	if !handled || !activate {
-		t.Fatalf("Enter devolvió (handled=%v, activate=%v), se esperaba (true, true)", handled, activate)
-	}
-
-	// Sin entradas: Enter no activa nada.
-	fb.SetEntries(nil)
-	if handled, activate := fb.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone)); handled || activate {
-		t.Fatalf("Enter sin entradas devolvió (handled=%v, activate=%v), se esperaba (false, false)", handled, activate)
-	}
-
-	// Una tecla de texto y Escape no son del explorador.
-	fb.SetEntries(newList(3))
-	if handled, _ := fb.HandleEvent(tcell.NewEventKey(tcell.KeyRune, 'a', tcell.ModNone)); handled {
-		t.Fatal("una runa no debe manejarla el explorador")
-	}
-	if handled, _ := fb.HandleEvent(tcell.NewEventKey(tcell.KeyEscape, 0, tcell.ModNone)); handled {
-		t.Fatal("Escape no debe manejarlo el explorador")
-	}
-	if handled, _ := fb.HandleEvent(tcell.NewEventKey(tcell.KeyCtrlS, 0, tcell.ModNone)); handled {
-		t.Fatal("Ctrl+S no debe manejarlo el explorador")
-	}
-
-	// Up en el borde superior se consume igual: el foco está en el panel.
-	fb.HandleEvent(tcell.NewEventKey(tcell.KeyEnd, 0, tcell.ModNone))
-	if handled, activate := fb.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone)); !handled || activate {
-		t.Fatalf("Down al final devolvió (handled=%v, activate=%v), se esperaba (true, false)", handled, activate)
 	}
 }
 
 // TestFileBrowserLetsCtrlPageKeysFallToTheController: Ctrl+PageUp/PageDown
 // cambian de pestaña y son del controlador (U2b); el explorador no los
-// consume —el mismo guard defensivo que el editor— u el cambio de pestaña
+// consume —el mismo guard defensivo que el editor— o el cambio de pestaña
 // moriría con el foco en el panel.
 func TestFileBrowserLetsCtrlPageKeysFallToTheController(t *testing.T) {
 	fb := NewFileBrowser()
 	fb.Resize(10, 5)
-	fb.SetEntries(newList(20))
+	fb.SetRoot("/cwd")
+	fb.SetRootEntries(newList(20))
 	fb.HandleEvent(tcell.NewEventKey(tcell.KeyEnd, 0, tcell.ModNone))
 	cursorBefore := fb.cursor
 
 	for _, key := range []tcell.Key{tcell.KeyPgUp, tcell.KeyPgDn} {
-		if handled, activate := fb.HandleEvent(tcell.NewEventKey(key, 0, tcell.ModCtrl)); handled || activate {
-			t.Fatalf("%v con Ctrl devolvió (handled=%v, activate=%v), se esperaba (false, false)", key, handled, activate)
+		if action, handled := fb.HandleEvent(tcell.NewEventKey(key, 0, tcell.ModCtrl)); action != ActionNone || handled {
+			t.Fatalf("%v con Ctrl devolvió (action=%v, handled=%v), se esperaba (ActionNone, false)", key, action, handled)
 		}
 	}
 	if fb.cursor != cursorBefore {
@@ -288,24 +566,35 @@ func TestFileBrowserLetsCtrlPageKeysFallToTheController(t *testing.T) {
 	}
 }
 
-// TestFileBrowserCursorPath: la ruta de la entrada activa, o "" sin entradas.
+// TestFileBrowserCursorPath: la ruta del nodo activo —del primer nivel o de un
+// nodo anidado visible—, o "" sin nodos.
 func TestFileBrowserCursorPath(t *testing.T) {
 	fb := NewFileBrowser()
 	fb.Resize(10, 5)
+	fb.SetRoot("/cwd")
 	if got := fb.CursorPath(); got != "" {
-		t.Fatalf("CursorPath() = %q sin entradas, se esperaba \"\"", got)
+		t.Fatalf("CursorPath() = %q sin nodos, se esperaba \"\"", got)
 	}
 
-	fb.SetEntries([]Entry{
+	fb.SetRootEntries([]Entry{
 		{Name: "b.txt", Path: "/cwd/b.txt"},
 		{Name: "c.txt", Path: "/cwd/c.txt"},
 	})
-	// El cursor arranca en la primera entrada.
+	// El cursor arranca en el primer nodo.
 	if got := fb.CursorPath(); got != "/cwd/b.txt" {
-		t.Fatalf("CursorPath() = %q, se esperaba la primera entrada", got)
+		t.Fatalf("CursorPath() = %q, se esperaba el primer nodo", got)
 	}
 	fb.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
 	if got := fb.CursorPath(); got != "/cwd/c.txt" {
-		t.Fatalf("CursorPath() = %q tras Down, se esperaba la segunda entrada", got)
+		t.Fatalf("CursorPath() = %q tras Down, se esperaba el segundo nodo", got)
+	}
+
+	// Un nodo anidado (hijo de un dir expandido) también tiene su ruta.
+	fb.SetRootEntries([]Entry{{Name: "docs", Path: "/cwd/docs", IsDir: true}})
+	fb.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	fb.SetChildren([]Entry{{Name: "a.txt", Path: "/cwd/docs/a.txt"}})
+	fb.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
+	if got := fb.CursorPath(); got != "/cwd/docs/a.txt" {
+		t.Fatalf("CursorPath() = %q sobre un nodo anidado, se esperaba %q", got, "/cwd/docs/a.txt")
 	}
 }

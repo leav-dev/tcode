@@ -1285,14 +1285,14 @@ func TestStartupWithDirectoryArgument(t *testing.T) {
 		t.Fatalf("Len() = %d, se esperaba 0", got)
 	}
 
-	// El archivo está entre las entradas: es la única del listado, el cursor
-	// ya está sobre ella y el panel la dibuja.
+	// El archivo está en el primer nivel del árbol: es el único nodo, el cursor
+	// ya está sobre él y el panel lo dibuja con su prefijo de archivo.
 	app.redraw()
 	if got := app.explorer.CursorPath(); got != doc {
 		t.Fatalf("CursorPath() = %q, se esperaba %q", got, doc)
 	}
-	if got := panelRow(app, 0); got != "doc.txt" {
-		t.Fatalf("fila 0 del panel = %q, se esperaba %q", got, "doc.txt")
+	if got := panelRow(app, 0); got != "  doc.txt" {
+		t.Fatalf("fila 0 del panel = %q, se esperaba %q", got, "  doc.txt")
 	}
 }
 
@@ -1415,10 +1415,12 @@ func TestEnterOpensTheSelectedFile(t *testing.T) {
 	}
 }
 
-// TestEnterDescendsIntoADirectory: Enter sobre un directorio baja el listado a
-// ese directorio: el ".." sintético queda al frente (el directorio actual ya
-// no es el root de la sesión) y los archivos del directorio aparecen debajo.
-func TestEnterDescendsIntoADirectory(t *testing.T) {
+// TestEnterExpandsADirectoryAndItsChildrenAppear: Enter sobre un directorio
+// del árbol lo EXPANDE (ActionExpand → el controlador lee sus hijos): el cursor
+// queda en el dir expandido y los hijos aparecen a continuación, indentados con
+// su profundidad. El árbol nunca cambia de carpeta: la base sigue siendo el
+// root de la sesión.
+func TestEnterExpandsADirectoryAndItsChildrenAppear(t *testing.T) {
 	dir := t.TempDir()
 	sub := filepath.Join(dir, "carpeta")
 	if err := os.Mkdir(sub, 0o755); err != nil {
@@ -1430,25 +1432,26 @@ func TestEnterDescendsIntoADirectory(t *testing.T) {
 
 	app := newExplorerApp(t, dir)
 
-	press(app, tcell.KeyEnter) // desciende a carpeta
+	press(app, tcell.KeyEnter) // expande carpeta
 
 	app.redraw()
-	// El cursor quedó en la primera entrada del listado nuevo: ".." (el
-	// directorio corriente ya no es el root), cuya ruta es el padre.
-	if got := app.explorer.CursorPath(); got != dir {
-		t.Fatalf("CursorPath() = %q, se esperaba %q (la entrada \"..\" → el padre)", got, dir)
+	// El cursor quedó en el dir expandido y sus hijos se leen al expandir.
+	if got := app.explorer.CursorPath(); got != sub {
+		t.Fatalf("CursorPath() = %q, se esperaba %q (el cursor en el dir)", got, sub)
 	}
-	if got := panelRow(app, 0); got != "../" {
-		t.Fatalf("fila 0 del panel = %q, se esperaba %q (\"..\" como directorio)", got, "../")
+	if got := panelRow(app, 0); got != "▾ carpeta/" {
+		t.Fatalf("fila 0 del panel = %q, se esperaba %q (dir expandido)", got, "▾ carpeta/")
 	}
-	if got := panelRow(app, 1); got != "fuente.txt" {
-		t.Fatalf("fila 1 del panel = %q, se esperaba %q", got, "fuente.txt")
+	if got := panelRow(app, 1); got != "    fuente.txt" {
+		t.Fatalf("fila 1 del panel = %q, se esperaba %q (el hijo, con la indentación de su nivel)", got, "    fuente.txt")
 	}
 }
 
-// TestUpEntryGoesBackToTheRoot: la entrada ".." sube al directorio padre y,
-// en el root de la sesión, desaparece: el panel nunca escapa de su límite.
-func TestUpEntryGoesBackToTheRoot(t *testing.T) {
+// TestLeftCollapsesADirectory: expandir, bajar a un hijo y volver: Left sobre
+// el dir expandido lo colapsa (la vista sola, sin E/S). Los hijos desaparecen
+// del aplanado y el cursor queda en el dir colapsado —el árbol volvió a su
+// primer nivel, sin ".." que subir: la base es fija en el root de la sesión.
+func TestLeftCollapsesADirectory(t *testing.T) {
 	dir := t.TempDir()
 	sub := filepath.Join(dir, "carpeta")
 	if err := os.Mkdir(sub, 0o755); err != nil {
@@ -1460,16 +1463,22 @@ func TestUpEntryGoesBackToTheRoot(t *testing.T) {
 
 	app := newExplorerApp(t, dir)
 
-	press(app, tcell.KeyEnter) // desciende a carpeta: el cursor queda en ".."
-	press(app, tcell.KeyEnter) // ".." sube al root
+	press(app, tcell.KeyEnter) // expande carpeta
+	press(app, tcell.KeyDown)  // al hijo fuente.txt
+	press(app, tcell.KeyUp)    // de vuelta al dir
+	press(app, tcell.KeyLeft)  // colapsa el dir expandido del cursor
 
 	app.redraw()
-	// De vuelta en el root: el listado es el directorio de la raíz, sin "..".
+	// Los hijos desaparecieron y el cursor quedó en el dir colapsado (que sigue
+	// visible): es el análogo de "volver arriba" —el root queda a la vista.
 	if got := app.explorer.CursorPath(); got != sub {
-		t.Fatalf("CursorPath() = %q, se esperaba %q (el directorio de la raíz)", got, sub)
+		t.Fatalf("CursorPath() = %q, se esperaba %q (el cursor en el dir colapsado)", got, sub)
 	}
-	if got := panelRow(app, 0); got != "carpeta/" {
-		t.Fatalf("fila 0 del panel = %q, se esperaba %q", got, "carpeta/")
+	if got := panelRow(app, 0); got != "▸ carpeta/" {
+		t.Fatalf("fila 0 del panel = %q, se esperaba %q (dir colapsado)", got, "▸ carpeta/")
+	}
+	if got := panelRow(app, 1); got != "" {
+		t.Fatalf("fila 1 del panel = %q, se esperaba vacía: los hijos desaparecieron", got)
 	}
 }
 
@@ -1579,6 +1588,161 @@ func TestExplorerNavigationCancelsThePendingConfirmations(t *testing.T) {
 	}
 	if !app.confirmQuit {
 		t.Fatal("Escape debe haber vuelto a armar la confirmación, no cerrar")
+	}
+}
+
+// TestEnterOpensAFileFromDepth: un archivo dentro de un subdir se abre desde
+// el árbol: expandir el dir, bajar al archivo y Enter lo abre con su contenido,
+// devolviendo el foco al editor.
+func TestEnterOpensAFileFromDepth(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "carpeta")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatalf("no se pudo crear el directorio: %v", err)
+	}
+	doc := filepath.Join(sub, "fuente.txt")
+	if err := os.WriteFile(doc, []byte("adentro"), 0o644); err != nil {
+		t.Fatalf("no se pudo crear el archivo: %v", err)
+	}
+
+	app := newExplorerApp(t, dir)
+
+	press(app, tcell.KeyEnter) // expande carpeta
+	press(app, tcell.KeyDown)  // al hijo fuente.txt
+	press(app, tcell.KeyEnter) // lo abre
+
+	if got := app.ws.Len(); got != 1 {
+		t.Fatalf("Len() = %d, se esperaba 1", got)
+	}
+	if got := app.ws.Active().Path(); got != doc {
+		t.Fatalf("Path() = %q, se esperaba %q (el archivo del subdir)", got, doc)
+	}
+	if got := app.ws.Active().GetContent(); got != "adentro" {
+		t.Fatalf("contenido = %q, se esperaba %q", got, "adentro")
+	}
+	if app.explorerFocused {
+		t.Fatal("abrir un archivo debe devolver el foco al editor")
+	}
+}
+
+// TestSubdirsAreNotReadUntilExpanded: el arranque lee SOLO el primer nivel del
+// árbol. Un archivo dentro de un subdir no aparece en el panel hasta que el
+// subdir se expande (ActionExpand) —la única E/S por nivel—: se observa por el
+// dibujo del panel antes y después de la expansión.
+func TestSubdirsAreNotReadUntilExpanded(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "carpeta")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatalf("no se pudo crear el directorio: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "fuente.txt"), []byte("adentro"), 0o644); err != nil {
+		t.Fatalf("no se pudo crear el archivo: %v", err)
+	}
+
+	app := newExplorerApp(t, dir)
+	app.redraw()
+
+	// Al arrancar el árbol tiene UN solo nivel: el subdir se dibuja colapsado
+	// y su contenido NO aparece —el controlador aún no lo leyó—.
+	if got := panelRow(app, 0); got != "▸ carpeta/" {
+		t.Fatalf("fila 0 del panel = %q, se esperaba %q (subdir colapsado)", got, "▸ carpeta/")
+	}
+	if got := panelRow(app, 1); got != "" {
+		t.Fatalf("fila 1 del panel = %q, se esperaba vacía: el subdir no se leyó al arrancar", got)
+	}
+
+	// La expansión es la lectura: tras Enter, el controlador lee el subdir y
+	// sus hijos aparecen.
+	press(app, tcell.KeyEnter)
+	app.redraw()
+	if got := panelRow(app, 1); got != "    fuente.txt" {
+		t.Fatalf("fila 1 del panel = %q tras expandir, se esperaba %q", got, "    fuente.txt")
+	}
+}
+
+// TestEnterOnAnExpandedDirectoryDoesNothing: Enter sobre un dir ya expandido
+// no relee ni duplica sus hijos; colapsar es con Left.
+func TestEnterOnAnExpandedDirectoryDoesNothing(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "carpeta")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatalf("no se pudo crear el directorio: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "fuente.txt"), []byte("adentro"), 0o644); err != nil {
+		t.Fatalf("no se pudo crear el archivo: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "otra.txt"), []byte("dos"), 0o644); err != nil {
+		t.Fatalf("no se pudo crear el archivo: %v", err)
+	}
+
+	app := newExplorerApp(t, dir)
+
+	press(app, tcell.KeyEnter) // expande: lee el subdir
+	press(app, tcell.KeyEnter) // Enter de más: no relee ni duplica
+	press(app, tcell.KeyEnter)
+
+	app.redraw()
+	// Los dos hijos aparecen una sola vez y el cursor sigue en el dir.
+	if got := panelRow(app, 0); got != "▾ carpeta/" {
+		t.Fatalf("fila 0 del panel = %q, se esperaba %q", got, "▾ carpeta/")
+	}
+	if got := panelRow(app, 1); got != "    fuente.txt" {
+		t.Fatalf("fila 1 del panel = %q, se esperaba %q", got, "    fuente.txt")
+	}
+	if got := panelRow(app, 2); got != "    otra.txt" {
+		t.Fatalf("fila 2 del panel = %q, se esperaba %q", got, "    otra.txt")
+	}
+	if got := panelRow(app, 3); got != "" {
+		t.Fatalf("fila 3 del panel = %q, se esperaba vacía: los hijos no se duplican", got)
+	}
+	if got := app.explorer.CursorPath(); got != sub {
+		t.Fatalf("CursorPath() = %q, se esperaba %q (el cursor en el dir)", got, sub)
+	}
+}
+
+// TestClickSelectsAnEntryAtAnyDepth: el clic selecciona la fila del panel
+// —incluido un nodo que esté a profundidad, dentro de un dir expandido—, y
+// Enter lo abre desde esa profundidad.
+func TestClickSelectsAnEntryAtAnyDepth(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "carpeta")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatalf("no se pudo crear el directorio: %v", err)
+	}
+	subsub := filepath.Join(sub, "interior")
+	if err := os.Mkdir(subsub, 0o755); err != nil {
+		t.Fatalf("no se pudo crear el directorio: %v", err)
+	}
+	doc := filepath.Join(subsub, "archivo.txt")
+	if err := os.WriteFile(doc, []byte("profundo"), 0o644); err != nil {
+		t.Fatalf("no se pudo crear el archivo: %v", err)
+	}
+
+	app := newExplorerApp(t, dir)
+
+	press(app, tcell.KeyEnter) // expande carpeta → [carpeta, interior]
+	press(app, tcell.KeyDown)  // al interior
+	press(app, tcell.KeyEnter) // expande interior → [carpeta, interior, archivo.txt]
+
+	// Quitar el foco: el clic tiene que devolverlo y seleccionar la fila 2 del
+	// panel, un nodo de profundidad 2.
+	press(app, tcell.KeyTab)
+	if app.explorerFocused {
+		t.Fatal("el test requiere el foco en el editor primero")
+	}
+	app.handleEvent(tcell.NewEventMouse(1, tabBarHeight+2, tcell.Button1, tcell.ModNone))
+
+	if !app.explorerFocused {
+		t.Fatal("un clic dentro del panel debe enfocarlo")
+	}
+	if got := app.explorer.CursorPath(); got != doc {
+		t.Fatalf("CursorPath() = %q, se esperaba %q: el clic selecciona el nodo de profundidad", got, doc)
+	}
+
+	// Y Enter lo abre desde esa profundidad.
+	press(app, tcell.KeyEnter)
+	if got := app.ws.Active().GetContent(); got != "profundo" {
+		t.Fatalf("contenido = %q tras abrir desde profundidad, se esperaba %q", got, "profundo")
 	}
 }
 
