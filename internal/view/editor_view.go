@@ -424,10 +424,14 @@ func (v *EditorView) deleteForward() bool {
 func (v *EditorView) Draw(s Surface) {
 	content := v.model.GetRange(v.viewport.TopLine, v.viewport.TopLine+v.viewport.Height)
 	if len(content) > 0 {
-		// Vista de string sin copia sobre los bytes del mmap. Es segura porque el
-		// mapeo es de solo lectura y tanto uniseg como tcell únicamente leen a
-		// través de ella; ninguna de las dos la retiene más allá de este método.
-		text := unsafe.String(&content[0], len(content))
+		// COPIA obligatoria, no vista de mmap: tcell retiene el string que le
+		// pasamos en su buffer de celdas (currStr/lastStr) hasta el próximo
+		// redibujo, y cerrar la pestaña desmapea el archivo mientras el buffer
+		// sigue apuntando a él —ese uso-después-de-desmapear segfaulta en el
+		// primer redraw posterior (acceso a memoria liberada en Dirty). La
+		// copia cubre solo la región visible (el viewport), el costo correcto
+		// si el contenido va a llegar a pantalla.
+		text := string(content)
 
 		row := 0 // fila física en pantalla
 		col := 0 // columna lógica en celdas de terminal
