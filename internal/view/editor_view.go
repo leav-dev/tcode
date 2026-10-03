@@ -60,6 +60,12 @@ type EditorView struct {
 		line int
 		row  int
 	}
+
+	// sel es el rango marcado ([Start, End) en offsets de documento) y
+	// selAnchor el ancla de la extensión con Shift: el cursor se mueve y el
+	// rango va del ancla al cursor. Cualquier movimiento sin Shift limpia.
+	sel       Selection
+	selAnchor *int
 }
 
 // visualRowOfLine devuelve la fila visual GLOBAL donde empieza la línea lógica
@@ -717,16 +723,17 @@ func (v *EditorView) handleKey(ev *tcell.EventKey) bool {
 	if page < 1 {
 		page = 1
 	}
+	shift := ev.Modifiers()&tcell.ModShift != 0
 
 	switch ev.Key() {
 	case tcell.KeyUp:
-		return v.moveVertical(-1)
+		return v.moveWithShift(shift, func() bool { return v.moveVertical(-1) })
 	case tcell.KeyDown:
-		return v.moveVertical(1)
+		return v.moveWithShift(shift, func() bool { return v.moveVertical(1) })
 	case tcell.KeyLeft:
-		return v.moveHorizontal(-1)
+		return v.moveWithShift(shift, func() bool { return v.moveHorizontal(-1) })
 	case tcell.KeyRight:
-		return v.moveHorizontal(1)
+		return v.moveWithShift(shift, func() bool { return v.moveHorizontal(1) })
 	case tcell.KeyPgUp:
 		// Ctrl+PageUp/PageDown cambian de pestaña y son del controlador, no
 		// scroll de página: la vista los ignora con ModCtrl para que ninguna
@@ -735,22 +742,24 @@ func (v *EditorView) handleKey(ev *tcell.EventKey) bool {
 		if ev.Modifiers()&tcell.ModCtrl != 0 {
 			return false
 		}
-		return v.moveVertical(-page)
+		return v.moveWithShift(shift, func() bool { return v.moveVertical(-page) })
 	case tcell.KeyPgDn:
 		if ev.Modifiers()&tcell.ModCtrl != 0 {
 			return false
 		}
-		return v.moveVertical(page)
+		return v.moveWithShift(shift, func() bool { return v.moveVertical(page) })
 	case tcell.KeyHome:
 		if ev.Modifiers()&tcell.ModCtrl != 0 {
-			return v.moveDocStart()
+			return v.moveWithShift(shift, v.moveDocStart)
 		}
-		return v.moveLineStart()
+		return v.moveWithShift(shift, v.moveLineStart)
 	case tcell.KeyEnd:
 		if ev.Modifiers()&tcell.ModCtrl != 0 {
-			return v.moveDocEnd()
+			return v.moveWithShift(shift, v.moveDocEnd)
 		}
-		return v.moveLineEnd()
+		return v.moveWithShift(shift, v.moveLineEnd)
+	case tcell.KeyCtrlA:
+		return v.selectAll()
 
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
 		return v.backspace()

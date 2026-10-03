@@ -28,6 +28,7 @@ type Theme struct {
 	Function     tcell.Style // nombres de función (sintaxis)
 	Variable     tcell.Style // identificadores comunes (sintaxis)
 	Punct        tcell.Style // puntuación/otros (sintaxis)
+	Selection    tcell.Style // rango seleccionado (marca visual)
 }
 
 // DefaultTheme es la paleta por defecto: estilo oscuro, tipo VSCode Dark+.
@@ -55,6 +56,7 @@ func DefaultTheme() Theme {
 		Function:     fg(tcell.PaletteColor(187)),
 		Variable:     fg(tcell.PaletteColor(117)),
 		Punct:        fg(tcell.PaletteColor(250)),
+		Selection:    active(tcell.PaletteColor(180)),
 	}
 }
 
@@ -102,6 +104,7 @@ func LoadTheme(data []byte) Theme {
 	fg(&t.Function, "function")
 	fg(&t.Variable, "variable")
 	fg(&t.Punct, "punct")
+	fg(&t.Selection, "selection")
 	txt(&t.Text, "text")
 	if v := raw["cursorLine"]; v != "" {
 		if c, ok := parseThemeColor(v); ok {

@@ -155,3 +155,16 @@ func TestLoadThemeParsesNewSyntaxRoles(t *testing.T) {
 		t.Errorf("variable = %v, esperaba índice 117", fgOf(th.Variable))
 	}
 }
+
+// TestThemeSelectionRole: el rol Selection se distingue del texto y se puede
+// re-mapear por JSON.
+func TestThemeSelectionRole(t *testing.T) {
+	th := DefaultTheme()
+	if th.Selection == th.Text {
+		t.Fatal("el rol Selection no puede ser idéntico al texto")
+	}
+	loaded := LoadTheme([]byte(`{"selection": "45"}`))
+	if fgOf(loaded.Selection) != tcell.PaletteColor(45) {
+		t.Fatalf("selection re-mapeado = %v, esperaba índice 45", fgOf(loaded.Selection))
+	}
+}
