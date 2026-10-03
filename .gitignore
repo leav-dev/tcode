@@ -24,3 +24,6 @@ coverage.html
 .DS_Store
 .idea/
 .vscode/
+
+# tcode session state (per worktree root)
+.tcode/

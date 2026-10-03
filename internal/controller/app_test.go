@@ -1215,7 +1215,26 @@ func TestPanelWidthKeepsTheEditorAtLeastSixteenColumns(t *testing.T) {
 // TestStartupWithoutArguments: sin argumento el explorador arranca sobre el
 // directorio actual, visible y enfocado, y el workspace queda SIN buffers —el
 // estado a propósito vacío que la feature declaró en U1—.
+//
+// El arranque sin argumentos corre sobre el DIRECTORIO DE TRABAJO, y el repo es
+// un destino legítimo de pruebas que puede tener .tcode/session.json (U4): el
+// test se aísla en un directorio temporal y restaura el cwd al terminar.
 func TestStartupWithoutArguments(t *testing.T) {
+	// El original se captura ANTES del Chdir: el cleanup restaura al directorio
+	// real (re-chdir al temporal a punto de borrarse fallaría en Windows).
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("no se pudo leer el directorio de trabajo: %v", err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatalf("no se pudo cambiar al directorio temporal: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(orig); err != nil {
+			t.Errorf("no se pudo restaurar el directorio de trabajo: %v", err)
+		}
+	})
+
 	s := tcell.NewSimulationScreen("UTF-8")
 	if err := s.Init(); err != nil {
 		t.Fatalf("no se pudo inicializar la pantalla simulada: %v", err)
@@ -1643,5 +1662,269 @@ func TestMouseClickInTheEditorIsTranslatedPastThePanel(t *testing.T) {
 
 	if got := app.ws.Active().GetContent(); got != "uno\ndXos\ntres" {
 		t.Fatalf("contenido = %q, se esperaba %q", got, "uno\ndXos\ntres")
+	}
+}
+
+// --- U4: menú de pestañas (Ctrl+T) y sesión JSON ---
+
+// TestCtrlTOpensTheTabMenu: Ctrl+T abre el menú transitorio y su cursor queda
+// sobre la pestaña activa.
+func TestCtrlTOpensTheTabMenu(t *testing.T) {
+	app, _, _ := newTwoBufferApp(t, "uno", "dos")
+
+	if quit := press(app, tcell.KeyCtrlT); quit {
+		t.Fatal("Ctrl+T no debe cerrar el editor")
+	}
+	if !app.menuActive {
+		t.Fatal("Ctrl+T debe abrir el menú de pestañas")
+	}
+	if got := app.menu.Selected(); got != app.ws.ActiveIndex() {
+		t.Fatalf("el cursor del menú = %d, se esperaba sobre la activa %d", got, app.ws.ActiveIndex())
+	}
+}
+
+// TestTabMenuEnterSwitchesToTheSelectedTab: Down mueve el cursor del menú y
+// Enter cambia a la pestaña elegida y cierra el menú.
+func TestTabMenuEnterSwitchesToTheSelectedTab(t *testing.T) {
+	app, _, _ := newTwoBufferApp(t, "uno", "dos")
+
+	press(app, tcell.KeyCtrlT)
+	press(app, tcell.KeyDown)
+	if quit := press(app, tcell.KeyEnter); quit {
+		t.Fatal("Enter del menú no debe cerrar el editor")
+	}
+
+	if app.menuActive {
+		t.Fatal("activar una pestaña debe cerrar el menú")
+	}
+	if got := app.ws.ActiveIndex(); got != 1 {
+		t.Fatalf("ActiveIndex() = %d tras Enter sobre la segunda, se esperaba 1", got)
+	}
+}
+
+// TestTabMenuEscapeDismissesWithoutSwitching: Escape cierra el menú sin
+// cambiar de pestaña: nada de lo navegado se ejecuta.
+func TestTabMenuEscapeDismissesWithoutSwitching(t *testing.T) {
+	app, _, _ := newTwoBufferApp(t, "uno", "dos")
+
+	press(app, tcell.KeyCtrlT)
+	press(app, tcell.KeyDown) // mover el cursor: Escape tiene que descartar esto
+	press(app, tcell.KeyEscape)
+
+	if app.menuActive {
+		t.Fatal("Escape debe cerrar el menú")
+	}
+	if got := app.ws.ActiveIndex(); got != 0 {
+		t.Fatalf("ActiveIndex() = %d, se esperaba 0: Escape no debe cambiar la pestaña", got)
+	}
+}
+
+// TestTabMenuAnotherKeyDismisses: cualquier otra tecla —una letra— también
+// cierra el menú descartando: el teclado es del menú mientras está abierto y
+// nada cae al documento.
+func TestTabMenuAnotherKeyDismisses(t *testing.T) {
+	app, _ := newTestApp(t, "uno")
+
+	press(app, tcell.KeyCtrlT)
+	press(app, tcell.KeyDown)
+	typeRune(app, 'x')
+
+	if app.menuActive {
+		t.Fatal("una tecla ajena debe cerrar el menú")
+	}
+	if got := app.ws.ActiveIndex(); got != 0 {
+		t.Fatalf("ActiveIndex() = %d, la tecla ajena no debe cambiar la pestaña", got)
+	}
+	if got := app.ws.Active().GetContent(); got != "uno" {
+		t.Fatalf("contenido = %q, la tecla ajena no debe llegar al documento", got)
+	}
+}
+
+// TestCtrlTOnEmptyWorkspaceDoesNothing: sin pestañas, Ctrl+T no abre nada
+// (el atajo vive después del guard de workspace vacío, como los otros).
+func TestCtrlTOnEmptyWorkspaceDoesNothing(t *testing.T) {
+	app := newExplorerApp(t, t.TempDir())
+
+	if quit := press(app, tcell.KeyCtrlT); quit {
+		t.Fatal("Ctrl+T no debe cerrar el editor")
+	}
+	if app.menuActive {
+		t.Fatal("Ctrl+T con el workspace vacío no debe abrir el menú")
+	}
+}
+
+// TestRunSavesTheSession: al salir con Run, la sesión queda en
+// <root>/.tcode/session.json con el root, las pestañas abiertas y la activa.
+func TestRunSavesTheSession(t *testing.T) {
+	dir := t.TempDir()
+	doc := filepath.Join(dir, "doc.txt")
+	if err := os.WriteFile(doc, []byte("contenido"), 0o644); err != nil {
+		t.Fatalf("no se pudo crear el archivo: %v", err)
+	}
+
+	app := newExplorerApp(t, dir)
+	press(app, tcell.KeyEnter) // abre doc.txt desde el explorador
+
+	app.screen.(tcell.SimulationScreen).InjectKey(tcell.KeyEscape, 0, tcell.ModNone)
+	if err := app.Run(); err != nil {
+		t.Fatalf("Run falló: %v", err)
+	}
+
+	path := filepath.Join(dir, ".tcode", "session.json")
+	s, err := model.LoadSession(path)
+	if err != nil {
+		t.Fatalf("la sesión debe guardarse al salir: %v", err)
+	}
+	if s.Root != dir {
+		t.Fatalf("Root = %q, se esperaba %q", s.Root, dir)
+	}
+	if len(s.Tabs) != 1 || s.Tabs[0] != doc {
+		t.Fatalf("Tabs = %v, se esperaba [%q]", s.Tabs, doc)
+	}
+	if s.Active != doc {
+		t.Fatalf("Active = %q, se esperaba %q", s.Active, doc)
+	}
+}
+
+// TestStartupRestoresTheSession: arrancar sobre un directorio con session.json
+// restaura las pestañas en orden de la sesión con la activa por ruta.
+func TestStartupRestoresTheSession(t *testing.T) {
+	dir := t.TempDir()
+	nameA := filepath.Join(dir, "a.txt")
+	nameB := filepath.Join(dir, "b.txt")
+	for path, c := range map[string]string{nameA: "uno", nameB: "dos"} {
+		if err := os.WriteFile(path, []byte(c), 0o644); err != nil {
+			t.Fatalf("no se pudo crear el archivo: %v", err)
+		}
+	}
+	if err := model.SaveSession(filepath.Join(dir, ".tcode", "session.json"), model.Session{
+		Version: 1,
+		Root:    dir,
+		Tabs:    []string{nameA, nameB},
+		Active:  nameB,
+	}); err != nil {
+		t.Fatalf("SaveSession falló: %v", err)
+	}
+
+	app := newExplorerApp(t, dir)
+
+	if got := app.ws.Len(); got != 2 {
+		t.Fatalf("Len() = %d, se esperaban 2 pestañas restauradas", got)
+	}
+	if got := app.ws.Buffers()[0].Path(); got != nameA {
+		t.Fatalf("pestaña 0 = %q, se esperaba %q (el orden de la sesión)", got, nameA)
+	}
+	if got := app.ws.Buffers()[1].Path(); got != nameB {
+		t.Fatalf("pestaña 1 = %q, se esperaba %q", got, nameB)
+	}
+	if got := app.ws.Active().Path(); got != nameB {
+		t.Fatalf("activa = %q, se esperaba %q (la activa de la sesión)", got, nameB)
+	}
+}
+
+// TestFileStartupIgnoresTheSession: abrir un ARCHIVO por línea de comandos es
+// una acción puntual de edición, no una sesión: ni restaura ni guarda.
+func TestFileStartupIgnoresTheSession(t *testing.T) {
+	dir := t.TempDir()
+	nameA := filepath.Join(dir, "a.txt")
+	nameB := filepath.Join(dir, "b.txt")
+	for path, c := range map[string]string{nameA: "uno", nameB: "dos"} {
+		if err := os.WriteFile(path, []byte(c), 0o644); err != nil {
+			t.Fatalf("no se pudo crear el archivo: %v", err)
+		}
+	}
+	// La sesión que habría restaurado a y b con b activa.
+	if err := model.SaveSession(filepath.Join(dir, ".tcode", "session.json"), model.Session{
+		Version: 1,
+		Root:    dir,
+		Tabs:    []string{nameA, nameB},
+		Active:  nameB,
+	}); err != nil {
+		t.Fatalf("SaveSession falló: %v", err)
+	}
+
+	s := tcell.NewSimulationScreen("UTF-8")
+	if err := s.Init(); err != nil {
+		t.Fatalf("no se pudo inicializar la pantalla simulada: %v", err)
+	}
+	app, err := NewAppWithScreen(s, nameA)
+	if err != nil {
+		t.Fatalf("NewAppWithScreen falló: %v", err)
+	}
+	t.Cleanup(func() { app.ws.CloseAll(); s.Fini() })
+
+	if got := app.ws.Len(); got != 1 {
+		t.Fatalf("Len() = %d, el modo archivo no debe restaurar la sesión", got)
+	}
+	if got := app.ws.Active().Path(); got != nameA {
+		t.Fatalf("activa = %q, se esperaba %q (el archivo de la línea de comandos)", got, nameA)
+	}
+}
+
+// TestSessionLoadSkipsMissingTabs: una pestaña de la sesión cuyo archivo ya no
+// existe se salta sin abortar el arranque; la activa se resuelve por ruta entre
+// las que sobrevivieron.
+func TestSessionLoadSkipsMissingTabs(t *testing.T) {
+	dir := t.TempDir()
+	alive := filepath.Join(dir, "viva.txt")
+	dead := filepath.Join(dir, "muerta.txt")
+	if err := os.WriteFile(alive, []byte("viva"), 0o644); err != nil {
+		t.Fatalf("no se pudo crear el archivo: %v", err)
+	}
+	// muerta.txt NO se crea: la pestaña de la sesión apunta a un archivo ido.
+	if err := model.SaveSession(filepath.Join(dir, ".tcode", "session.json"), model.Session{
+		Version: 1,
+		Root:    dir,
+		Tabs:    []string{dead, alive},
+		Active:  alive,
+	}); err != nil {
+		t.Fatalf("SaveSession falló: %v", err)
+	}
+
+	app := newExplorerApp(t, dir)
+
+	if got := app.ws.Len(); got != 1 {
+		t.Fatalf("Len() = %d, la pestaña muerta debe saltarse, se esperaba 1", got)
+	}
+	if got := app.ws.Active().Path(); got != alive {
+		t.Fatalf("activa = %q, se esperaba %q", got, alive)
+	}
+}
+
+// TestQuitRemovesTheSessionFileWhenNoTabs: sin pestañas persistibles al salir,
+// la sesión se BORRA: el estado por defecto del directorio vuelve a ser "sin
+// sesión" en lugar de un archivo que miente con tabs vacíos.
+func TestQuitRemovesTheSessionFileWhenNoTabs(t *testing.T) {
+	dir := t.TempDir()
+	doc := filepath.Join(dir, "doc.txt")
+	if err := os.WriteFile(doc, []byte("contenido"), 0o644); err != nil {
+		t.Fatalf("no se pudo crear el archivo: %v", err)
+	}
+
+	app := newExplorerApp(t, dir)
+	if _, err := app.ws.Open(doc); err != nil {
+		t.Fatalf("Open falló: %v", err)
+	}
+	// Una sesión PREVIA dejó el archivo (sin él, el assert pasarí aun sin
+	// saveSession): el cierre tiene que borrarlo.
+	if err := model.SaveSession(sessionPath(dir), model.Session{
+		Version: 1,
+		Root:    dir,
+		Tabs:    []string{doc},
+		Active:  doc,
+	}); err != nil {
+		t.Fatalf("SaveSession falló: %v", err)
+	}
+	if err := app.ws.Close(0); err != nil {
+		t.Fatalf("Close falló: %v", err)
+	}
+
+	app.screen.(tcell.SimulationScreen).InjectKey(tcell.KeyEscape, 0, tcell.ModNone)
+	if err := app.Run(); err != nil {
+		t.Fatalf("Run falló: %v", err)
+	}
+
+	if _, err := os.Stat(sessionPath(dir)); !os.IsNotExist(err) {
+		t.Fatalf("sin pestañas persistibles la sesión debe borrarse: %v", err)
 	}
 }

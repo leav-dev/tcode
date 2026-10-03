@@ -73,6 +73,18 @@ type App struct {
 	promptActive bool
 	promptBuf    string
 	promptTarget *model.PieceTable
+
+	// menu es el superpuesto transitorio de pestañas (Ctrl+T) y menuActive dice
+	// si está abierto. Mientras está activo, el menú posee el teclado y el mouse
+	// —como el pedido de Save As—: Enter activa la pestaña del cursor y cierra,
+	// y toda otra tecla (Escape incluido) cierra descartando.
+	menu       *view.TabMenu
+	menuActive bool
+
+	// sessionEnabled marca los modos con sesión persistida (directorio o sin
+	// argumentos): el modo archivo explícito no guarda ni restaura. Se define
+	// en el arranque y cubre tanto el guardado como la restauración.
+	sessionEnabled bool
 }
 
 // NewApp inicializa la terminal y carga el archivo indicado (si path != "").
@@ -108,6 +120,11 @@ func NewAppWithScreen(s tcell.Screen, path string) (*App, error) {
 		statusBar: view.NewStatusBar(),
 		tabBar:    view.NewTabBar(),
 		explorer:  view.NewFileBrowser(),
+		menu:      view.NewTabMenu(),
+
+		// La sesión es el estado de los modos explorador; el modo archivo la
+		// apaga abajo.
+		sessionEnabled: true,
 	}
 
 	if path == "" {
@@ -133,7 +150,9 @@ func NewAppWithScreen(s tcell.Screen, path string) (*App, error) {
 		// Archivo como argumento: el arranque clásico de edición. El panel
 		// queda oculto (abrir un archivo por línea de comandos es una acción
 		// de edición, no de navegación) y la raíz de la sesión es su directorio
-		// padre.
+		// padre. Es una acción puntual, no una sesión: abrir <archivo> no
+		// escribe .tcode/ en el directorio padre de cualquier archivo ajeno.
+		app.sessionEnabled = false
 		ws.SetRoot(filepath.Dir(path))
 		if _, err := ws.Open(path); err != nil {
 			s.Fini()
@@ -149,6 +168,10 @@ func NewAppWithScreen(s tcell.Screen, path string) (*App, error) {
 
 	width, height := s.Size()
 	app.explorer.Resize(panelWidth(width), editorHeight(height))
+	// La sesión se restaura después de que el explorador quedó listo: relist y
+	// resize ya corrieron, y la restauración nunca es fatal (pestañas muertas
+	// se saltan, JSON corrupto se descarta).
+	app.loadSession()
 	app.syncStatus()
 	return app, nil
 }
@@ -207,6 +230,11 @@ func (a *App) syncStatus() {
 func (a *App) Run() error {
 	defer a.screen.Fini()
 	defer a.ws.CloseAll()
+	// La sesión se guarda como ÚLTIMO defer: al desenrollar (LIFO) corre
+	// PRIMERO, con los buffers todavía abiertos, antes de CloseAll y Fini. Es
+	// el camino de salida, silencioso: un fallo de escritura no puede impedir
+	// cerrar el editor.
+	defer a.saveSession()
 
 	a.redraw()
 
@@ -228,6 +256,21 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		// Con un pedido activo el teclado es del pedido, no del documento.
 		if a.promptActive {
 			a.handlePromptKey(ev)
+			return false
+		}
+
+		// El menú de pestañas abierto posee el teclado. (true, true) es Enter:
+		// activar la pestaña del cursor y cerrar. (false, false) —Escape, Ctrl+C
+		// y CUALQUIER otra tecla ajena— cierra el menú descartando, sin dejar
+		// que la tecla caiga al documento ni a los atajos.
+		if a.menuActive {
+			handled, activate := a.menu.HandleEvent(ev)
+			if !handled {
+				a.menuActive = false // cualquier tecla ajena —Escape incluido— cierra y descarta
+			} else if activate {
+				a.menuSwitchTab() // Enter: cambiar y cerrar
+			}
+			a.redraw()
 			return false
 		}
 
@@ -290,6 +333,10 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		}
 
 		switch {
+		case ev.Key() == tcell.KeyCtrlT:
+			a.toggleMenu()
+			return false
+
 		case ev.Key() == tcell.KeyCtrlS:
 			a.confirmQuit = false
 			a.confirmClose = false
@@ -352,6 +399,14 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		}
 
 	case *tcell.EventMouse:
+		// Con el menú abierto el mouse es del menú como el teclado: se ignora
+		// por completo —el controlador no traduce nada ni redibuja— y el clic
+		// no puede seleccionar una pestaña ni raspar el documento por
+		// accidente.
+		if a.menuActive {
+			return false
+		}
+
 		// La composición es dueña del layout: el mouse llega en coordenadas de
 		// pantalla y cada pane traduce su propio origen. Con el panel visible,
 		// el clic a la izquierda de su borde va al explorador (solo se resta la
@@ -621,6 +676,20 @@ func (a *App) redraw() {
 		a.screen.HideCursor()
 	}
 
+	// El menú de pestañas es un overlay de la región del editor: se compone
+	// DESPUÉS del editor (tapa el documento, sin tocar pestañas ni barra) con
+	// la misma superficie recortada al área de trabajo, con el alto de las
+	// pestañas listadas (nunca más que el editor). No dibuja con el workspace
+	// vacío: redraw lo llama siempre, también sin pestañas.
+	if a.menuActive && a.ws.Len() > 0 {
+		if a.editorSurf == nil {
+			a.editorSurf = view.NewOffsetSurface(a.screen)
+		}
+		editorW := width - a.explorerColumn()
+		a.editorSurf.SetRegion(a.explorerColumn(), tabBarHeight, editorW, min(a.ws.Len(), editorHeight(height)))
+		a.menu.Draw(a.editorSurf, a.ws, editorW)
+	}
+
 	a.statusBar.Draw(a.screen, height-statusHeight, width)
 	a.screen.Show()
 }
@@ -735,6 +804,106 @@ func (a *App) switchTab(move func() *model.PieceTable) {
 	width, _ := a.screen.Size()
 	a.tabBar.EnsureActive(a.ws, width)
 	a.redraw()
+}
+
+// toggleMenu abre o cierra el menú de pestañas. Abrir lo dimensiona a la
+// región del editor (ancho según el panel, alto = el de las pestañas listadas,
+// nunca más que el editor) y coloca el cursor sobre la activa; cerrar solo
+// apaga el flag. handleEvent ya filtró el workspace vacío, así que acá siempre
+// hay algo que listar cuando se abre.
+func (a *App) toggleMenu() {
+	a.menuActive = !a.menuActive
+	if a.menuActive {
+		width, height := a.screen.Size()
+		a.menu.Resize(width-a.explorerColumn(), min(a.ws.Len(), editorHeight(height)))
+		a.menu.Open(a.ws)
+	}
+	a.redraw()
+}
+
+// menuSwitchTab cambia a la pestaña elegida del menú (Enter) y deja la
+// composición consistente como switchTab: desarma las confirmaciones y el
+// permiso de pisar, reencuadra la fila de pestañas y cierra el menú. Elegir la
+// pestaña ya activa es no-op salvo por el cierre.
+func (a *App) menuSwitchTab() {
+	idx := a.menu.Selected()
+	if idx != a.ws.ActiveIndex() {
+		a.ws.SetActive(idx)
+	}
+	a.confirmQuit = false
+	a.confirmClose = false
+	a.clearForceSave()
+	width, _ := a.screen.Size()
+	a.tabBar.EnsureActive(a.ws, width)
+	a.syncStatus()
+	a.menuActive = false
+}
+
+// sessionPath es la ubicación fija de la sesión de un root de trabajo.
+func sessionPath(root string) string {
+	return filepath.Join(root, ".tcode", "session.json")
+}
+
+// loadSession restaura la sesión del root al arrancar (solo en los modos con
+// sesión habilitada). Nunca es fatal: sin archivo o con JSON corrupto no hace
+// nada y el estado por defecto —explorador sin buffers— queda como respaldo.
+// Las pestañas que ya no existen se saltan (ws.Open falla → seguir) y la
+// activa se resuelve por ruta DESPUÉS de restaurar, sobre las que quedaron;
+// si su ruta no está entre ellas, queda la última abierta.
+func (a *App) loadSession() {
+	if !a.sessionEnabled {
+		return
+	}
+	s, err := model.LoadSession(sessionPath(a.ws.Root()))
+	if err != nil {
+		// Sin sesión previa (os.IsNotExist) o JSON corrupto: estado por defecto.
+		return
+	}
+	for _, p := range s.Tabs {
+		a.ws.Open(p)
+	}
+	if s.Active != "" {
+		for i, b := range a.ws.Buffers() {
+			if b.Path() == s.Active {
+				a.ws.SetActive(i)
+				break
+			}
+		}
+	}
+}
+
+// saveSession persiste la sesión al salir (solo en los modos con sesión
+// habilitada). Persiste las rutas de los buffers con archivo, en orden, y la
+// activa como ruta (o "" si no tiene). Sin pestañas persistibles el archivo se
+// BORRA: guardar {tabs: []} dejaría un estado mentiroso, y el por defecto de un
+// directorio es sin sesión. Corre en el camino de salida (defer de Run): un
+// error se ignora —no vale impedir cerrar el editor por no poder escribir la
+// sesión—.
+func (a *App) saveSession() {
+	if !a.sessionEnabled {
+		return
+	}
+	tabs := make([]string, 0, a.ws.Len())
+	for _, b := range a.ws.Buffers() {
+		if p := b.Path(); p != "" {
+			tabs = append(tabs, p)
+		}
+	}
+	active := ""
+	if b := a.ws.Active(); b != nil {
+		active = b.Path()
+	}
+	path := sessionPath(a.ws.Root())
+	if len(tabs) == 0 {
+		os.Remove(path)
+		return
+	}
+	model.SaveSession(path, model.Session{
+		Version: 1,
+		Root:    a.ws.Root(),
+		Tabs:    tabs,
+		Active:  active,
+	})
 }
 
 // closeTab cierra la pestaña activa con la misma confirmación no modal que la
