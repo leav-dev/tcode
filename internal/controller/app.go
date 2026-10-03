@@ -2,6 +2,8 @@ package controller
 
 import (
 	"errors"
+	"path/filepath"
+	"strings"
 
 	"github.com/gdamore/tcell/v2"
 	"tcode/internal/model"
@@ -21,6 +23,11 @@ type App struct {
 	// forceSave habilita el próximo Ctrl+S a pisar cambios externos, después de
 	// haber avisado una vez.
 	forceSave bool
+
+	// promptActive y promptBuf sostienen el pedido de texto de Save As. Mientras
+	// están activos, el teclado alimenta el pedido y no el documento.
+	promptActive bool
+	promptBuf    string
 }
 
 // NewApp inicializa la terminal y carga el archivo indicado (si path != "").
@@ -93,10 +100,20 @@ func (a *App) Run() error {
 func (a *App) handleEvent(ev tcell.Event) bool {
 	switch ev := ev.(type) {
 	case *tcell.EventKey:
+		// Con un pedido activo el teclado es del pedido, no del documento.
+		if a.promptActive {
+			a.handlePromptKey(ev)
+			return false
+		}
+
 		switch {
 		case ev.Key() == tcell.KeyCtrlS:
 			a.confirmQuit = false
 			a.save()
+			return false
+
+		case isSaveAsKey(ev):
+			a.startPrompt()
 			return false
 
 		case isRedoKey(ev):
@@ -175,6 +192,89 @@ func (a *App) applyHistory(op func() (model.Change, bool, error), done, empty st
 		a.editorView.MoveCursorToOffset(change.Offset)
 		a.statusBar.SetMessage(done)
 	}
+	a.syncStatus()
+	a.redraw()
+}
+
+// isSaveAsKey reconoce Ctrl+Shift+S. Como en Ctrl+Shift+Z, tcell entrega los
+// control con Shift como KeyRune en lugar del código KeyCtrl*.
+func isSaveAsKey(ev *tcell.EventKey) bool {
+	return ev.Key() == tcell.KeyRune &&
+		ev.Modifiers()&tcell.ModCtrl != 0 &&
+		ev.Modifiers()&tcell.ModShift != 0 &&
+		(ev.Rune() == 's' || ev.Rune() == 'S')
+}
+
+// startPrompt abre el pedido de Save As, prellenado con la ruta actual para poder
+// editarla en lugar de reescribirla entera.
+func (a *App) startPrompt() {
+	a.confirmQuit = false
+	a.forceSave = false
+	a.promptActive = true
+	a.promptBuf = a.model.Path()
+	a.refreshPrompt()
+	a.redraw()
+}
+
+func (a *App) refreshPrompt() {
+	a.statusBar.SetPrompt("Guardar como: " + a.promptBuf)
+}
+
+func (a *App) endPrompt() {
+	a.promptActive = false
+	a.promptBuf = ""
+	a.statusBar.SetPrompt("")
+}
+
+// handlePromptKey alimenta el pedido de texto. El borrado va por runa y no por
+// grapheme cluster: alcanza para rutas, que son ASCII en la práctica.
+func (a *App) handlePromptKey(ev *tcell.EventKey) {
+	switch ev.Key() {
+	case tcell.KeyEscape, tcell.KeyCtrlC:
+		a.endPrompt()
+		a.statusBar.SetMessage("Save As cancelado")
+		a.redraw()
+		return
+
+	case tcell.KeyEnter:
+		path := strings.TrimSpace(a.promptBuf)
+		a.endPrompt()
+		a.saveAs(path)
+		return
+
+	case tcell.KeyBackspace, tcell.KeyBackspace2:
+		if r := []rune(a.promptBuf); len(r) > 0 {
+			a.promptBuf = string(r[:len(r)-1])
+		}
+
+	case tcell.KeyRune:
+		if ev.Modifiers()&(tcell.ModCtrl|tcell.ModAlt) == 0 {
+			if r := ev.Rune(); r != 0 && r != '\n' && r != '\t' {
+				a.promptBuf += string(r)
+			}
+		}
+	}
+
+	a.refreshPrompt()
+	a.redraw()
+}
+
+// saveAs guarda en la ruta elegida y pasa a trabajar sobre ella.
+func (a *App) saveAs(path string) {
+	if path == "" {
+		a.statusBar.SetMessage("Save As cancelado")
+		a.redraw()
+		return
+	}
+
+	if err := a.model.SaveAs(path); err != nil {
+		a.statusBar.SetMessage("Error al guardar como: " + err.Error())
+	} else {
+		a.confirmQuit = false
+		a.forceSave = false
+		a.statusBar.SetMessage("Guardado en " + filepath.Base(path))
+	}
+
 	a.syncStatus()
 	a.redraw()
 }

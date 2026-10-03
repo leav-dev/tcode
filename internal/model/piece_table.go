@@ -18,6 +18,9 @@ import (
 // asociado.
 var ErrNoPath = errors.New("el documento no tiene archivo asociado")
 
+// ErrEmptyPath se devuelve al pedir Save As sin una ruta.
+var ErrEmptyPath = errors.New("Save As necesita una ruta")
+
 // ErrFileChangedExternally se devuelve al intentar guardar cuando el archivo cambió
 // en disco desde la última carga o guardado: escribirlo perdería esos cambios.
 var ErrFileChangedExternally = errors.New("el archivo cambió en disco desde la última carga")
@@ -704,6 +707,33 @@ func (pt *PieceTable) save(force bool) error {
 	if !force && pt.ChangedOnDisk() {
 		return ErrFileChangedExternally
 	}
+	return pt.writeAndReload()
+}
+
+// SaveAs guarda el documento en path y pasa a trabajar sobre esa ruta.
+//
+// Escribe siempre, aunque no haya cambios: elegir una ruta es una decisión
+// explícita del usuario. Si el destino ya existe se pisa, porque acaba de ser
+// nombrado, y sus permisos se respetan; si es nuevo se crea con 0644.
+func (pt *PieceTable) SaveAs(path string) error {
+	if path == "" {
+		return ErrEmptyPath
+	}
+
+	if info, err := os.Stat(path); err == nil {
+		pt.mode = info.Mode().Perm()
+	} else {
+		pt.mode = 0o644
+	}
+
+	// La ruta cambia antes de escribir: el guardado usa pt.path, y la marca de
+	// disco vieja ya no aplica a este destino.
+	pt.path = path
+	return pt.writeAndReload()
+}
+
+// writeAndReload vuelca el documento en pt.path y reabre el archivo.
+func (pt *PieceTable) writeAndReload() error {
 
 	// Si la ruta es un enlace simbólico hay que escribir sobre el destino y no
 	// sobre el enlace: renombrar encima del enlace lo reemplazaría por un archivo

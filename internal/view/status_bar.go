@@ -13,6 +13,7 @@ type StatusBar struct {
 	path     string
 	modified bool
 	message  string
+	prompt   string
 	style    tcell.Style
 }
 
@@ -32,8 +33,17 @@ func (s *StatusBar) SetMessage(msg string) { s.message = msg }
 // ClearMessage borra el mensaje.
 func (s *StatusBar) ClearMessage() { s.message = "" }
 
-// label es el texto de la izquierda: nombre del archivo y marca de modificación.
+// SetPrompt muestra un pedido de texto en la barra, en lugar de la etiqueta del
+// archivo. Se usa para Save As.
+func (s *StatusBar) SetPrompt(text string) { s.prompt = text }
+
+// label es el texto de la izquierda: el pedido activo o el nombre del archivo con
+// su marca de modificación.
 func (s *StatusBar) label() string {
+	if s.prompt != "" {
+		return s.prompt
+	}
+
 	name := s.path
 	if name == "" {
 		name = "(sin archivo)"
@@ -46,6 +56,9 @@ func (s *StatusBar) label() string {
 	}
 	return name + "    "
 }
+
+// Label expone la etiqueta que la barra esta mostrando. Pensado para tests.
+func (s *StatusBar) Label() string { return s.label() }
 
 // Draw pinta la barra completa en la fila y.
 func (s *StatusBar) Draw(sc tcell.Screen, y, width int) {

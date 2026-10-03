@@ -3,6 +3,7 @@ package controller
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -427,6 +428,153 @@ func TestAnotherKeyCancelsTheForceSavePermission(t *testing.T) {
 	press(app, tcell.KeyCtrlS)
 	if got := readFile(t, path); got != "ajeno" {
 		t.Fatalf("archivo = %q, no debía pisarse", got)
+	}
+}
+
+// --- Save As ---
+
+// pressSaveAs dispara Ctrl+Shift+S, que tcell entrega como KeyRune con ModCtrl y
+// ModShift en lugar del código KeyCtrlS.
+func pressSaveAs(app *App) {
+	app.handleEvent(tcell.NewEventKey(tcell.KeyRune, 's', tcell.ModCtrl|tcell.ModShift))
+}
+
+func TestSaveAsPromptOpensPrefilledWithTheCurrentPath(t *testing.T) {
+	app, path := newTestApp(t, "uno")
+
+	pressSaveAs(app)
+
+	if !app.promptActive {
+		t.Fatal("debe quedar abierto el pedido de ruta")
+	}
+	if app.promptBuf != path {
+		t.Fatalf("buffer = %q, se esperaba la ruta actual %q", app.promptBuf, path)
+	}
+	if !strings.Contains(app.statusBar.Label(), "Guardar como:") {
+		t.Fatalf("la barra = %q, se esperaba el pedido", app.statusBar.Label())
+	}
+}
+
+// TestSaveAsPromptDoesNotEditTheDocument: con el pedido abierto el teclado es del
+// pedido, no del documento.
+func TestSaveAsPromptDoesNotEditTheDocument(t *testing.T) {
+	app, _ := newTestApp(t, "uno")
+
+	pressSaveAs(app)
+	typeRune(app, 'X')
+	typeRune(app, 'Y')
+
+	if got := app.model.GetContent(); got != "uno" {
+		t.Fatalf("el documento no debía cambiar: %q", got)
+	}
+	if !strings.HasSuffix(app.promptBuf, "XY") {
+		t.Fatalf("el texto debía ir al pedido: %q", app.promptBuf)
+	}
+}
+
+func TestSaveAsPromptAcceptsATypedPath(t *testing.T) {
+	app, original := newTestApp(t, "uno")
+
+	dest := filepath.Join(t.TempDir(), "copia.txt")
+
+	pressSaveAs(app)
+	// Limpia la ruta prellenada y escribe la nueva.
+	for range []rune(app.promptBuf) {
+		press(app, tcell.KeyBackspace)
+	}
+	for _, r := range dest {
+		typeRune(app, r)
+	}
+	press(app, tcell.KeyEnter)
+
+	if app.promptActive {
+		t.Fatal("el pedido debía cerrarse con Enter")
+	}
+	if got := readFile(t, dest); got != "uno" {
+		t.Fatalf("destino = %q, se esperaba %q", got, "uno")
+	}
+	if got := app.model.Path(); got != dest {
+		t.Fatalf("Path() = %q, se esperaba %q", got, dest)
+	}
+	if got := readFile(t, original); got != "uno" {
+		t.Fatalf("el original no debía tocarse: %q", got)
+	}
+}
+
+func TestSaveAsPromptCancelsWithEscape(t *testing.T) {
+	app, _ := newTestApp(t, "uno")
+
+	dest := filepath.Join(t.TempDir(), "no-debe-existir.txt")
+
+	pressSaveAs(app)
+	for range []rune(app.promptBuf) {
+		press(app, tcell.KeyBackspace)
+	}
+	for _, r := range dest {
+		typeRune(app, r)
+	}
+	press(app, tcell.KeyEscape)
+
+	if app.promptActive {
+		t.Fatal("Escape debe cerrar el pedido")
+	}
+	if _, err := os.Stat(dest); !os.IsNotExist(err) {
+		t.Fatalf("el archivo no debía crearse: %v", err)
+	}
+}
+
+func TestSaveAsPromptWithEmptyPathDoesNothing(t *testing.T) {
+	app, path := newTestApp(t, "uno")
+
+	pressSaveAs(app)
+	for range []rune(app.promptBuf) {
+		press(app, tcell.KeyBackspace)
+	}
+	press(app, tcell.KeyEnter)
+
+	if app.promptActive {
+		t.Fatal("el pedido debe cerrarse")
+	}
+	if got := app.model.Path(); got != path {
+		t.Fatalf("la ruta no debía cambiar: %q", got)
+	}
+	if got := readFile(t, path); got != "uno" {
+		t.Fatalf("archivo = %q", got)
+	}
+}
+
+// TestSaveAsForADocumentWithoutPath cubre el caso que motivó la unidad, de punta a
+// punta: abrir el editor sin archivo, escribir y guardar en una ruta nueva.
+func TestSaveAsForADocumentWithoutPath(t *testing.T) {
+	s := tcell.NewSimulationScreen("UTF-8")
+	if err := s.Init(); err != nil {
+		t.Fatalf("no se pudo inicializar la pantalla: %v", err)
+	}
+	s.SetSize(40, 10)
+
+	app, err := NewAppWithScreen(s, "")
+	if err != nil {
+		t.Fatalf("NewAppWithScreen falló: %v", err)
+	}
+	defer func() { app.model.Close(); s.Fini() }()
+
+	typeString(app, "contenido nuevo")
+
+	dest := filepath.Join(t.TempDir(), "creado.txt")
+	pressSaveAs(app)
+	for range []rune(app.promptBuf) {
+		press(app, tcell.KeyBackspace)
+	}
+	for _, r := range dest {
+		typeRune(app, r)
+	}
+	press(app, tcell.KeyEnter)
+
+	if got := readFile(t, dest); got != "contenido nuevo" {
+		t.Fatalf("destino = %q, se esperaba %q", got, "contenido nuevo")
+	}
+	if app.model.Modified() {
+		t.Fatal("tras guardar como, el documento queda limpio")
 	}
 }
 
