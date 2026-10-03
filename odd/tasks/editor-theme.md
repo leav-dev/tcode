@@ -55,6 +55,15 @@ runas (la pantalla sigue siendo la misma; solo cambian los estilos por celda).
   y roadmap (temas por proyecto, highlighter con estado multilínea)
   <!-- id: 8 -->
 
+### Ampliación posterior: variables, tipos y funciones · `*commit*`
+- [x] Roles `type`/`function`/`variable` en el scanner (sets de tipos por
+  lenguaje; función = identificador con `(` pegado; el resto variable), en el
+  `Theme` (defaults + JSON) y en `StyleForRole` <!-- id: 9 -->
+- [x] Tests: tipos Go/Python, función (también `def nombre(` y el caso de
+  `if (` que sigue keyword), variable, y strings que no se confunden;
+  render de los tres roles en la celda <!-- id: 10 -->
+- [x] Verificación: suite completa sin fallos nuevos vs base <!-- id: 11 -->
+
 ## Design decisions
 
 ### Un tema, roles, y fallback silencioso
@@ -108,6 +117,15 @@ no colores.
   documentó tab-bar (pestaña sobre el editor) en su unidad.
 - **Decisión:** los roles "activos" conservan `Reverse` + color de acento, así
   los tests de render existentes (`cellReverse`) quedaron verdes.
+
+### Ampliación sintaxis (variables/tipos/funciones) · `*hash*`
+- **RED:** los tests del scanner y del tema no compilaban (roles inexistentes).
+- **Semántica nueva ajustada en tests viejos (a propósito):** lo que era Text
+  ahora es `variable` (identificadores: `funcXYZ`, `abc123`, y en archivos sin
+  lenguaje); `main` de `func main()` pasó de texto a **Function** (va seguido de
+  `(` — regla nueva); dos posiciones de byte de mis tests estaban mal (el `f`
+  de `x := f(2)` está en el byte 5, no 6).
+- **Docs:** `docs/editor-theme.md` con los roles nuevos y el límite de `(` pegado.
 
 ### U-controlador · `f7964f9`
 - **GREEN:** carga con archivo, fallback con JSON roto, default sin archivo

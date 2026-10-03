@@ -39,7 +39,7 @@ tocar código.
 | `treeCursor` | Nodo activo del árbol |
 | `status` / `message` | Barra de estado / mensaje transitorio |
 | `modified` | Marca de documento sucio *(reservado)* |
-| `comment`, `keyword`, `string`, `number`, `punct` | Roles de sintaxis |
+| `comment`, `keyword`, `string`, `number`, `type`, `function`, `variable`, `punct` | Roles de sintaxis |
 
 Los roles "activos" (`tabActive`, `treeCursor`) conservan el atributo `Reverse`
 además del color de acento: la noción de "seleccionado" nunca depende solo del
@@ -49,9 +49,17 @@ color de la terminal.
 
 El documento se resalta **por línea visible y sin estado entre líneas**, según
 la extensión del archivo: palabras clave, comentarios (`//` y `#`), bloques
-`/* */` dentro de la línea, strings (`"`, `'`) y números (decimal y hex) para
-`.go`, `.py`, `.js`/`.ts`, c-like y `.json`. Lo que el léxico de esa línea no
-cubre queda como texto.
+`/* */` dentro de la línea, strings (`"`, `'`), números (decimal y hex), y los
+roles **`type`** (tipos y primitivas: `int`, `string`, `float64`, `bool`…),
+**`function`** (un identificador seguido de `(` pegado) y **`variable`** (todo
+identificador que no sea keyword, tipo ni función), para `.go`, `.py`,
+`.js`/`.ts`, c-like y `.json`.
+
+Los tipos viven en sets por lenguaje (`types` en `highlight.go`); los
+identificadores que no caen en ninguno de los otros roles son variables —también
+en archivos sin lenguaje reconocido—. La función se detecta por el `(` **pegado**
+(`foo(`); la variante con espacio (`foo (x)`) queda como variable: límite
+documentado de la regla mecánica.
 
 **Límites documentados:** un comentario `/*` o un string sin cerrar colorean
 solo su línea (no se arrastra el estado a la siguiente); `#` de Python se toma

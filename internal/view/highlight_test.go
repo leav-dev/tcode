@@ -45,7 +45,7 @@ func TestHighlightGoKeywords(t *testing.T) {
 	}
 	// El prefijo de palabra clave no aplica a un identificador más largo.
 	h2 := newHighlighter("m.go")
-	if got := roleAtIdx(t, h2, "funcXYZ", 0); got != RoleText {
+	if got := roleAtIdx(t, h2, "funcXYZ", 0); got != RoleVariable {
 		t.Fatalf("'funcXYZ' = %v, esperaba texto (límite de token)", got)
 	}
 }
@@ -109,7 +109,7 @@ func TestHighlightNumber(t *testing.T) {
 			}
 		})
 	}
-	if got := roleAtIdx(t, h, "abc123", 0); got != RoleText {
+	if got := roleAtIdx(t, h, "abc123", 0); got != RoleVariable {
 		t.Fatalf("'abc123' arranca en texto, no en Number: %v", got)
 	}
 }
@@ -128,7 +128,7 @@ func TestHighlightJSON(t *testing.T) {
 // TestHighlightUnknownLanguageIsPlainText: sin lenguaje no hay roles.
 func TestHighlightUnknownLanguageIsPlainText(t *testing.T) {
 	h := newHighlighter("readme.txt")
-	if got := roleAtIdx(t, h, "func X // nota", 5); got != RoleText {
+	if got := roleAtIdx(t, h, "func X // nota", 5); got != RoleVariable {
 		t.Fatalf("en txt todo debe ser texto: %v", got)
 	}
 }
@@ -138,5 +138,94 @@ func TestHighlightPunctRole(t *testing.T) {
 	h := newHighlighter("m.go")
 	if got := roleAtIdx(t, h, "a+b;", 1); got != RolePunct {
 		t.Fatalf("'+' = %v, esperaba Punct", got)
+	}
+}
+
+// TestHighlightGoTypes: los tipos predeclarados de Go se marcan con el rol Type.
+func TestHighlightGoTypes(t *testing.T) {
+	h := newHighlighter("main.go")
+	cases := []struct {
+		line string
+		pos  int
+	}{
+		{"var x int", 6},
+		{"const s string = \"\"", 8},
+		{"var f float64", 6},
+		{"var b bool", 6},
+		{"var by byte", 7},
+		{"func f() error {", 9},
+	}
+	for _, c := range cases {
+		t.Run(c.line, func(t *testing.T) {
+			if got := roleAtIdx(t, h, c.line, c.pos); got != RoleType {
+				t.Errorf("tipo en %q pos %d = %v, esperaba Type", c.line, c.pos, got)
+			}
+		})
+	}
+}
+
+// TestHighlightPythonTypes: las primitivas de Python son Type.
+func TestHighlightPythonTypes(t *testing.T) {
+	h := newHighlighter("x.py")
+	if got := roleAtIdx(t, h, "x: int = 1", 3); got != RoleType {
+		t.Fatalf("'int' = %v, esperaba Type", got)
+	}
+	if got := roleAtIdx(t, h, "def f(s: str) -> bool:", 9); got != RoleType {
+		t.Fatalf("'str' = %v, esperaba Type", got)
+	}
+}
+
+// TestHighlightGoFunction: un identificador seguido de ( es función.
+func TestHighlightGoFunction(t *testing.T) {
+	h := newHighlighter("main.go")
+	if got := roleAtIdx(t, h, "foo(1)", 0); got != RoleFunction {
+		t.Fatalf("'foo' = %v, esperaba Function", got)
+	}
+	if got := roleAtIdx(t, h, "obj.Method(x)", 4); got != RoleFunction {
+		t.Fatalf("'Method' = %v, esperaba Function", got)
+	}
+	if got := roleAtIdx(t, h, "x := f(2)", 5); got != RoleFunction {
+		t.Fatalf("'f' = %v, esperaba Function", got)
+	}
+	// La keyword if no puede volverse función aunque le siga (.
+	if got := roleAtIdx(t, h, "if (x) {", 0); got != RoleKeyword {
+		t.Fatalf("'if' = %v, esperaba Keyword (nunca Function)", got)
+	}
+}
+
+// TestHighlightVariable: un identificador que no es keyword, tipo ni función
+// es variable.
+func TestHighlightVariable(t *testing.T) {
+	h := newHighlighter("main.go")
+	if got := roleAtIdx(t, h, "x := 1", 0); got != RoleVariable {
+		t.Fatalf("'x' = %v, esperaba Variable", got)
+	}
+	if got := roleAtIdx(t, h, "nombre := 1", 0); got != RoleVariable {
+		t.Fatalf("'nombre' = %v, esperaba Variable", got)
+	}
+	// El nombre de un campo de tipo no es función ni tipo.
+	if got := roleAtIdx(t, h, "p.field = 2", 2); got != RoleVariable {
+		t.Fatalf("'field' = %v, esperaba Variable", got)
+	}
+}
+
+// TestHighlightPythonFunctionDeclaration: def es keyword y el nombre + ( es
+// función.
+func TestHighlightPythonFunctionDeclaration(t *testing.T) {
+	h := newHighlighter("x.py")
+	if got := roleAtIdx(t, h, "def calcular():", 0); got != RoleKeyword {
+		t.Fatalf("'def' = %v, esperaba Keyword", got)
+	}
+	if got := roleAtIdx(t, h, "def calcular():", 4); got != RoleFunction {
+		t.Fatalf("'calcular' = %v, esperaba Function", got)
+	}
+}
+
+// TestHighlightStringAndFunctionQuoteCare: una comilla dentro de una función
+// sigue siendo string (el `(` solo clasifica el identificador).
+func TestHighlightStringAndFunctionQuoteCare(t *testing.T) {
+	h := newHighlighter("main.go")
+	if got := roleAtIdx(t, h, `s := "foo(1)"`, 6); got != RoleString {
+		t.Fatalf("string = %v, esperaba String (sin confundir con función)", got)
 	}
 }

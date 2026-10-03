@@ -74,8 +74,8 @@ func TestKeywordStyledInRender(t *testing.T) {
 	if got := fgOfCell(cells[0*width+0].Style); got != fgOf(DefaultTheme().Keyword) {
 		t.Fatalf("'func' = %v, esperaba el fg de Keyword (%v)", got, fgOf(DefaultTheme().Keyword))
 	}
-	// 'main' no es palabra clave: sigue texto.
-	if got := fgOfCell(cells[0*width+5].Style); got != fgOfCell(DefaultTheme().Text) {
+	// 'main' seguido de ( es el rol Function (regla nueva), no keyword.
+	if got := fgOfCell(cells[0*width+5].Style); got != fgOf(DefaultTheme().Function) {
 		t.Fatalf("'main' = %v, esperaba texto", got)
 	}
 }
@@ -139,5 +139,26 @@ func TestStatusBarDefaultWithoutSetTheme(t *testing.T) {
 	cells, _, _ := s.GetContents()
 	if cells[0].Style != DefaultTheme().Status {
 		t.Fatalf("la barra sin tema debe usar el default")
+	}
+}
+
+// TestTypeFunctionVariableStyledInRender: los roles nuevos llegan a la celda.
+func TestTypeFunctionVariableStyledInRender(t *testing.T) {
+	s := newTestScreen(t, 40, 4)
+	pt := newGoTable(t, "var x int\nfoo(x)\n")
+	v := NewEditorView(pt, 4, 40)
+	draw(v, s)
+
+	cells, width, _ := s.GetContents()
+	// "var x int": 'var' keyword (0), 'x' variable (4), 'int' type (6).
+	if fgOf(cells[0*width+6].Style) != fgOf(DefaultTheme().Type) {
+		t.Fatal("'int' debe pintarse con el rol Type")
+	}
+	if fgOf(cells[0*width+4].Style) != fgOf(DefaultTheme().Variable) {
+		t.Fatal("'x' debe pintarse con el rol Variable")
+	}
+	// "foo(x)": 'foo' función (0).
+	if fgOf(cells[1*width+0].Style) != fgOf(DefaultTheme().Function) {
+		t.Fatal("'foo' debe pintarse con el rol Function")
 	}
 }

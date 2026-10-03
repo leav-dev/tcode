@@ -24,6 +24,9 @@ type Theme struct {
 	Keyword      tcell.Style // palabras clave (sintaxis)
 	String       tcell.Style // cadenas (sintaxis)
 	Number       tcell.Style // números (sintaxis)
+	Type         tcell.Style // tipos y primitivas (sintaxis)
+	Function     tcell.Style // nombres de función (sintaxis)
+	Variable     tcell.Style // identificadores comunes (sintaxis)
 	Punct        tcell.Style // puntuación/otros (sintaxis)
 }
 
@@ -48,6 +51,9 @@ func DefaultTheme() Theme {
 		Keyword:      fg(tcell.PaletteColor(213)),
 		String:       fg(tcell.PaletteColor(173)),
 		Number:       fg(tcell.PaletteColor(114)),
+		Type:         fg(tcell.PaletteColor(79)),
+		Function:     fg(tcell.PaletteColor(187)),
+		Variable:     fg(tcell.PaletteColor(117)),
 		Punct:        fg(tcell.PaletteColor(250)),
 	}
 }
@@ -92,6 +98,9 @@ func LoadTheme(data []byte) Theme {
 	fg(&t.Keyword, "keyword")
 	fg(&t.String, "string")
 	fg(&t.Number, "number")
+	fg(&t.Type, "type")
+	fg(&t.Function, "function")
+	fg(&t.Variable, "variable")
 	fg(&t.Punct, "punct")
 	txt(&t.Text, "text")
 	if v := raw["cursorLine"]; v != "" {
@@ -123,6 +132,12 @@ func (t Theme) StyleForRole(r Role) tcell.Style {
 		return t.String
 	case RoleNumber:
 		return t.Number
+	case RoleType:
+		return t.Type
+	case RoleFunction:
+		return t.Function
+	case RoleVariable:
+		return t.Variable
 	case RolePunct:
 		return t.Punct
 	default:

@@ -122,3 +122,36 @@ func TestParseThemeColorAceptsFormats(t *testing.T) {
 		})
 	}
 }
+
+// TestThemeSyntaxRolesAreDistinct: los roles de sintaxis nuevos se distinguen
+// del texto y entre sí en el default.
+func TestThemeSyntaxRolesAreDistinct(t *testing.T) {
+	th := DefaultTheme()
+	pairs := [][2]tcell.Style{
+		{th.Type, th.Text},
+		{th.Function, th.Text},
+		{th.Variable, th.Text},
+		{th.Type, th.Keyword},
+		{th.Function, th.Keyword},
+	}
+	for _, p := range pairs {
+		if p[0] == p[1] {
+			t.Fatalf("el par de roles no se distingue: %v vs %v", p[0], p[1])
+		}
+	}
+}
+
+// TestLoadThemeParsesNewSyntaxRoles: el JSON re-mapea type/function/variable.
+func TestLoadThemeParsesNewSyntaxRoles(t *testing.T) {
+	src := `{"type": "117", "function": "179", "variable": "117"}`
+	th := LoadTheme([]byte(src))
+	if fgOf(th.Type) != tcell.PaletteColor(117) {
+		t.Errorf("type = %v, esperaba índice 117", fgOf(th.Type))
+	}
+	if fgOf(th.Function) != tcell.PaletteColor(179) {
+		t.Errorf("function = %v, esperaba índice 179", fgOf(th.Function))
+	}
+	if fgOf(th.Variable) != tcell.PaletteColor(117) {
+		t.Errorf("variable = %v, esperaba índice 117", fgOf(th.Variable))
+	}
+}

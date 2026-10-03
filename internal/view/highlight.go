@@ -31,6 +31,9 @@ const (
 	RoleString
 	RoleNumber
 	RolePunct
+	RoleType     // tipos y primitivas (int, string…)
+	RoleFunction // identificador seguido de (, pegado
+	RoleVariable // identificadores que no son keyword/tipo/función
 )
 
 // langByExt mapea extensiones a lenguajes conocidos.
@@ -49,6 +52,14 @@ func languageForPath(path string) Language {
 		return l
 	}
 	return LangNone
+}
+
+// types: primitivas y predeclarados de cada lenguaje.
+var types = map[Language]map[string]bool{
+	LangGo:     wordSet("any bool byte comparable complex64 complex128 error float32 float64 int int8 int16 int32 int64 rune string uint uint8 uint16 uint32 uint64 uintptr"),
+	LangPython: wordSet("bool bytes dict float frozenset int list set str tuple type object NoneType bytearray range slice complex"),
+	LangJS:     wordSet("number string boolean object symbol bigint null undefined"),
+	LangCLike:  wordSet("bool char double float int long short signed unsigned void wchar_t size_t"),
 }
 
 var keywords = map[Language]map[string]bool{
@@ -98,6 +109,7 @@ func (h *highlighter) styleAt(line []byte, pos int) Role {
 		// solo strings y keywords; sin comentarios en v1
 	}
 	ks := keywords[lang]
+	ts := types[lang]
 
 	i := 0
 	for i < len(line) {
@@ -157,8 +169,21 @@ func (h *highlighter) styleAt(line []byte, pos int) Role {
 			for j < len(line) && isIdentChar(line[j]) {
 				j++
 			}
-			if ks[string(line[i:j])] && pos >= i && pos < j {
+			word := string(line[i:j])
+			if ks[word] && pos >= i && pos < j {
 				return RoleKeyword
+			}
+			// Función: identificador seguido de "(" pegado (v1; con espacios entre
+			// ambos —p. ej. "foo (x)"— queda variable, documentado como límite).
+			isFn := j < len(line) && line[j] == '('
+			if ts[word] && !isFn && pos >= i && pos < j {
+				return RoleType
+			}
+			if isFn && pos >= i && pos < j {
+				return RoleFunction
+			}
+			if pos >= i && pos < j {
+				return RoleVariable
 			}
 			i = j
 			continue
