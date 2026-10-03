@@ -2256,3 +2256,25 @@ func TestSaveAsPromptOwnsTheMouse(t *testing.T) {
 		t.Fatal("el clic no debe cerrar el pedido")
 	}
 }
+
+// TestCtrlCCopiesSelectionInsteadOfQuitting: Ctrl+C con una selección activa
+// copia (mensaje "Copiado") y el editor NO sale; sin selección, Ctrl+C sigue
+// saliendo (comportamiento de siempre).
+func TestCtrlCCopiesSelectionInsteadOfQuitting(t *testing.T) {
+	app, _ := newTestApp(t, "uno\ndos")
+
+	// Seleccionar la primera palabra con Shift+derechas.
+	app.handleEvent(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModShift))
+	app.handleEvent(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModShift))
+	app.handleEvent(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModShift))
+
+	if quit := press(app, tcell.KeyCtrlC); quit {
+		t.Fatal("Ctrl+C con selección no debe cerrar el editor")
+	}
+	if msg := app.statusBar.Message(); msg != "Copiado" && !strings.Contains(msg, "Error al copiar") {
+		t.Errorf("mensaje = %q, esperaba el aviso del copiado", msg)
+	}
+	if app.ws.Active() == nil {
+		t.Fatal("el editor no debe haber salido")
+	}
+}

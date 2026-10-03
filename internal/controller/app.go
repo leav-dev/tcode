@@ -783,6 +783,19 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 			return false
 
 		case ev.Key() == tcell.KeyEscape || ev.Key() == tcell.KeyCtrlC:
+			// Ctrl+C con una selección activa COPIA en vez de salir (VSCode-like);
+			// sin selección conserva el comportamiento de salida de siempre.
+			if ev.Key() == tcell.KeyCtrlC {
+				if ed := a.activeEditor(); ed != nil && ed.SelectionActive() {
+					if err := ed.CopySelection(); err != nil {
+						a.statusBar.SetMessage("Error al copiar: " + err.Error())
+					} else {
+						a.statusBar.SetMessage("Copiado")
+					}
+					a.redraw()
+					return false
+				}
+			}
 			// Salir con cambios sin guardar en CUALQUIER buffer pide
 			// confirmación: la primera vez solo se avisa, así una tecla de más
 			// no tira el trabajo de ninguna pestaña.
