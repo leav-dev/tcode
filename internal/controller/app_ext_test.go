@@ -10,6 +10,36 @@ import (
 	"tcode/internal/ext"
 )
 
+// validExtSrc es un manifest sano con un comando declarado.
+const validExtSrc = `{
+	"id": "demo.sana",
+	"name": "Sana",
+	"version": "1.0.0",
+	"activation": ["onStartup"],
+	"contributes": {
+		"commands": [{"id": "demo.sana.hola"}]
+	}
+}`
+
+// newTestAppOnDir arranca el editor sobre un directorio (modo explorador), con
+// la misma pantalla simulada y limpieza que newTestApp.
+func newTestAppOnDir(t *testing.T, dir string) (*App, error) {
+	t.Helper()
+	s := tcell.NewSimulationScreen("UTF-8")
+	if err := s.Init(); err != nil {
+		t.Fatalf("no se pudo inicializar la pantalla simulada: %v", err)
+	}
+	s.SetSize(40, 10)
+	app, err := NewAppWithScreen(s, dir)
+	t.Cleanup(func() {
+		if app != nil {
+			app.ws.CloseAll()
+		}
+		s.Fini()
+	})
+	return app, err
+}
+
 // addExtension agrega un manifest a las extensiones del app y cierra el
 // arranque como hace el constructor: activa las que declaran onStartup. En
 // los tests la extensión llega después del arranque real, así que se re-dispara
@@ -155,11 +185,102 @@ func TestExtensionUnknownCommandShowsStatus(t *testing.T) {
 	}
 }
 
-// writeExtensionDir materializa un root de extensiones con las entradas dadas
-// {carpeta: contenido-de-extension.json} y lo devuelve como root.
-func writeExtensionDir(t *testing.T, entries map[string]string) string {
+// TestExtensionChordRunsInController recorre la máquina de estados del chord
+// desde el controlador: la primera tecla arma el pendiente y la segunda
+// ejecuta el built-in.
+func TestExtensionChordRunsInController(t *testing.T) {
+	app, _ := newTestApp(t, "uno")
+	addExtension(t, app, `{
+		"id": "ext.chord",
+		"name": "Chord",
+		"version": "1.0.0",
+		"activation": ["onStartup"],
+		"contributes": {
+			"keybindings": [{"key": "ctrl+k ctrl+g", "command": "tcode.toggleExplorer"}]
+		}
+	}`)
+
+	press(app, tcell.KeyCtrlK)
+	if app.explorerVisible {
+		t.Fatal("la primera tecla del chord ya ejecutó el comando")
+	}
+	press(app, tcell.KeyCtrlG)
+	if !app.explorerVisible {
+		t.Fatal("la segunda tecla del chord no ejecutó tcode.toggleExplorer")
+	}
+}
+
+// TestExtensionHookOnOpenLazyActivates arranca sobre un directorio (sin
+// buffers), agrega una extensión perezosa con onDidOpenBuffer y verifica el
+// camino completo: abrir un archivo desde el explorador activa la extensión y
+// corre su hook del mismo evento.
+func TestExtensionHookOnOpenLazyActivates(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "doc.txt"), []byte("hola\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	app, err := newTestAppOnDir(t, dir)
+	if err != nil {
+		t.Fatalf("NewAppWithScreen falló: %v", err)
+	}
+
+	calls := 0
+	if err := app.ext.Registry().Register("ext.lazy.ver", func() error { calls++; return nil }); err != nil {
+		t.Fatalf("Register falló: %v", err)
+	}
+	addExtension(t, app, `{
+		"id": "ext.lazy",
+		"name": "Perezosa",
+		"version": "1.0.0",
+		"activation": ["onDidOpenBuffer"],
+		"contributes": {
+			"hooks": [{"event": "onDidOpenBuffer", "command": "ext.lazy.ver"}]
+		}
+	}`)
+	if app.ext.Active("ext.lazy") {
+		t.Fatal("la extensión perezosa se activó sin abrir un buffer")
+	}
+
+	// Enter en el explorador abre el archivo del cursor: emit(open) -> activa
+	// la extensión y corre su hook.
+	press(app, tcell.KeyEnter)
+	if !app.ext.Active("ext.lazy") {
+		t.Fatal("abrir un buffer no activó la extensión perezosa")
+	}
+	if calls != 1 {
+		t.Fatalf("hook onDidOpenBuffer corrió %d veces, esperaba 1", calls)
+	}
+}
+
+// TestExtensionBrokenInDiskDoesNotBreakStartup arranca con .tcode/extensions
+// del proyecto que contiene una extensión rota: el editor arranca igual, la
+// sana se carga y el error se avisa en la barra de estado.
+func TestExtensionBrokenInDiskDoesNotBreakStartup(t *testing.T) {
+	dir := t.TempDir()
+	writeExtensionDir(t, filepath.Join(dir, ".tcode", "extensions"), map[string]string{
+		"rota": `{ json roto`,
+		"sana": validExtSrc,
+	})
+	app, err := newTestAppOnDir(t, dir)
+	if err != nil {
+		t.Fatalf("NewAppWithScreen falló con una extensión rota en disco: %v", err)
+	}
+	if !app.ext.Registry().Has("demo.sana.hola") {
+		t.Fatal("la extensión sana de disco no se registró")
+	}
+	if msg := app.statusBar.Message(); !strings.Contains(msg, "rota") {
+		t.Errorf("mensaje = %q, esperaba el aviso de la extensión rota", msg)
+	}
+}
+
+// writeExtensionDir materializa root/ con las entradas dadas {carpeta:
+// contenido-de-extension.json} y devuelve root. Si root es vacío usa un
+// TempDir.
+func writeExtensionDir(t *testing.T, root string, entries map[string]string) string {
 	t.Helper()
-	root := t.TempDir()
+	if root == "" {
+		root = t.TempDir()
+	}
 	for name, src := range entries {
 		dir := filepath.Join(root, name)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -177,7 +298,7 @@ func writeExtensionDir(t *testing.T, entries map[string]string) string {
 // avisa (sin romper) por cada extensión rota.
 func TestLoadExtensionsFromDisk(t *testing.T) {
 	app, _ := newTestApp(t, "uno")
-	root := writeExtensionDir(t, map[string]string{
+	root := writeExtensionDir(t, "", map[string]string{
 		"buena": `{
 			"id": "demo.buena",
 			"name": "Buena",
@@ -211,7 +332,7 @@ func TestLoadExtensionsFromDisk(t *testing.T) {
 // primer root (usuario) gana: su keybinding prevalece sobre el del proyecto.
 func TestLoadExtensionsPrefersFirstRoot(t *testing.T) {
 	app, _ := newTestApp(t, "uno")
-	userRoot := writeExtensionDir(t, map[string]string{
+	userRoot := writeExtensionDir(t, "", map[string]string{
 		"usuario": `{
 			"id": "demo.x",
 			"name": "Usuario",
@@ -222,7 +343,7 @@ func TestLoadExtensionsPrefersFirstRoot(t *testing.T) {
 			}
 		}`,
 	})
-	projRoot := writeExtensionDir(t, map[string]string{
+	projRoot := writeExtensionDir(t, "", map[string]string{
 		"proyecto": `{
 			"id": "demo.x",
 			"name": "Proyecto",
