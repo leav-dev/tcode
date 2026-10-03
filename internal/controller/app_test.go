@@ -3,6 +3,7 @@ package controller
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -168,6 +169,12 @@ func TestCtrlSSavesAndThenEscapeQuits(t *testing.T) {
 func TestSaveErrorIsReportedAndKeepsTheDocumentDirty(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("corriendo como root: los permisos de solo lectura no aplican")
+	}
+	if runtime.GOOS == "windows" {
+		// Go no modela el chmod de solo lectura de un directorio en Windows
+		// (ver TestSaveLeavesTheOriginalIntactOnFailure); este test pasaba acá
+		// por el bug ya corregido del rename sobre archivo mapeado.
+		t.Skip("chmod de solo lectura de directorios no aplica en Windows")
 	}
 
 	dir := t.TempDir()
@@ -1580,8 +1587,9 @@ func TestTabInsertsInTheDocumentWhileTheExplorerIsVisible(t *testing.T) {
 	}
 
 	press(app, tcell.KeyTab)
-	if got := app.ws.Active().GetContent(); got != "\t" {
-		t.Fatalf("contenido = %q, se esperaba %q: Tab inserta con el panel visible", got, "\t")
+	// El tab del editor es la unidad estándar (view.indentUnit): 4 espacios por defecto.
+	if got := app.ws.Active().GetContent(); got != "    " {
+		t.Fatalf("contenido = %q, se esperaba %q: Tab inserta la unidad con el panel visible", got, "    ")
 	}
 	if app.explorerFocused {
 		t.Fatal("Tab con el foco en el editor no debe cambiar el foco")

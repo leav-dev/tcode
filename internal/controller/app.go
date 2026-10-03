@@ -98,6 +98,10 @@ type App struct {
 	// núcleo; los hooks se emiten desde open/save/close.
 	ext *ext.Manager
 
+	// theme es la paleta por rol del editor, cargada de ~/.tcode/theme.json o
+	// la default; se aplica a las vistas (y a cada editor bajo demanda).
+	theme view.Theme
+
 	// extensionRoots son los directorios donde se buscan extensiones, en orden
 	// de precedencia: el primero gana en caso de ids duplicados. Por defecto,
 	// las del usuario y las del proyecto actual; los tests los reemplazan.
@@ -203,6 +207,10 @@ func NewAppWithScreen(s tcell.Screen, path string) (*App, error) {
 	app.extensionRoots = defaultExtensionRoots(app.ws.Root())
 	app.loadExtensions()
 
+	// El tema se aplica a todas las vistas en el arranque; los editores que se
+	// creen bajo demanda lo reciben en activeEditor.
+	app.loadTheme()
+
 	// Los built-ins tcode.* se registran después de armar el App completo: los
 	// handlers cierran sobre el App ya construido.
 	app.registerBuiltins()
@@ -288,6 +296,32 @@ func (a *App) registerBuiltins() {
 		a.switchTab(a.ws.Prev)
 		return nil
 	})
+}
+
+// themeFilePath resuelve el archivo de tema del usuario; es variable para que
+// los tests lo apunten a un directorio temporal.
+var themeFilePath = func() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".tcode", "theme.json")
+}
+
+// loadTheme lee ~/.tcode/theme.json al arranque y aplica la paleta a todas las
+// vistas. Si el archivo falta o el JSON está roto, se usa la default: el tema
+// del usuario jamás rompe el editor.
+func (a *App) loadTheme() {
+	a.theme = view.DefaultTheme()
+	if path := themeFilePath(); path != "" {
+		if data, err := os.ReadFile(path); err == nil {
+			a.theme = view.LoadTheme(data)
+		}
+	}
+	a.statusBar.SetTheme(a.theme)
+	a.tabBar.SetTheme(a.theme)
+	a.explorer.SetTheme(a.theme)
+	a.menu.SetTheme(a.theme)
 }
 
 // defaultExtensionRoots devuelve los directorios de extensiones por defecto:
@@ -381,19 +415,16 @@ func (a *App) bufferAtPath(path string) *model.PieceTable {
 }
 
 // dedupSaveAsConsolidates resuelve el último pendiente de la feature de
-// pestañas: tras un Save As exitoso, si la ruta destino ya estaba abierta en
-// otra pestaña, no puede quedar otro buffer sobre el mismo archivo. El buffer
-// recién guardado se cierra (quedó limpio: su documento ya está en disco) y el
-// existente queda activo, recargado desde disco para ver lo que el Save As
-// acaba de escribir. Declina si el target ya no es la pestaña activa (closeTab
-// cerraría otra) o si la ruta no estaba abierta, y devuelve si consolidó.
-func (a *App) dedupSaveAsConsolidates(target *model.PieceTable, path string) bool {
-	other := a.bufferAtPath(path)
-	if other == nil || other == target {
+// pestañas: tras un Save As exitoso a una ruta que ya estaba abierta en otra
+// pestaña, no puede quedar otro buffer sobre el mismo archivo. other es el
+// buffer que ya ocupaba la ruta, capturado ANTES del SaveAs (después, el target
+// re-apunta su path al destino y una búsqueda por ruta sería ambigua). El
+// buffer recién guardado —la pestaña activa del prompt— se cierra (quedó
+// limpio: su documento ya está en disco) y el existente queda activo y
+// recargado para ver lo escrito. Devuelve si consolidó.
+func (a *App) dedupSaveAsConsolidates(other *model.PieceTable) bool {
+	if other == nil {
 		return false
-	}
-	if a.ws.Active() != target {
-		return false // el flujo raro de Save As: no arriesgar cerrar la pestaña equivocada
 	}
 	a.closeTab()
 	if err := other.Reload(); err != nil {
@@ -402,6 +433,14 @@ func (a *App) dedupSaveAsConsolidates(target *model.PieceTable, path string) boo
 	if ed := a.editors[other]; ed != nil {
 		ed.ClampCursor()
 	}
+	// El buffer existente queda activo (puede no ser el vecino de la activa).
+	for i := 0; i < a.ws.Len(); i++ {
+		if a.ws.BufferAt(i) == other {
+			a.ws.SetActive(i)
+			break
+		}
+	}
+	a.tabBar.EnsureActive(a.ws, a.tabBarWidth())
 	return true
 }
 
@@ -469,6 +508,7 @@ func (a *App) activeEditor() *view.EditorView {
 	}
 	width, height := a.screen.Size()
 	ev := view.NewEditorView(buf, editorHeight(height), width-a.explorerColumn())
+	ev.SetTheme(a.theme)
 	a.editors[buf] = ev
 	return ev
 }
@@ -981,12 +1021,25 @@ func (a *App) saveAs(target *model.PieceTable, path string) {
 		return
 	}
 
+	// Windows no deja renombrar sobre un archivo con una sección mapeada abierta
+	// por el MISMO proceso (ERROR_USER_MAPPED_FILE → "Acceso denegado"): si la
+	// ruta destino ya está abierta en otra pestaña, ese buffer mantiene el mmap
+	// y el rename del Save As fallaría. Se desmapea antes de escribir; el dedup
+	// posterior lo recarga con lo recién escrito. El otro buffer se CAPTURA acá:
+	// después del SaveAs el target re-apunta su path al destino y una búsqueda
+	// por ruta encontraría al target primero (no al existente).
+	var other *model.PieceTable
+	if b := a.bufferAtPath(path); b != nil && b != target {
+		b.Unmap()
+		other = b
+	}
+
 	if err := target.SaveAs(path); err != nil {
 		a.statusBar.SetMessage("Error al guardar como: " + err.Error())
 	} else {
 		a.confirmQuit = false
 		a.clearForceSave()
-		if a.dedupSaveAsConsolidates(target, path) {
+		if a.dedupSaveAsConsolidates(other) {
 			// La ruta ya estaba abierta en otra pestaña: se consolidó en una sola.
 			a.statusBar.SetMessage("Guardado en " + filepath.Base(path) + " — ruta ya abierta: una sola pestaña")
 		} else {

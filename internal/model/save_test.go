@@ -3,6 +3,7 @@ package model
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -209,6 +210,14 @@ func TestSavePreservesFilePermissions(t *testing.T) {
 func TestSaveLeavesTheOriginalIntactOnFailure(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("corriendo como root: los permisos de solo lectura no aplican")
+	}
+	if runtime.GOOS == "windows" {
+		// Go no modela el chmod de solo lectura de un DIRECTORIO en Windows: el
+		// CreateTemp no falla, y antes el Save fallaba acá por el bug del rename
+		// sobre archivo mapeado (ya corregido). El camino de fallo real en
+		// Windows es el ACL, que bloquea CreateTemp; el contrato (original
+		// intacto + doc sucio) lo cubren los tests de error de Save.
+		t.Skip("chmod de solo lectura de directorios no aplica en Windows")
 	}
 
 	dir := t.TempDir()
