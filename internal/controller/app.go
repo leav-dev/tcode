@@ -369,6 +369,42 @@ func (a *App) checkExternalReloads() {
 	}
 }
 
+// bufferAtPath devuelve el buffer abierto sobre path (rutas limpiadas), o nil.
+func (a *App) bufferAtPath(path string) *model.PieceTable {
+	clean := filepath.Clean(path)
+	for _, b := range a.ws.Buffers() {
+		if b.Path() != "" && filepath.Clean(b.Path()) == clean {
+			return b
+		}
+	}
+	return nil
+}
+
+// dedupSaveAsConsolidates resuelve el último pendiente de la feature de
+// pestañas: tras un Save As exitoso, si la ruta destino ya estaba abierta en
+// otra pestaña, no puede quedar otro buffer sobre el mismo archivo. El buffer
+// recién guardado se cierra (quedó limpio: su documento ya está en disco) y el
+// existente queda activo, recargado desde disco para ver lo que el Save As
+// acaba de escribir. Declina si el target ya no es la pestaña activa (closeTab
+// cerraría otra) o si la ruta no estaba abierta, y devuelve si consolidó.
+func (a *App) dedupSaveAsConsolidates(target *model.PieceTable, path string) bool {
+	other := a.bufferAtPath(path)
+	if other == nil || other == target {
+		return false
+	}
+	if a.ws.Active() != target {
+		return false // el flujo raro de Save As: no arriesgar cerrar la pestaña equivocada
+	}
+	a.closeTab()
+	if err := other.Reload(); err != nil {
+		return true // consolidado igual; el error del contenido es del llamador
+	}
+	if ed := a.editors[other]; ed != nil {
+		ed.ClampCursor()
+	}
+	return true
+}
+
 // requireBuffer devuelve el buffer activo o un error legible cuando el
 // workspace está vacío: los comandos que editan no pueden inventarse un
 // documento.
@@ -950,7 +986,12 @@ func (a *App) saveAs(target *model.PieceTable, path string) {
 	} else {
 		a.confirmQuit = false
 		a.clearForceSave()
-		a.statusBar.SetMessage("Guardado en " + filepath.Base(path))
+		if a.dedupSaveAsConsolidates(target, path) {
+			// La ruta ya estaba abierta en otra pestaña: se consolidó en una sola.
+			a.statusBar.SetMessage("Guardado en " + filepath.Base(path) + " — ruta ya abierta: una sola pestaña")
+		} else {
+			a.statusBar.SetMessage("Guardado en " + filepath.Base(path))
+		}
 		a.emitEvent(ext.EventDidSaveBuffer)
 	}
 
