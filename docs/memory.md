@@ -47,6 +47,14 @@ Este archivo registra las decisiones arquitectónicas clave, cambios estructural
   - **Hallazgo de `tcell`:** `NewEventKey(KeyRune, '\n', ...)` **no** produce `KeyRune`. `Key(0x09)` es `KeyTab` (está en la lista de teclas directamente tipeables de tcell, queda sin modificadores), pero `Key('\n')` es `KeyLF` (10), que **no** está en esa lista, así que tcell la marca con `ModCtrl` y la reporta como `KeyLF`. Con la rama de runas exigiendo sin modificadores, el Enter se perdía **en silencio**. Se agregó `KeyLF` junto a `KeyEnter` porque hay terminales y modos que mandan LF crudo.
   - **Decisión:** una runa solo inserta si no tiene `ModCtrl` ni `ModAlt`, para que un atajo nunca escriba texto por accidente.
   - **Lección de test:** usar `End` esperando el final del documento es un error; `End` es de línea y para el documento va `Ctrl+End`. Me pasó dos veces en la misma unidad.
+- *2026-10-03:* **Guardar a disco.** `Save` atómico (temporal en el mismo directorio + renombre), permisos preservados, escritura sobre el destino de un enlace simbólico, recarga del `mmap` tras guardar, marca de modificado, barra de estado y `Ctrl+S` con confirmación de salida. 29 tests nuevos (127 en total: 9 controlador + 46 modelo + 72 vista).
+  - **Hallazgo decisivo:** el guardado *en el lugar* no es solo inseguro, es **inviable**. `O_TRUNC` invalida las páginas del `mmap` antes de que las leamos, así que `writeContent` lee memoria desmapeada y el proceso muere con **SIGBUS**. Lo detectó el test más básico, no el de permisos. Queda registrado con el backtrace en `odd/tasks/save-to-disk.md`.
+  - **Decisión:** tras el renombre hay que **desmapear, reabrir y remapear**, porque el `mmap` y el descriptor apuntan al inodo viejo que el renombre dejó reemplazado. `openAndMap` es lo que comparten la carga inicial y la recarga.
+  - **Decisión:** la confirmación de salida **no** es modal. La primera `Escape` avisa, la segunda sale, y cualquier otra tecla cancela. Evita parsear un `y`/`n`.
+  - **Decisión:** `NewAppWithScreen` permite inyectar la pantalla. Eso hace que el controlador tenga tests reales sin terminal: era el único paquete sin cobertura.
+  - **Gotcha:** `os.CreateTemp` crea con `0600`; sin restaurar el modo del original, guardar un `0644` lo dejaría privado.
+  - **Gotcha:** renombrar encima de un enlace simbólico lo reemplaza por un archivo común. Hay que resolver con `filepath.EvalSymlinks` y escribir sobre el destino.
+  - **Gotcha de test:** `screenLines` reemplaza por un espacio la celda de continuación de un carácter ancho, así que `"日b"` se reconstruye como `"日 b"`. Para aserciones de posición hay que usar `GetContent`.
 
 ## 4. Aprendizajes y Notas
 - **Nota de rendimiento:** Evitar `fmt.Scan` o métodos de entrada estándar; usar exclusivamente `tcell` para no corromper el buffer de pantalla.
@@ -62,4 +70,6 @@ Este archivo registra las decisiones arquitectónicas clave, cambios estructural
 - **Deuda técnica abierta:** el modelo ya soporta `Insert`/`Delete` y hay cursor, pero **el controlador todavía no invoca la edición**: la interfaz sigue siendo de solo lectura. No hay `Save` a disco tampoco.
 - **Deuda técnica cerrada:** el mapeo inverso celda → offset del documento ya existe (`offsetAtColumn`) y el clic del mouse posiciona el cursor.
 - **Deuda técnica abierta (la más urgente):** el editor **edita pero no guarda**. Sin `Save` a disco, todo el trabajo se pierde al salir. Es la unidad siguiente.
-- **Otras deudas:** sin undo/redo (la Piece Table ya lo permite: las piezas viejas no se destruyen), sin indicador de modificado, sin auto-indentación, sin selección ni portapapeles, sin salto de palabra.
+  - **RESUELTO** en `odd/tasks/save-to-disk.md`.
+- **Otras deudas:** sin undo/redo (la Piece Table ya lo permite: las piezas viejas no se destruyen), sin auto-indentación, sin selección ni portapapeles, sin salto de palabra.
+- **Deudas nuevas de `Save`:** sin `Save As`; sin detección de cambios externos (si otro proceso toca el archivo, guardar lo pisa); sin recuperación ante corte (puede quedar un `.tcode-*.tmp`).

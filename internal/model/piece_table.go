@@ -1,12 +1,20 @@
 package model
 
 import (
+	"bufio"
+	"errors"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"sort"
 
 	"github.com/edsrzf/mmap-go"
 )
+
+// ErrNoPath se devuelve al intentar guardar un documento que no tiene archivo
+// asociado.
+var ErrNoPath = errors.New("el documento no tiene archivo asociado")
 
 // Piece es un tramo contiguo del documento que vive entero en uno de los dos
 // buffers. Una vez creada, una pieza nunca se muta: editar es crear y descartar
@@ -33,7 +41,11 @@ type PieceTable struct {
 	pieces         []Piece   // Secuencia ordenada; recorre el documento completo
 	lineOffsets    []int     // Inicios de línea, en coordenadas de documento
 	docLen         int       // Longitud del documento en bytes
-	file           *os.File
+
+	file     *os.File    // Descriptor del archivo mapeado
+	path     string      // Ruta asociada, tal como la dio el usuario
+	mode     os.FileMode // Permisos a preservar al guardar
+	modified bool        // Hay cambios sin guardar
 }
 
 // NewPieceTable inicializa una tabla vacía.
@@ -41,9 +53,27 @@ func NewPieceTable() *PieceTable {
 	return &PieceTable{lineOffsets: []int{0}}
 }
 
+// Path devuelve la ruta del archivo asociado, o "" si no hay ninguno.
+func (pt *PieceTable) Path() string { return pt.path }
+
+// Modified indica si hay cambios sin guardar.
+func (pt *PieceTable) Modified() bool { return pt.modified }
+
 // LoadFile abre un archivo y lo mapea en memoria para lectura eficiente.
 func (pt *PieceTable) LoadFile(path string) error {
-	f, err := os.OpenFile(path, os.O_RDONLY, 0)
+	pt.release()
+	pt.path = path
+	if err := pt.openAndMap(); err != nil {
+		return err
+	}
+	pt.modified = false
+	return nil
+}
+
+// openAndMap abre y mapea pt.path dejando el documento en una sola pieza.
+// Es la operación que comparten la carga inicial y la recarga posterior a guardar.
+func (pt *PieceTable) openAndMap() error {
+	f, err := os.OpenFile(pt.path, os.O_RDONLY, 0)
 	if err != nil {
 		return err
 	}
@@ -54,28 +84,43 @@ func (pt *PieceTable) LoadFile(path string) error {
 		return err
 	}
 
+	pt.file = f
+	pt.mode = info.Mode().Perm()
+	pt.originalBuffer = nil
+	pt.newBuffer = nil
+	pt.pieces = nil
+	pt.lineOffsets = []int{0}
+	pt.docLen = 0
+
 	// mmap no puede mapear 0 bytes: un archivo vacío es un documento vacío.
 	if info.Size() == 0 {
-		pt.file = f
-		pt.originalBuffer = nil
-		pt.pieces = nil
-		pt.lineOffsets = []int{0}
-		pt.docLen = 0
 		return nil
 	}
 
 	mmaped, err := mmap.Map(f, mmap.RDONLY, 0)
 	if err != nil {
 		f.Close()
+		pt.file = nil
 		return err
 	}
 
-	pt.file = f
 	pt.originalBuffer = mmaped
 	pt.pieces = []Piece{{Start: 0, Len: len(mmaped), IsNew: false}}
 	pt.docLen = len(mmaped)
 	pt.rebuildLineOffsets()
 	return nil
+}
+
+// release desmapea y cierra el archivo actual sin tocar la ruta ni el documento.
+func (pt *PieceTable) release() {
+	if pt.originalBuffer != nil {
+		pt.originalBuffer.Unmap()
+		pt.originalBuffer = nil
+	}
+	if pt.file != nil {
+		pt.file.Close()
+		pt.file = nil
+	}
 }
 
 // Len devuelve la longitud del documento en bytes.
@@ -240,6 +285,7 @@ func (pt *PieceTable) Insert(offset int, text string) error {
 
 	pt.docLen += len(text)
 	pt.insertIntoLineOffsets(offset, text)
+	pt.modified = true
 	return nil
 }
 
@@ -308,6 +354,7 @@ func (pt *PieceTable) Delete(start, end int) (int, error) {
 	pt.pieces = kept
 	pt.docLen -= removed
 	pt.deleteFromLineOffsets(start, end)
+	pt.modified = true
 	return removed, nil
 }
 
@@ -409,14 +456,96 @@ func (pt *PieceTable) GetContent() string {
 	return string(pt.slice(0, pt.docLen))
 }
 
-func (pt *PieceTable) Close() error {
-	if pt.originalBuffer != nil {
-		if err := pt.originalBuffer.Unmap(); err != nil {
+// Save escribe el documento a disco de forma atómica.
+//
+// Se escribe a un archivo temporal en el mismo directorio y recién entonces se
+// renombra sobre el original. Un renombre dentro del mismo sistema de archivos es
+// atómico, así que en disco siempre queda el contenido viejo o el nuevo, nunca uno
+// a medias. Escribir en el lugar sería destructivo por dos motivos: un fallo a
+// mitad de camino deja el archivo truncado, y además el archivo está mapeado en
+// memoria, así que sobrescribirlo invalidaría las páginas que estamos leyendo.
+func (pt *PieceTable) Save() error {
+	if pt.path == "" {
+		return ErrNoPath
+	}
+	if !pt.modified {
+		return nil
+	}
+
+	// Si la ruta es un enlace simbólico hay que escribir sobre el destino y no
+	// sobre el enlace: renombrar encima del enlace lo reemplazaría por un archivo
+	// común y el enlace se perdería.
+	target := pt.path
+	if resolved, err := filepath.EvalSymlinks(pt.path); err == nil {
+		target = resolved
+	}
+
+	tmp, err := os.CreateTemp(filepath.Dir(target), ".tcode-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	discard := func() {
+		tmp.Close()
+		os.Remove(tmpName)
+	}
+
+	// El contenido puede abarcar varios buffers, así que se recorre pieza por
+	// pieza con un buffer de escritura en lugar de una syscall por pieza.
+	w := bufio.NewWriterSize(tmp, 64*1024)
+	if err := pt.writeContent(w); err != nil {
+		discard()
+		return err
+	}
+	if err := w.Flush(); err != nil {
+		discard()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		discard()
+		return err
+	}
+	// CreateTemp crea con 0600: hay que devolverle los permisos del original.
+	if err := tmp.Chmod(pt.mode); err != nil {
+		discard()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, target); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+
+	// El contenido ya está en disco de forma duradera.
+	pt.modified = false
+
+	// El mapeo y el descriptor siguen apuntando al inodo viejo, que quedó
+	// reemplazado: hay que reabrir para que las piezas vuelvan a apoyarse en algo
+	// válido y el documento quede en una sola pieza.
+	pt.release()
+	if err := pt.openAndMap(); err != nil {
+		return fmt.Errorf("guardado en disco, pero falló la recarga: %w", err)
+	}
+	return nil
+}
+
+// writeContent vuelca el documento completo en w recorriendo las piezas.
+func (pt *PieceTable) writeContent(w io.Writer) error {
+	for _, p := range pt.pieces {
+		if p.Len == 0 {
+			continue
+		}
+		if _, err := w.Write(pt.buffer(p)[p.Start : p.Start+p.Len]); err != nil {
 			return err
 		}
 	}
-	if pt.file != nil {
-		return pt.file.Close()
-	}
+	return nil
+}
+
+func (pt *PieceTable) Close() error {
+	pt.release()
 	return nil
 }

@@ -47,6 +47,10 @@ func draw(v *EditorView, s tcell.SimulationScreen) {
 }
 
 // screenLines extrae el texto visible de la pantalla simulada como líneas.
+//
+// Ojo: la celda de continuación de un carácter ancho queda sin runas y esta
+// función la reemplaza por un espacio, así que "日b" se reconstruye como "日 b".
+// Para aserciones de posición conviene usar GetContent directamente.
 func screenLines(s tcell.SimulationScreen) []string {
 	cells, width, height := s.GetContents()
 	lines := make([]string, height)
