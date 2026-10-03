@@ -91,8 +91,8 @@ func Load(data []byte) (*Manifest, error) {
 // formato, ids de comando únicos y válidos, eventos de hook en el set
 // permitido y keybindings con la gramática mínima parseable.
 func validate(m *Manifest) error {
-	if err := validateID("id", m.ID); err != nil {
-		return errors.New("id: " + err.Error())
+	if err := validateID(m.ID); err != nil {
+		return fmt.Errorf("id: %w", err)
 	}
 	if m.Version == "" {
 		return errors.New("version: vacío")
@@ -103,7 +103,7 @@ func validate(m *Manifest) error {
 
 	seen := make(map[string]bool, len(m.Contributes.Commands))
 	for i, c := range m.Contributes.Commands {
-		if err := validateID("comando", c.ID); err != nil {
+		if err := validateID(c.ID); err != nil {
 			return fmt.Errorf("comando %d: %w", i, err)
 		}
 		if seen[c.ID] {
@@ -116,7 +116,7 @@ func validate(m *Manifest) error {
 		if !hookEvents[h.Event] {
 			return fmt.Errorf("hook %d: evento desconocido %q", i, h.Event)
 		}
-		if err := validateID("hook", h.Command); err != nil {
+		if err := validateID(h.Command); err != nil {
 			return fmt.Errorf("hook %d: %w", i, err)
 		}
 	}
@@ -125,7 +125,7 @@ func validate(m *Manifest) error {
 		if err := validateBindingKey(k.Key); err != nil {
 			return fmt.Errorf("keybinding %d: %w", i, err)
 		}
-		if err := validateID("keybinding", k.Command); err != nil {
+		if err := validateID(k.Command); err != nil {
 			return fmt.Errorf("keybinding %d: %w", i, err)
 		}
 	}
@@ -135,9 +135,9 @@ func validate(m *Manifest) error {
 // validateID exige un id no vacío que arranque alfanumérico y siga con
 // alfanuméricos, punto, guion o guion bajo: el convenio publisher.nombre
 // entra, y queda fuera cualquier cosa que rompa mensajes o rutas.
-func validateID(field, id string) error {
+func validateID(id string) error {
 	if !idRe.MatchString(id) {
-		return fmt.Errorf("%s: id inválido %q", field, id)
+		return fmt.Errorf("id inválido %q", id)
 	}
 	return nil
 }

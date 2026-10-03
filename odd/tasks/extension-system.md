@@ -39,8 +39,8 @@ Sin command palette, sin explorador de extensiones, sin scripts: eso es la
 evolución siguiente (palette, y el backend de scripting).
 
 ## Tasks
-- [ ] `internal/ext` manifest: tipos (`Manifest`, `Command`, `Keybinding`, `Hook`) + validación: id/versión obligatorios, ids de comando únicos, evento de hook en el set permitido, keybinding parseable <!-- id: 0 -->
-- [ ] `internal/ext` `Discover(dir)`: recorre subdirectorios, lee `extension.json`, salta inválidas acumulando errores sin fallar <!-- id: 1 -->
+- [x] `internal/ext` manifest: tipos (`Manifest`, `Command`, `Keybinding`, `Hook`) + validación: id/versión obligatorios, ids de comando únicos, evento de hook en el set permitido, keybinding parseable <!-- id: 0 -->
+- [x] `internal/ext` `Discover(dir)`: recorre subdirectorios, lee `extension.json`, salta inválidas acumulando errores sin fallar <!-- id: 1 -->
 - [ ] `internal/ext` `Registry`: `Register`/`Has`/`Run` con resultado manejable; comando desconocido → error reportable <!-- id: 2 -->
 - [ ] `internal/ext` keybindings: parser `"ctrl+k"`, mods combinados, F-keys, teclas nombradas, chords `"ctrl+k ctrl+g"`; `Resolve` sobre `tcell.EventKey` con la máquina de estados de chord <!-- id: 3 -->
 - [ ] `internal/ext` hooks + activación: bus `onDidOpenBuffer`/`onDidSaveBuffer`/`onDidCloseBuffer`; activación por `onCommand:<id>`/`onDidOpenBuffer`/`onStartup`/`*` <!-- id: 4 -->
@@ -105,5 +105,25 @@ suficiente para que el parser sea honestamente testeable.
    (la tecla cae al documento o no hace nada).
 
 ## Evidence
-(Rellenar por unidad: falsificaciones observadas RED, verificación gofmt/vet/
-build/test, commit de unidad de trabajo.)
+
+### U0 — manifest y validación · `6d5f2d9`
+- **RED:** los tests no compilan (no existe `Load`/`Manifest`).
+- **GREEN:** `go test ./internal/ext/` en verde; `go vet` limpio; `gofmt` aplicado.
+- **Ajuste:** el mensaje de id inválido duplicaba el prefijo de campo
+  (`id: id: id inválido`); `validateID` devuelve solo el problema y el llamador
+  agrega el campo.
+
+### U1 — descubrimiento · *hash en el próximo update*
+- **RED:** no compila (no existe `Discover`).
+- **Ajuste del test:** la aserción exigía el error exacto `"rota"`; ahora
+  verifica que el error contenga el nombre de la extensión.
+- **GREEN:** los 4 tests de Discover en verde (válidas, rotas acumuladas,
+  carpetas comunes ignoradas, root inexistente sin error).
+
+### Nota de fondo
+- `gofmt -l .` del repo entero no es vacío bajo Go 1.26 (formato previo del
+  repo con otra versión); la verificación de formato cubre los archivos de
+  esta feature, que quedan limpios.
+- `TestWorkspaceNextPrevSingleBufferStaysPut` falla en main (Windows, mmap
+  retiene el archivo durante el cleanup de `TempDir`); pre-existente y ajeno a
+  esta feature (rama con cero diff contra main al inicio).
