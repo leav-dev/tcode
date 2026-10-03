@@ -1,11 +1,15 @@
 package view
 
 import (
-	"unicode/utf8"
+	"unsafe"
 
 	"github.com/gdamore/tcell/v2"
+	"github.com/rivo/uniseg"
 	"tcode/internal/model"
 )
+
+// tabWidth es la cantidad de columnas a la que se expande una tabulación.
+const tabWidth = 4
 
 // Viewport controla qué región del documento se proyecta en la pantalla.
 type Viewport struct {
@@ -44,29 +48,57 @@ func (v *EditorView) Resize(width, height int) {
 	v.clamp()
 }
 
-// Draw solo recorre las líneas visibles y decodifica UTF-8 sin alocar.
+// Draw renderiza solo las líneas visibles avanzando por *grapheme cluster* con su
+// ancho monoespaciado real.
+//
+// La columna lógica se cuenta en celdas de terminal, no en runas: un cluster
+// puede ocupar 0 celdas (combinante huérfano), 1 (ASCII), 2 (CJK, emoji) o más.
+// Contar runas desalinea las columnas y rompe el hit testing del mouse.
 func (v *EditorView) Draw(s tcell.Screen) {
 	content := v.model.GetRange(v.viewport.TopLine, v.viewport.TopLine+v.viewport.Height)
+	if len(content) == 0 {
+		return
+	}
+
+	// Vista de string sin copia sobre los bytes del mmap. Es segura porque el
+	// mapeo es de solo lectura y tanto uniseg como tcell únicamente leen a
+	// través de ella; ninguna de las dos la retiene más allá de este método.
+	text := unsafe.String(&content[0], len(content))
 
 	row := 0 // fila física en pantalla
-	col := 0 // columna lógica dentro de la línea
-	for i := 0; i < len(content) && row < v.viewport.Height; {
-		r, size := utf8.DecodeRune(content[i:])
-		i += size
+	col := 0 // columna lógica en celdas de terminal
+	g := uniseg.NewGraphemes(text)
+	for g.Next() && row < v.viewport.Height {
+		cluster := g.Str()
 
-		if r == '\n' {
+		switch cluster {
+		case "\n", "\r\n":
 			row++
+			col = 0
+			continue
+		case "\r":
+			// Retorno de carro aislado: vuelve al inicio de la misma fila.
 			col = 0
 			continue
 		}
 
-		if col >= v.viewport.LeftColumn {
-			x := col - v.viewport.LeftColumn
-			if x < v.viewport.Width {
-				s.SetContent(x, row, r, nil, tcell.StyleDefault)
-			}
+		width := g.Width()
+		switch {
+		case cluster == "\t":
+			width = tabWidth - col%tabWidth
+		case width <= 0:
+			// Cluster sin celda propia (combinante huérfano): no hay dónde anclarlo.
+			continue
 		}
-		col++
+
+		x := col - v.viewport.LeftColumn
+		// Solo se dibuja un cluster que entre completo: escribir uno ancho en la
+		// última celda pisaría la celda de continuación que marca tcell.
+		// Las tabulaciones no se dibujan; la pantalla ya viene limpia.
+		if x >= 0 && x+width <= v.viewport.Width && cluster != "\t" {
+			s.Put(x, row, cluster, tcell.StyleDefault)
+		}
+		col += width
 	}
 }
 

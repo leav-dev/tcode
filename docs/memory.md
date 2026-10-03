@@ -24,6 +24,11 @@ Este archivo registra las decisiones arquitectónicas clave, cambios estructural
   - **Decisión:** el loop de eventos es síncrono, sin goroutine; el único camino de redibujado es `App.redraw()`.
 - *2024-05-23:* **Preparación del repositorio y primer commit.** Rama renombrada de `master` a `main`, remoto `origin` apuntando a `git@github.com:leav-dev/tcode.git`, `.gitignore` extendido para Go y artefactos de editor. Commit raíz **`fc07fa0`** (`feat: bootstrap tcode with MVC scaffold and efficient viewport`, 14 archivos, 1009 líneas) pusheado a `origin/main`. Verificado con el worktree limpio: `go vet`, `gofmt -l` y `go test -race` sobre el snapshot exacto.
   - **Estado del switch RDD:** `gentle-ai review mode status` → **off** (global y clone-local unset), por lo que no aplica el preflight de native review en este candidato.
+- *2026-10-03:* **Ancho de caracteres correcto (grapheme clusters).** `Draw` dejó de asumir 1 celda por runa: ahora itera con `uniseg` y avanza la columna lógica por `Width()`, medida en celdas de terminal. Se cubren CJK, acentos combinantes, emoji ZWJ, tabulaciones, CRLF/CR y el borde derecho. 10 tests nuevos, **9 de 10 verificados como detectores de la regresión** (se revirtió `Draw` con `git stash` y fallan contra la implementación vieja).
+  - **Hallazgo:** `tcell.Screen.SetContent` está deprecado y hace `string(append([]rune{mainc}, combc...))`, o sea dos *allocations* por celda. `tcell.Screen.Put` recibe el cluster como `string`, es *grapheme-aware* por dentro y evita ambas. `Draw` ahora usa `Put`.
+  - **Hallazgo:** `uniseg.Graphemes.Bytes()` aloca (`[]byte(g.cluster)`); `Str()` devuelve un substring sin alocar. Se usa `Str()`.
+  - **Decisión:** el texto visible se expone con `unsafe.String` sobre los bytes del `mmap` para no copiar la ventana en cada frame. Seguro porque el mapeo es de solo lectura y nadie retiene la vista más allá de `Draw`.
+  - **Decisión:** `uniseg` promovido de dependencia indirecta a directa (`go mod tidy`).
 
 ## 4. Aprendizajes y Notas
 - **Nota de rendimiento:** Evitar `fmt.Scan` o métodos de entrada estándar; usar exclusivamente `tcell` para no corromper el buffer de pantalla.
@@ -32,3 +37,7 @@ Este archivo registra las decisiones arquitectónicas clave, cambios estructural
 - **Gotcha de `mmap`:** no se puede mapear un archivo de 0 bytes (`invalid argument`). Verificar `Stat().Size()` antes de mapear.
 - **Gotcha de `mmap` (segundo):** `[]byte` no tiene método `Unmap`; hay que conservar el `mmap.MMap` original para poder desmapear.
 - **Deuda técnica registrada:** el render asume 1 celda por runa, por lo que los caracteres anchos (CJK, emoji) y los *grapheme clusters* desalinean las columnas. Pendiente: `github.com/rivo/uniseg` (ya está en el árbol de dependencias de `tcell`).
+  - **RESUELTO** en `odd/tasks/character-width.md`.
+- **Gotcha de `tcell`:** `SetContent` está deprecado y aloca dos veces por celda. Usar `Put(x, y, cluster, style)`, que además es *grapheme-aware*.
+- **Gotcha de `uniseg`:** `Graphemes.Bytes()` aloca; `Graphemes.Str()` no.
+- **Deuda técnica abierta:** no existe el mapeo inverso celda → offset del documento, que el hit testing del mouse va a necesitar cuando se implemente el click.
