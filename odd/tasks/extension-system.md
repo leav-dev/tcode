@@ -43,13 +43,11 @@ evolución siguiente (palette, y el backend de scripting).
 - [x] `internal/ext` `Discover(dir)`: recorre subdirectorios, lee `extension.json`, salta inválidas acumulando errores sin fallar <!-- id: 1 -->
 - [x] `internal/ext` `Registry`: `Register`/`Has`/`Run` con resultado manejable; comando desconocido → error reportable <!-- id: 2 -->
 - [x] `internal/ext` keybindings: parser `"ctrl+k"`, mods combinados, F-keys, teclas nombradas, chords `"ctrl+k ctrl+g"`; `Resolve` sobre `tcell.EventKey` con la máquina de estados de chord <!-- id: 3 -->
-
-*U3 (keybindings) — hash en el próximo update.*
 - [x] `internal/ext` hooks + activación: bus `onDidOpenBuffer`/`onDidSaveBuffer`/`onDidCloseBuffer`; activación por `onCommand:<id>`/`onDidOpenBuffer`/`onStartup`/`*` <!-- id: 4 -->
+- [x] Controller: `App` crea el `Manager` con `NewAppWithScreen`; built-ins `tcode.*` (save, saveAs, closeTab, toggleExplorer, undo, redo, switchTabNext/Prev) registrados contra acciones existentes; resolución de keybindings en `handleEvent` después de los atajos del núcleo; emisión de hooks en open/save/close; mensajes de estado (activación, comando desconocido, error) <!-- id: 5 -->
+- [x] Rutas reales de descubrimiento (usuario `~/.tcode/extensions` + proyecto `.tcode/extensions`) con override para tests; `docs/extension-system.md` (spec del manifest, ejemplo completo, referencia de keybindings, roadmap a backend WASM/Lua y palette) <!-- id: 6 -->
 
-*U4 (manager) — hash en el próximo update.*
-- [ ] Controller: `App` crea el `Manager` con `NewAppWithScreen`; built-ins `tcode.*` (save, saveAs, closeTab, toggleExplorer, undo, redo, switchTabNext/Prev) registrados contra acciones existentes; resolución de keybindings en `handleEvent` después del switch del núcleo y antes del guard de workspace vacío; emisión de hooks en open/save/close; mensajes de estado (activación, comando desconocido, error) <!-- id: 5 -->
-- [ ] Rutas reales de descubrimiento (usuario `~/.tcode/extensions` + proyecto `.tcode/extensions`) con override para tests; `docs/extension-system.md` (spec del manifest, ejemplo completo, referencia de keybindings, roadmap a backend WASM/Lua y palette) <!-- id: 6 -->
+*U6 (raíces + docs) — hash en el próximo update.*
 - [ ] Tests de integración del controlador (`SimulationScreen`): built-in por keybinding de extensión, chord de dos tiempos, hook en save/open/close, activación diferida, extensión rota en disco no rompe el arranque <!-- id: 7 -->
 - [ ] Verificación final: `gofmt -l .`, `go vet ./...`, `go build ./...`, `go test ./...` completo en verde <!-- id: 8 -->
 
@@ -118,6 +116,28 @@ suficiente para que el parser sea honestamente testeable.
   agrega el campo.
 
 ### U1 — descubrimiento · `d2775a5`
+
+### U3 — keybindings · `a017eeb`
+- **RED:** no compilaron los tests del resolver.
+- **Descubrimiento:** tcell codifica las letras como clave ASCII mayúscula
+  (`Key('K')`) mientras la runa real viaja en `Rune()`; la identidad del
+  evento se decide por la runa normalizada a minúscula, con mods exactos. En
+  la integración (U5) se sumó la normalización de `KeyCtrlA..KeyCtrlZ`.
+
+### U4 — manager, hooks y activación · `15b8e3f`
+- **RED:** no compilaron los tests del Manager.
+- **GREEN:** 7 tests en verde (arranque, activación diferida, onCommand,
+  resolución estática pre-activación, error de hook acumulado, `*`, duplicados).
+
+### U5 — integración en el controlador · `36bafd3`
+- **RED:** la suite arrojó 8 fails nuevos... que resultaron IDÉNTICOS al set
+  pre-existente del host (stash contra main: sets iguales, 0 nuevos).
+- **GREEN:** 5 tests de integración en verde (binding→builtin, fallthrough al
+  documento, hook on-close, stub con activación + mensaje, comando desconocido).
+- **Ajustes:** `StatusBar.Message()` (getter para tests, como `Label()`);
+  normalización `KeyCtrlA..Z` en `pressFromEvent`; `ActivateEvent(onStartup)`
+  al cierre del arranque. Bug del test propio: aserción de inactividad era un
+  doble negativo, corregido.
 
 ### U2 — registro de comandos · `d779ba2`
 - **RED:** no compila (no existe `NewRegistry`/`ErrUnknownCommand`).

@@ -92,6 +92,11 @@ type App struct {
 	// handleEvent resuelve las teclas de extensión después de los atajos del
 	// núcleo; los hooks se emiten desde open/save/close.
 	ext *ext.Manager
+
+	// extensionRoots son los directorios donde se buscan extensiones, en orden
+	// de precedencia: el primero gana en caso de ids duplicados. Por defecto,
+	// las del usuario y las del proyecto actual; los tests los reemplazan.
+	extensionRoots []string
 }
 
 // NewApp inicializa la terminal y carga el archivo indicado (si path != "").
@@ -188,10 +193,13 @@ func NewAppWithScreen(s tcell.Screen, path string) (*App, error) {
 		app.explorer.SetRootEntries(nil)
 	}
 
+	// Las extensiones de disco se cargan ANTES de los built-ins: sus comandos
+	// declarados no pueden piser a tcode.*.
+	app.extensionRoots = defaultExtensionRoots(app.ws.Root())
+	app.loadExtensions()
+
 	// Los built-ins tcode.* se registran después de armar el App completo: los
-	// handlers cierran sobre el App ya construido. Las extensiones que se
-	// carguen de disco (T6) se agregan ANTES de esto, para que sus comandos
-	// declarados no pisen ningún built-in.
+	// handlers cierran sobre el App ya construido.
 	app.registerBuiltins()
 
 	// El arranque activa las extensiones que lo declaran (onStartup/*). Con el
@@ -275,6 +283,33 @@ func (a *App) registerBuiltins() {
 		a.switchTab(a.ws.Prev)
 		return nil
 	})
+}
+
+// defaultExtensionRoots devuelve los directorios de extensiones por defecto:
+// las del proyecto (`.tcode/extensions` bajo la raíz de la sesión) y las del
+// usuario (~/.tcode/extensions). El primer root gana ante ids duplicados, así
+// que las del usuario preceden.
+func defaultExtensionRoots(root string) []string {
+	roots := []string{filepath.Join(root, ".tcode", "extensions")}
+	if home, err := os.UserHomeDir(); err == nil {
+		roots = append(roots, filepath.Join(home, ".tcode", "extensions"))
+	}
+	return roots
+}
+
+// loadExtensions descubre las extensiones de cada root y las agrega al
+// manager. Cada extensión rota se avisa en la barra de estado una vez; el
+// arranque nunca falla por una extensión quebrada.
+func (a *App) loadExtensions() {
+	var exts []ext.Extension
+	for _, root := range a.extensionRoots {
+		found, errs := ext.Discover(root)
+		exts = append(exts, found...)
+		for _, e := range errs {
+			a.statusBar.SetMessage("Extensión ignorada: " + e.Error())
+		}
+	}
+	a.ext.AddExtensions(exts)
 }
 
 // requireBuffer devuelve el buffer activo o un error legible cuando el

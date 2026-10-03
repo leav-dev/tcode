@@ -1,6 +1,8 @@
 package controller
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -150,5 +152,91 @@ func TestExtensionUnknownCommandShowsStatus(t *testing.T) {
 	msg := app.statusBar.Message()
 	if !strings.Contains(msg, "desconocido") || !strings.Contains(msg, "tcode.noexiste") {
 		t.Errorf("mensaje = %q, esperaba comando desconocido con su id", msg)
+	}
+}
+
+// writeExtensionDir materializa un root de extensiones con las entradas dadas
+// {carpeta: contenido-de-extension.json} y lo devuelve como root.
+func writeExtensionDir(t *testing.T, entries map[string]string) string {
+	t.Helper()
+	root := t.TempDir()
+	for name, src := range entries {
+		dir := filepath.Join(root, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll %s: %v", dir, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "extension.json"), []byte(src), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+	return root
+}
+
+// TestLoadExtensionsFromDisk: el cargador descubre las extensiones de las
+// raíces configuradas, registra sus stubs, deja sus keybindings activos y
+// avisa (sin romper) por cada extensión rota.
+func TestLoadExtensionsFromDisk(t *testing.T) {
+	app, _ := newTestApp(t, "uno")
+	root := writeExtensionDir(t, map[string]string{
+		"buena": `{
+			"id": "demo.buena",
+			"name": "Buena",
+			"version": "1.0.0",
+			"activation": ["onStartup"],
+			"contributes": {
+				"commands": [{"id": "demo.buena.hola"}],
+				"keybindings": [{"key": "ctrl+k", "command": "tcode.toggleExplorer"}]
+			}
+		}`,
+		"rota": `{ json roto`,
+	})
+	app.extensionRoots = []string{root}
+	app.loadExtensions()
+
+	if !app.ext.Registry().Has("demo.buena.hola") {
+		t.Fatal("el stub del comando declarado no se registró desde disco")
+	}
+	// El keybinding del disco está activo: resuelve el built-in.
+	// Se activa el startup recién agregado como hace el arranque.
+	app.ext.ActivateEvent(ext.ActivateStartup)
+	if got := app.ext.Resolve(tcell.NewEventKey(tcell.KeyRune, 'k', tcell.ModCtrl)); got != "tcode.toggleExplorer" {
+		t.Fatalf("Resolve desde disco = %q, esperaba tcode.toggleExplorer", got)
+	}
+	if msg := app.statusBar.Message(); !strings.Contains(msg, "rota") {
+		t.Errorf("mensaje = %q, esperaba el aviso de la extensión rota", msg)
+	}
+}
+
+// TestLoadExtensionsPrefersFirstRoot: ante ids duplicados entre raíces, el
+// primer root (usuario) gana: su keybinding prevalece sobre el del proyecto.
+func TestLoadExtensionsPrefersFirstRoot(t *testing.T) {
+	app, _ := newTestApp(t, "uno")
+	userRoot := writeExtensionDir(t, map[string]string{
+		"usuario": `{
+			"id": "demo.x",
+			"name": "Usuario",
+			"version": "1.0.0",
+			"activation": ["onStartup"],
+			"contributes": {
+				"keybindings": [{"key": "ctrl+k", "command": "cmd.usuario"}]
+			}
+		}`,
+	})
+	projRoot := writeExtensionDir(t, map[string]string{
+		"proyecto": `{
+			"id": "demo.x",
+			"name": "Proyecto",
+			"version": "1.0.0",
+			"activation": ["onStartup"],
+			"contributes": {
+				"keybindings": [{"key": "ctrl+k", "command": "cmd.proyecto"}]
+			}
+		}`,
+	})
+	app.extensionRoots = []string{userRoot, projRoot}
+	app.loadExtensions()
+
+	if got := app.ext.Resolve(tcell.NewEventKey(tcell.KeyRune, 'k', tcell.ModCtrl)); got != "cmd.usuario" {
+		t.Fatalf("Resolve = %q, esperaba el keybinding del primer root (usuario)", got)
 	}
 }
