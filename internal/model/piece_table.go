@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/edsrzf/mmap-go"
 )
@@ -52,6 +53,10 @@ type PieceTable struct {
 	undo    []Change
 	redo    []Change
 	savedAt int // len(undo) en el último guardado; noSavedAt si quedó inalcanzable
+
+	// typingGroupBroken corta la fusión del próximo cambio con el anterior. Lo usan
+	// el movimiento del cursor y deshacer/rehacer, que terminan un grupo de tipeo.
+	typingGroupBroken bool
 }
 
 // noSavedAt marca que el estado guardado ya no es alcanzable con deshacer/rehacer.
@@ -449,6 +454,33 @@ func (pt *PieceTable) deleteFromLineOffsets(start, end int) {
 	pt.lineOffsets = out
 }
 
+// BreakTypingGroup cierra el grupo de tipeo actual: el próximo cambio no se fusiona
+// con los anteriores. Lo llama todo lo que interrumpe el tipeo continuo, como mover
+// el cursor.
+func (pt *PieceTable) BreakTypingGroup() { pt.typingGroupBroken = true }
+
+// canExtendTypingGroup decide si una inserción continúa el grupo de tipeo anterior.
+//
+// Se fusionan solo inserciones contiguas y sin saltos de línea. Así escribir una
+// palabra es un solo paso de deshacer, pero el Enter sigue siendo un paso propio y
+// nada se fusiona por encima de un salto.
+func (pt *PieceTable) canExtendTypingGroup(c Change) bool {
+	if c.Inserted == "" || c.Removed != "" || strings.Contains(c.Inserted, "\n") {
+		return false
+	}
+	if len(pt.undo) == 0 {
+		return false
+	}
+
+	last := pt.undo[len(pt.undo)-1]
+	if last.Inserted == "" || last.Removed != "" || strings.Contains(last.Inserted, "\n") {
+		return false
+	}
+
+	// Contiguo: lo nuevo empieza justo donde terminó lo anterior.
+	return last.Offset+len(last.Inserted) == c.Offset
+}
+
 // record apila un cambio y descarta la rama de rehacer.
 func (pt *PieceTable) record(c Change) {
 	// Deshacer y después editar descarta la rama de rehacer. Si el punto de
@@ -458,8 +490,16 @@ func (pt *PieceTable) record(c Change) {
 	if pt.savedAt > len(pt.undo) {
 		pt.savedAt = noSavedAt
 	}
-	pt.undo = append(pt.undo, c)
+
+	merge := !pt.typingGroupBroken && pt.canExtendTypingGroup(c)
+	pt.typingGroupBroken = false
+
 	pt.redo = nil
+	if merge {
+		pt.undo[len(pt.undo)-1].Inserted += c.Inserted
+		return
+	}
+	pt.undo = append(pt.undo, c)
 }
 
 // Undo deshace la última edición y devuelve el cambio aplicado.
@@ -477,6 +517,9 @@ func (pt *PieceTable) Undo() (Change, bool, error) {
 		pt.undo = append(pt.undo, c)
 		return Change{}, false, err
 	}
+	// Deshacer termina el grupo de tipeo: lo que se escriba después no puede
+	// fusionarse con un cambio que ya quedó atrás en el historial.
+	pt.typingGroupBroken = true
 	pt.redo = append(pt.redo, c)
 	return c, true, nil
 }
@@ -494,6 +537,8 @@ func (pt *PieceTable) Redo() (Change, bool, error) {
 		pt.redo = append(pt.redo, c)
 		return Change{}, false, err
 	}
+	// Rehacer también termina el grupo: el próximo tipeo es un cambio nuevo.
+	pt.typingGroupBroken = true
 	pt.undo = append(pt.undo, c)
 	return c, true, nil
 }

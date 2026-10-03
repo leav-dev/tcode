@@ -103,8 +103,13 @@ func TestRedoReappliesTheEdit(t *testing.T) {
 func TestUndoAndRedoAreLIFO(t *testing.T) {
 	pt := loadTable(t, "")
 
+	// Cada inserción en su propio paso de historial: este test verifica el orden
+	// LIFO, no la fusión del tipeo continuo (estas inserciones son contiguas).
+	pt.BreakTypingGroup()
 	applyInsert(t, pt, 0, "uno")
+	pt.BreakTypingGroup()
 	applyInsert(t, pt, 3, " dos")
+	pt.BreakTypingGroup()
 	applyInsert(t, pt, 7, " tres")
 	if got := pt.GetContent(); got != "uno dos tres" {
 		t.Fatalf("contenido = %q", got)
@@ -250,7 +255,9 @@ func TestBranchingAfterUndoKeepsTheDocumentDirty(t *testing.T) {
 	path := newFileWithContent(t, "hola")
 	pt := openTable(t, path)
 
+	pt.BreakTypingGroup()
 	applyInsert(t, pt, 0, "A") // historial: 1
+	pt.BreakTypingGroup()
 	applyInsert(t, pt, 1, "B") // historial: 2
 	if err := pt.Save(); err != nil {
 		t.Fatalf("Save falló: %v", err)
@@ -341,9 +348,13 @@ func TestUndoRedoMatchesReference(t *testing.T) {
 	}
 	fragments := []string{"a", "b", " ", "\n", "é", "日", "XY", "\n\n", "Z"}
 
-	// 120 ediciones, la mitad borrados.
+	// 120 ediciones, la mitad borrados. Cada edición se corta en su propio paso de
+	// historial: este test verifica que las inversas sean exactas contra un estado
+	// de referencia por edición, no la política de agrupación de tipeo, que tiene
+	// sus propios tests.
 	for i := 0; i < 120; i++ {
 		ref := states[len(states)-1]
+		pt.BreakTypingGroup()
 
 		if next(2) == 0 && len(ref) > 0 {
 			start := next(len(ref))
@@ -417,7 +428,10 @@ func TestUndoRedoMatchesReference(t *testing.T) {
 func TestUndoRedoRoundTripKeepsHistoryConsistent(t *testing.T) {
 	pt := loadTable(t, "base")
 
+	// Cada inserción se corta en su propio paso: el test verifica el ida y vuelta
+	// del historial, no la fusión del tipeo continuo.
 	for i := 0; i < 10; i++ {
+		pt.BreakTypingGroup()
 		applyInsert(t, pt, pt.Len(), "x")
 	}
 	edits := 10

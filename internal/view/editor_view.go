@@ -187,9 +187,14 @@ func (v *EditorView) setCursorAt(docOffset int) {
 	v.cursor.desiredCol = columnAt(content, col)
 }
 
+// breakTypingGroup corta el grupo de tipeo acumulado. Mover el cursor separa lo
+// que se escribió antes de lo que se escriba después: son dos pasos de deshacer.
+func (v *EditorView) breakTypingGroup() { v.model.BreakTypingGroup() }
+
 // moveCursorToCell mueve el cursor a la celda de pantalla indicada. Es el hit
 // testing del mouse: convierte (x, y) en (línea, byte) con el ancho real.
 func (v *EditorView) moveCursorToCell(x, y int) bool {
+	v.breakTypingGroup()
 	line := v.viewport.TopLine + y
 	if lines := v.lineCount(); lines == 0 || line < 0 || line >= lines {
 		return false
@@ -210,6 +215,7 @@ func (v *EditorView) moveCursorToCell(x, y int) bool {
 // moveHorizontal avanza o retrocede un grapheme cluster, cruzando de línea en los
 // extremos.
 func (v *EditorView) moveHorizontal(delta int) bool {
+	v.breakTypingGroup()
 	if delta == 0 {
 		return false
 	}
@@ -244,6 +250,7 @@ func (v *EditorView) moveHorizontal(delta int) bool {
 // moveVertical mueve el cursor de línea conservando la columna deseada, que es lo
 // que evita que el cursor se pegue al final de las líneas cortas.
 func (v *EditorView) moveVertical(delta int) bool {
+	v.breakTypingGroup()
 	lines := v.lineCount()
 	if lines == 0 || delta == 0 {
 		return false
@@ -267,6 +274,7 @@ func (v *EditorView) moveVertical(delta int) bool {
 }
 
 func (v *EditorView) moveLineStart() bool {
+	v.breakTypingGroup()
 	if v.cursor.ByteCol == 0 {
 		return false
 	}
@@ -276,6 +284,7 @@ func (v *EditorView) moveLineStart() bool {
 }
 
 func (v *EditorView) moveLineEnd() bool {
+	v.breakTypingGroup()
 	content := v.model.LineContent(v.cursor.Line)
 	if v.cursor.ByteCol == len(content) {
 		return false
@@ -286,6 +295,7 @@ func (v *EditorView) moveLineEnd() bool {
 }
 
 func (v *EditorView) moveDocStart() bool {
+	v.breakTypingGroup()
 	if v.cursor.Line == 0 && v.cursor.ByteCol == 0 {
 		return false
 	}
@@ -296,6 +306,7 @@ func (v *EditorView) moveDocStart() bool {
 }
 
 func (v *EditorView) moveDocEnd() bool {
+	v.breakTypingGroup()
 	lines := v.lineCount()
 	if lines == 0 {
 		return false

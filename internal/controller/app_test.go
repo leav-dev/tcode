@@ -308,6 +308,44 @@ func TestUndoThenEscapeQuitsWithoutAsking(t *testing.T) {
 	}
 }
 
+// TestTypingCoalescesIntoOneUndoInTheEditor verifica la agrupación de punta a
+// punta: escribir una palabra y un solo Ctrl+Z la borra entera.
+func TestTypingCoalescesIntoOneUndoInTheEditor(t *testing.T) {
+	app, _ := newTestApp(t, "")
+
+	typeString(app, "hola")
+	if got := app.model.GetContent(); got != "hola" {
+		t.Fatalf("contenido = %q", got)
+	}
+
+	press(app, tcell.KeyCtrlZ)
+
+	if got := app.model.GetContent(); got != "" {
+		t.Fatalf("tras un Ctrl+Z, contenido = %q, se esperaba vacío", got)
+	}
+}
+
+// TestMovingTheCursorEndsTheTypingGroup comprueba que el movimiento del cursor
+// corte el grupo aunque se vuelva a la misma posición.
+func TestMovingTheCursorEndsTheTypingGroup(t *testing.T) {
+	app, _ := newTestApp(t, "xy")
+
+	typeString(app, "ab")
+	press(app, tcell.KeyLeft)
+	press(app, tcell.KeyRight)
+	typeString(app, "cd")
+
+	if got := app.model.GetContent(); got != "abcdxy" {
+		t.Fatalf("contenido = %q", got)
+	}
+
+	press(app, tcell.KeyCtrlZ)
+
+	if got := app.model.GetContent(); got != "abxy" {
+		t.Fatalf("tras un Ctrl+Z, contenido = %q, se esperaba %q", got, "abxy")
+	}
+}
+
 func TestResizeKeepsTheStatusRow(t *testing.T) {
 	app, _ := newTestApp(t, "uno")
 
