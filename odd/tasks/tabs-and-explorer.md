@@ -38,6 +38,11 @@ Se parte en dos para que el review no mezcle refactor con feature.
   (c) arreglar el tamaño determinista de la pantalla en los tests (`SetSize`
   **después** de `NewAppWithScreen`). En la evidencia: `322cf62`.
 
+  **Layout final (ajuste posterior):** la fila de pestañas se renderiza SOLO sobre
+  el área del editor —arranca en la columna del panel del árbol y su desplazamiento
+  usa ese ancho—; el árbol nunca tiene pestañas encima. La TabBar dibuja sobre la
+  misma `Surface` reusada que el resto de los panes.
+
 ### U3 — FileBrowser y modos de arranque (`odd/tasks/file-browser.md`)
 Panel lateral a la izquierda sobre el root de la sesión, listado de una columna
 navegable (dirs primero, `Enter` desciende/abre, `..` sube), `Ctrl+B` lo

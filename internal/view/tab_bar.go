@@ -43,13 +43,18 @@ func tabLabelWidth(ws *model.Workspace, i int) int {
 	return displayWidth(tabLabel(ws.BufferAt(i)))
 }
 
-// Draw pinta la fila 0 completa de sc: las pestañas de ws. La activa va en
-// estilo invertido y las demás con el estilo por defecto; entre pestañas hay
-// un separador de una columna. Si no entran todas, la ventana (`start`) se
+// Draw pinta la fila 0 entera de su superficie: las pestañas de ws. La activa
+// va en estilo invertido y las demás con el estilo por defecto; entre pestañas
+// hay un separador de una columna. Si no entran todas, la ventana (`start`) se
 // recorre y las flechas '<' y '>' marcan que hay más a cada lado. Una pestaña
 // que no entra entera se trunca mostrando su inicio —con '…' en la última
 // celda si hay lugar— y corta la fila.
-func (tb *TabBar) Draw(sc tcell.Screen, ws *model.Workspace, width int) {
+//
+// Dibuja sobre una Surface y no sobre la pantalla para que quien compone —el
+// controlador— la desplace: las pestañas viven sobre el área del editor, no
+// sobre el panel del árbol, y el offset lo pone el OffsetSurface igual que
+// para el editor.
+func (tb *TabBar) Draw(sc Surface, ws *model.Workspace, width int) {
 	if width <= 0 {
 		return
 	}

@@ -228,6 +228,14 @@ func (a *App) explorerColumn() int {
 	return panelWidth(width)
 }
 
+// tabBarWidth es el ancho de la fila de pestañas: el del área de trabajo según
+// el panel. Las pestañas se renderizan sobre el editor, nunca sobre el árbol;
+// el ancho disponible para ellas —y para su desplazamiento— es el del editor.
+func (a *App) tabBarWidth() int {
+	width, _ := a.screen.Size()
+	return width - a.explorerColumn()
+}
+
 func (a *App) syncStatus() {
 	buf := a.activeBuffer()
 	if buf == nil {
@@ -460,7 +468,7 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		a.resizeEditors()
 		// El ancho nuevo también reencuadra la fila de pestañas: entra más (o
 		// menos) de ella, y la activa tiene que seguir visible.
-		a.tabBar.EnsureActive(a.ws, width)
+		a.tabBar.EnsureActive(a.ws, a.tabBarWidth())
 		a.explorer.Resize(panelWidth(width), editorHeight(height))
 		a.redraw()
 	}
@@ -668,22 +676,26 @@ func (a *App) redraw() {
 	width, height := a.screen.Size()
 	a.screen.Clear()
 
-	a.tabBar.Draw(a.screen, a.ws, width)
+	if a.editorSurf == nil {
+		a.editorSurf = view.NewOffsetSurface(a.screen)
+	}
+
+	// La fila de pestañas vive SOBRE el área de trabajo —la del editor—, no
+	// sobre el panel del árbol: arranca en la columna del editor, y con el
+	// panel oculto es la columna 0 (el layout de siempre). Es el mismo uso de
+	// la costura que para el editor: la superficie se reencuadra por pane.
+	tabW := a.tabBarWidth()
+	a.editorSurf.SetRegion(a.explorerColumn(), 0, tabW, tabBarHeight)
+	a.tabBar.Draw(a.editorSurf, a.ws, tabW)
 
 	panelW := 0
 	if a.explorerVisible {
 		panelW = panelWidth(width)
-		if a.editorSurf == nil {
-			a.editorSurf = view.NewOffsetSurface(a.screen)
-		}
 		a.editorSurf.SetRegion(0, tabBarHeight, panelW, editorHeight(height))
 		a.explorer.Draw(a.editorSurf)
 	}
 
 	if ed := a.activeEditor(); ed != nil {
-		if a.editorSurf == nil {
-			a.editorSurf = view.NewOffsetSurface(a.screen)
-		}
 		a.editorSurf.SetRegion(panelW, tabBarHeight, width-panelW, editorHeight(height))
 		ed.Draw(a.editorSurf)
 	} else {
@@ -810,8 +822,7 @@ func (a *App) switchTab(move func() *model.PieceTable) {
 	a.confirmClose = false
 	a.clearForceSave()
 	a.syncStatus()
-	width, _ := a.screen.Size()
-	a.tabBar.EnsureActive(a.ws, width)
+	a.tabBar.EnsureActive(a.ws, a.tabBarWidth())
 	a.redraw()
 }
 
@@ -842,8 +853,7 @@ func (a *App) menuSwitchTab() {
 	a.confirmQuit = false
 	a.confirmClose = false
 	a.clearForceSave()
-	width, _ := a.screen.Size()
-	a.tabBar.EnsureActive(a.ws, width)
+	a.tabBar.EnsureActive(a.ws, a.tabBarWidth())
 	a.syncStatus()
 	a.menuActive = false
 }
@@ -946,8 +956,7 @@ func (a *App) closeTab() {
 	delete(a.forceSave, buf)
 	a.confirmClose = false
 	a.statusBar.ClearMessage()
-	width, _ := a.screen.Size()
-	a.tabBar.EnsureActive(a.ws, width)
+	a.tabBar.EnsureActive(a.ws, a.tabBarWidth())
 	a.syncStatus()
 	a.redraw()
 }
