@@ -79,7 +79,8 @@ func newHighlighter(path string) *highlighter {
 
 // styleAt devuelve el rol del byte en pos de la línea. Es puro: reescanea la
 // línea en cada llamada (el editor pregunta por los clusters visibles, que son
-// pocos y chicos).
+// pocos y chicos). CADA span consulta pos antes de devolver: un comentario al
+// final no tiñe los bytes que quedan antes de él.
 func (h *highlighter) styleAt(line []byte, pos int) Role {
 	if pos < 0 || pos >= len(line) {
 		return RoleText
@@ -101,15 +102,28 @@ func (h *highlighter) styleAt(line []byte, pos int) Role {
 	i := 0
 	for i < len(line) {
 		if lineComment != "" && bytes.HasPrefix(line[i:], []byte(lineComment)) {
-			return RoleComment // desde el marcador hasta el fin
+			// Comentario hasta el fin de la línea: solo tiñe pos ≥ marcador.
+			if pos >= i {
+				return RoleComment
+			}
+			return RoleText
 		}
 		if hasBlock && i+1 < len(line) && line[i] == '/' && line[i+1] == '*' {
-			if end := bytes.Index(line[i+2:], []byte("*/")); end < 0 {
-				return RoleComment // sin cierre en la línea
-			} else {
-				i += 2 + end + 2
-				continue
+			spanEnd := -1
+			if end := bytes.Index(line[i+2:], []byte("*/")); end >= 0 {
+				spanEnd = i + 2 + end + 2
 			}
+			if spanEnd < 0 {
+				if pos >= i {
+					return RoleComment // sin cierre en la línea: resto comment
+				}
+				return RoleText
+			}
+			if pos >= i && pos < spanEnd {
+				return RoleComment
+			}
+			i = spanEnd
+			continue
 		}
 		if line[i] == '"' || line[i] == '\'' {
 			q := line[i]
@@ -124,6 +138,7 @@ func (h *highlighter) styleAt(line []byte, pos int) Role {
 				}
 				j++
 			}
+			spanEnd := j + 1
 			if j >= len(line) {
 				// string sin cierre: el resto de la línea es string
 				if pos >= i {
@@ -131,10 +146,10 @@ func (h *highlighter) styleAt(line []byte, pos int) Role {
 				}
 				return RoleText
 			}
-			if pos >= i && pos <= j {
+			if pos >= i && pos < spanEnd {
 				return RoleString
 			}
-			i = j + 1
+			i = spanEnd
 			continue
 		}
 		if isIdentStart(line[i]) {

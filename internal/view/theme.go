@@ -98,6 +98,25 @@ func LoadTheme(data []byte) Theme {
 	return t
 }
 
+// StyleForRole mapea un rol de sintaxis al estilo del tema: es el único punto
+// donde los roles del highlighter se vuelven colores.
+func (t Theme) StyleForRole(r Role) tcell.Style {
+	switch r {
+	case RoleComment:
+		return t.Comment
+	case RoleKeyword:
+		return t.Keyword
+	case RoleString:
+		return t.String
+	case RoleNumber:
+		return t.Number
+	case RolePunct:
+		return t.Punct
+	default:
+		return t.Text
+	}
+}
+
 // parseThemeColor resuelve un color del JSON: nombre tcell ("red", "navy"…),
 // hex ("#569cd6") o índice ANSI ("0"–"255").
 func parseThemeColor(s string) (tcell.Color, bool) {

@@ -1,6 +1,7 @@
 package view
 
 import (
+	"bytes"
 	"strings"
 	"unsafe"
 
@@ -48,6 +49,21 @@ type EditorView struct {
 	model    *model.PieceTable
 	viewport Viewport
 	cursor   Cursor
+
+	// theme es la paleta por rol del editor; el valor cero usa la default.
+	// El controller la inyecta con SetTheme tras cargar ~/.tcode/theme.json.
+	theme Theme
+}
+
+// SetTheme reemplaza la paleta del editor.
+func (v *EditorView) SetTheme(th Theme) { v.theme = th }
+
+// themeOrDefault devuelve la paleta activa: la inyectada o la default.
+func (v *EditorView) themeOrDefault() Theme {
+	if v.theme == (Theme{}) {
+		return DefaultTheme()
+	}
+	return v.theme
 }
 
 func NewEditorView(m *model.PieceTable, height, width int) *EditorView {
@@ -481,6 +497,9 @@ func (v *EditorView) deleteForward() bool {
 // Contar runas desalinea las columnas y rompe el hit testing del mouse.
 func (v *EditorView) Draw(s Surface) {
 	content := v.model.GetRange(v.viewport.TopLine, v.viewport.TopLine+v.viewport.Height)
+	// El resaltado de sintaxis: por extensión del buffer y por línea visible.
+	hl := newHighlighter(v.model.Path())
+	th := v.themeOrDefault()
 	if len(content) > 0 {
 		// COPIA obligatoria, no vista de mmap: tcell retiene el string que le
 		// pasamos en su buffer de celdas (currStr/lastStr) hasta el próximo
@@ -493,19 +512,33 @@ func (v *EditorView) Draw(s Surface) {
 
 		row := 0 // fila física en pantalla
 		col := 0 // columna lógica en celdas de terminal
+		cursorLine := v.cursor.Line
+		// Línea del documento actual y sus límites dentro de content: el
+		// resaltado es por línea visible, así que el rol de cada cluster se
+		// decide contra la línea actual completa (inicio del salto anterior al
+		// próximo \n), nunca contra el rango completo.
+		lineNo := v.viewport.TopLine
+		lineStart := 0
+		lineEnd := len(content)
+		if idx := bytes.IndexByte(content, '\n'); idx >= 0 {
+			lineEnd = idx
+		}
 		g := uniseg.NewGraphemes(text)
 		for g.Next() && row < v.viewport.Height {
+			from, _ := g.Positions()
 			cluster := g.Str()
 
 			switch cluster {
-			case "\n":
-				row++
-				col = 0
-				continue
-			case "\r\n":
+			case "\n", "\r\n":
 				// GB3 de UAX #29 une CR y LF en un solo cluster.
 				row++
 				col = 0
+				lineNo++
+				lineStart = from + len(cluster)
+				lineEnd = len(content)
+				if idx := bytes.IndexByte(content[lineStart:], '\n'); idx >= 0 {
+					lineEnd = lineStart + idx
+				}
 				continue
 			case "\r":
 				// Retorno de carro aislado: vuelve al inicio de la misma fila.
@@ -524,7 +557,12 @@ func (v *EditorView) Draw(s Surface) {
 			// última celda pisaría la celda de continuación que marca tcell.
 			// Las tabulaciones no se dibujan; la pantalla ya viene limpia.
 			if x >= 0 && x+width <= v.viewport.Width && cluster != "\t" {
-				s.Put(x, row, cluster, tcell.StyleDefault)
+				style := th.StyleForRole(hl.styleAt(content[lineStart:lineEnd], from-lineStart))
+				if lineNo == cursorLine {
+					// La fila del cursor: el fondo del rol marca dónde se edita.
+					style = style.Background(th.CursorLineBg)
+				}
+				s.Put(x, row, cluster, style)
 			}
 			col += width
 		}
