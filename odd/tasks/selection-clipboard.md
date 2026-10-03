@@ -41,19 +41,19 @@ portapapeles se prueba por mocks; un smoke real se salta si el sistema no lo
 permite.
 
 ## Tasks
-- [ ] Tema: rol `Selection` (default + JSON + `StyleForRole`) <!-- id: 0 -->
-- [ ] Vista: `Selection` (rango), ancla con Shift+movimiento (Horizontal,
+- [x] Tema: rol `Selection` (default + JSON) <!-- id: 0 --> · `bae5bf0`
+- [x] Vista: `Selection` (rango), ancla con Shift+movimiento (Horizontal,
   Vertical, PgUp/Dn, Home/End, DocStart/End), limpieza sin Shift, `Ctrl+A`
-  <!-- id: 1 -->
-- [ ] Render de la selección (el cluster en rango → rol Selection) <!-- id: 2 -->
-- [ ] Edición con selección: teclear/Backspace/Delete reemplazan el rango
-  <!-- id: 3 -->
-- [ ] Clipboard: `TextRange` en el modelo; mocks; `Ctrl+C` copia (la vista),
-  `Ctrl+V` pega (reemplazando la selección) <!-- id: 4 -->
-- [ ] Controller: `Ctrl+C` con selección copia y no sale; sin selección sale
-  (comportamiento actual) <!-- id: 5 -->
-- [ ] Mouse: presionar ancla, arrastrar extiende, soltar termina <!-- id: 6 -->
-- [ ] Tests por unidad + suite completa sin fallos nuevos <!-- id: 7 -->
+  <!-- id: 1 --> · `bae5bf0`
+- [x] Render de la selección (el cluster en rango → rol Selection) <!-- id: 2 --> · `49cfc69`
+- [x] Edición con selección: teclear/Backspace/Delete reemplazan el rango
+  <!-- id: 3 --> · `49cfc69`
+- [x] Clipboard: `TextRange` en el modelo; mocks; `Ctrl+C` copia (la vista),
+  `Ctrl+V` pega (reemplazando la selección) <!-- id: 4 --> · `49cfc69`
+- [x] Controller: `Ctrl+C` con selección copia y no sale; sin selección sale
+  (comportamiento actual) <!-- id: 5 --> · `49cfc69`
+- [x] Mouse: presionar ancla, arrastrar extiende, soltar termina <!-- id: 6 --> · `49cfc69`
+- [x] Tests por unidad + suite completa sin fallos nuevos <!-- id: 7 -->
 
 ## Design decisions
 
@@ -84,4 +84,18 @@ y el viejo comportamiento de salida se conserva en el caso sin selección.
 6. Sin drag → `TestMouseDragSelects` falla.
 
 ## Evidence
-(Rellenar por unidad.)
+
+### Selección · `bae5bf0` + `49cfc69`
+- **RED:** los tests de movimiento con Shift, render, reemplazo y clipboard.
+- **Lección del coalesce:** `breakTypingGroup` en `insertText` genérico rompió
+  la fusión de tipeo (2 tests); el corte corresponde SOLO al reemplazo de
+  selección, no al tipeo plano.
+- **Gotcha tcell:** no existe `ButtonMotion` en v2.13: el arrastre llega como
+  `Button1` repetido con posiciones distintas; el flag propio distingue de un
+  clic. El release es `ButtonNone`.
+- **Gotcha de edición repetido:** los `\r` literales pasados por los heredocs
+  de edición se corrompían en LF real; se resolvió comparando el código 13
+  sin string literal.
+- **Dependencia nueva:** `atotto/clipboard` (ligera, sin cgo); los tests la
+  reemplazan con mocks inyectables.
+- **Verificación:** suite completa con 34 fallos ambientales y 0 nuevos.
