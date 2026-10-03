@@ -2,8 +2,10 @@ package controller
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 
 	"github.com/gdamore/tcell/v2"
@@ -408,7 +410,12 @@ func (a *App) syncStatus() {
 }
 
 // Run ejecuta el loop de eventos hasta que el usuario cierra el editor.
-func (a *App) Run() error {
+func (a *App) Run() (err error) {
+	// El crash paper del runtime (fatal, pánico en goroutine, stack overflow)
+	// mata el proceso SIN desenrollar los defers: queda apuntado a crash.log
+	// para que la evidencia sobreviva aunque la terminal quede destruida.
+	setCrashPaper()
+
 	defer a.screen.Fini()
 	defer a.ws.CloseAll()
 	// La sesión se guarda como ÚLTIMO defer: al desenrollar (LIFO) corre
@@ -416,6 +423,21 @@ func (a *App) Run() error {
 	// el camino de salida, silencioso: un fallo de escritura no puede impedir
 	// cerrar el editor.
 	defer a.saveSession()
+
+	// Guard de crash: un pánico en el despacho de un evento no deja el editor
+	// muerto con la terminal en modo raw. Se vuelca el stack a crash.log y se
+	// devuelve un error que main imprime —la pantalla ya quedó restaurada
+	// cuando corre el defer de Fini, así el mensaje es legible en la consola—.
+	defer func() {
+		if r := recover(); r != nil {
+			path := writeCrashLog(r)
+			if path != "" {
+				err = fmt.Errorf("crash interno (detalle en %s): %v", path, r)
+			} else {
+				err = fmt.Errorf("crash interno: %v", r)
+			}
+		}
+	}()
 
 	a.redraw()
 
@@ -428,6 +450,59 @@ func (a *App) Run() error {
 			return nil
 		}
 	}
+}
+
+// crashLogPath resuelve la ruta del registro de crashes; es una variable de
+// función para que los tests la reemplacen por un directorio temporal.
+var crashLogPath = defaultCrashLogPath
+
+func defaultCrashLogPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".tcode", "crash.log")
+}
+
+// writeCrashLog vuelca el valor y el stack de un pánico a crash.log (append),
+// creando el directorio si hace falta, y devuelve la ruta (o "" si no se
+// pudo). Un fallo de escritura jamás impide el resto del recovery.
+func writeCrashLog(r any) string {
+	path := crashLogPath()
+	if path == "" {
+		return ""
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return path
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return path
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "tcode crash: %v\n%s\n", r, debug.Stack())
+	return path
+}
+
+// setCrashPaper redirige el crash paper del runtime al registro: los errores
+// fatales no pasan por el guard de Run, y sin esta redirección la única
+// evidencia quedaría enterrada en una terminal destruida. El archivo queda
+// abierto toda la vida del proceso, como pide SetCrashOutput — por eso es una
+// variable inyectable: los tests la reemplazan por un no-op (un archivo abierto
+// de por vida rompería el cleanup de TempDir en Windows).
+var setCrashPaper = func() {
+	path := crashLogPath()
+	if path == "" {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	debug.SetCrashOutput(f, debug.CrashOptions{})
 }
 
 // handleEvent procesa un evento y devuelve true si la aplicación debe terminar.
