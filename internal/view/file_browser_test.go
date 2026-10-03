@@ -372,6 +372,92 @@ func TestFileBrowserLeftClosesDirectories(t *testing.T) {
 	}
 }
 
+// TestFileBrowserLeftCollapsesASubdirectoryInPlace: ← sobre una SUBCARPETA
+// desplegada (nivel >= 1) la colapsa y la selección queda EN ELLA, sin saltar
+// al directorio padre: el colapso nunca "se lleva" el cursor a otro nivel.
+func TestFileBrowserLeftCollapsesASubdirectoryInPlace(t *testing.T) {
+	fb := NewFileBrowser()
+	fb.Resize(30, 12)
+	fb.SetRoot("/repo")
+	fb.SetRootEntries([]Entry{
+		{Name: "internal", Path: "/repo/internal", IsDir: true},
+		{Name: "main.go", Path: "/repo/main.go"},
+	})
+
+	// internal → view → sus hijos: dos niveles anidados expandidos.
+	fb.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone)) // internal
+	fb.SetChildren([]Entry{
+		{Name: "view", Path: "/repo/internal/view", IsDir: true},
+		{Name: "model", Path: "/repo/internal/model", IsDir: true},
+	})
+	fb.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))  // view
+	fb.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone)) // expandir view
+	fb.SetChildren([]Entry{
+		{Name: "file_browser.go", Path: "/repo/internal/view/file_browser.go"},
+		{Name: "surface.go", Path: "/repo/internal/view/surface.go"},
+	})
+
+	// Cursor sobre view (expandida) y ←: view colapsa, sus hijos desaparecen
+	// y el cursor queda EN view —no salta al abuelo internal—.
+	if action, handled := fb.HandleEvent(tcell.NewEventKey(tcell.KeyLeft, 0, tcell.ModNone)); action != ActionMove || !handled {
+		t.Fatalf("Left sobre la subcarpeta devolvió (action=%v, handled=%v), se esperaba (ActionMove, true)", action, handled)
+	}
+	if got := fb.CursorPath(); got != "/repo/internal/view" {
+		t.Fatalf("CursorPath() = %q tras colapsar view, se esperaba %q (la selección no se va al padre)", got, "/repo/internal/view")
+	}
+	// El aplanado: internal, view, model, main.go — sin los hijos de view.
+	if n := len(fb.nodes); n != 4 {
+		t.Fatalf("aplanado = %d nodos tras colapsar view, se esperaba 4", n)
+	}
+}
+
+// TestFileBrowserClickOnTheExpansionArrowToggles: el clic sobre la flecha
+// (▸/▾) de un directorio alterna colapsado ↔ expandido; el clic en el resto de
+// la fila solo selecciona, sin alternar nada.
+func TestFileBrowserClickOnTheExpansionArrowToggles(t *testing.T) {
+	fb := NewFileBrowser()
+	fb.Resize(10, 5)
+	fb.SetRoot("/cwd")
+	fb.SetRootEntries([]Entry{
+		{Name: "docs", Path: "/cwd/docs", IsDir: true},
+		{Name: "a.txt", Path: "/cwd/a.txt"},
+	})
+
+	// docs (dir, depth 0): su flecha ocupa las columnas 0..1 de la fila 0.
+	// Clic en la flecha de un dir colapsado → el árbol pide sus hijos.
+	action, handled := fb.HandleEvent(tcell.NewEventMouse(1, 0, tcell.Button1, tcell.ModNone))
+	if action != ActionExpand || !handled {
+		t.Fatalf("clic en la flecha de un dir colapsado devolvió (action=%v, handled=%v), se esperaba (ActionExpand, true)", action, handled)
+	}
+	if got := fb.CursorPath(); got != "/cwd/docs" {
+		t.Fatalf("CursorPath() = %q tras el clic en la flecha, se esperaba el dir", got)
+	}
+
+	// El controlador deposita los hijos y el clic en la flecha del dir ya
+	// expandido lo colapsa.
+	fb.SetChildren([]Entry{{Name: "hijo.txt", Path: "/cwd/docs/hijo.txt"}})
+	if n := len(fb.nodes); n != 3 {
+		t.Fatalf("aplanado = %d nodos al expandir, se esperaba 3", n)
+	}
+	action, handled = fb.HandleEvent(tcell.NewEventMouse(1, 0, tcell.Button1, tcell.ModNone))
+	if action != ActionMove || !handled {
+		t.Fatalf("clic en la flecha de un dir expandido devolvió (action=%v, handled=%v), se esperaba (ActionMove, true)", action, handled)
+	}
+	if n := len(fb.nodes); n != 2 {
+		t.Fatalf("aplanado = %d nodos al colapsar con el clic, se esperaba 2", n)
+	}
+
+	// Clic sobre el nombre (fuera de la flecha, x=3) solo selecciona: el dir
+	// sigue colapsado y no se alterna nada.
+	action, handled = fb.HandleEvent(tcell.NewEventMouse(3, 0, tcell.Button1, tcell.ModNone))
+	if action != ActionMove || !handled {
+		t.Fatalf("clic en el nombre devolvió (action=%v, handled=%v), se esperaba (ActionMove, true)", action, handled)
+	}
+	if n := len(fb.nodes); n != 2 {
+		t.Fatalf("aplanado = %d nodos tras el clic en el nombre, se esperaba 2 (sin toggle)", n)
+	}
+}
+
 // TestFileBrowserEnterActivatesFilesAndFallsOtherwise: Enter sobre un archivo
 // devuelve (ActionActivate, true); sin nodos, Enter y toda tecla ajena caen al
 // flujo normal con (ActionNone, false); el movimiento se consume aunque el

@@ -357,20 +357,23 @@ func (fb *FileBrowser) HandleEvent(ev tcell.Event) (Action, bool) {
 		case tcell.KeyRight:
 			return fb.activateOrExpand()
 		case tcell.KeyLeft:
-			// ← cierra la carpeta: colapsa el dir expandido del cursor; si el
-			// cursor está en un hijo, primero sube la selección al padre (el
-			// segundo ← lo colapsa), como en cualquier árbol de archivos. Con
-			// el foco en el panel, ← es SIEMPRE del árbol —también en el nivel
-			// raíz, donde no hay nada que colapsar ni subir—: la flecha nunca
-			// se escapa al editor moviendo el cursor del documento por
-			// sorpresa.
-			fb.collapseAtCursor()
-			fb.selectParentAtCursor()
+			// ← cierra la carpeta. Si el cursor está SOBRE el dir expandido, lo
+			// colapsa y la selección queda EN ÉL —nunca salta al padre: al
+			// colapsar una subcarpeta anidada, el colapso no se lleva el cursor
+			// a otro nivel—. Si el cursor está en un hijo (o en un dir ya
+			// colapsado), sube la selección al ancestro visible (el segundo ←
+			// lo colapsa). Con el foco en el panel, ← es SIEMPRE del árbol
+			// —también en el nivel raíz sin nada que colapsar ni subir—: la
+			// flecha nunca se escapa al editor moviendo el cursor del documento
+			// por sorpresa.
+			if !fb.collapseAtCursor() {
+				fb.selectParentAtCursor()
+			}
 			return ActionMove, true
 		}
 
 	case *tcell.EventMouse:
-		_, y := ev.Position()
+		x, y := ev.Position()
 		switch {
 		case ev.Buttons()&tcell.Button1 != 0:
 			// El clic selecciona la fila del aplanado —cualquier nivel—; el
@@ -379,7 +382,21 @@ func (fb *FileBrowser) HandleEvent(ev tcell.Event) (Action, bool) {
 			if len(fb.nodes) == 0 || y < 0 || y >= fb.height {
 				return ActionNone, false
 			}
-			fb.setCursor(fb.top + y)
+			idx := fb.top + y
+			n := fb.nodes[idx]
+			// Clic sobre la flecha de expansión (▸/▾) de un directorio:
+			// alterna colapsado ↔ expandido, como en cualquier árbol GUI. La
+			// flecha ocupa las celdas [depth*2, depth*2+2) de la fila; el clic
+			// en el resto de la fila solo selecciona.
+			if n.isDir && x >= n.depth*2 && x < n.depth*2+2 {
+				fb.setCursor(idx)
+				if n.expanded {
+					fb.collapseAtCursor()
+					return ActionMove, true
+				}
+				return ActionExpand, true
+			}
+			fb.setCursor(idx)
 			return ActionMove, true
 		case ev.Buttons()&tcell.WheelUp != 0:
 			fb.moveCursor(-wheelScroll)

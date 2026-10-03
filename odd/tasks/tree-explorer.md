@@ -80,14 +80,19 @@ un enum es más legible y deja el controlador genérico: `ActionExpand` es
 "tengo el cursor sobre un dir colapsado, dame sus hijos", sin que el
 controlador sepa qué tecla lo disparó.
 
-### Enter/→ expanden, ← colapsa (y sube al padre)
+### Enter/→ expanden, ← colapsa en el lugar (y sube al padre)
 Enter sobre un archivo lo abre (viene de U3); sobre un dir colapsado expande;
 sobre un dir ya expandido no hace nada. `←` cierra la carpeta con la semántica
-estándar de árbol: colapsa el dir expandido del cursor, y si el cursor está en
-un hijo, PRIMERO sube la selección al padre (el segundo `←` lo colapsa). Con el
-foco en el panel, `←` es SIEMPRE del árbol —también en el nivel raíz sin nada
-que colapsar ni subir—: la flecha nunca se escapa al editor moviendo el cursor
-por sorpresa.
+estándar de árbol: colapsa el dir expandido del cursor y la selección queda EN
+ÉL —colapsar una subcarpeta anidada nunca se lleva el cursor a otro nivel—; si
+el cursor está en un hijo, PRIMERO sube la selección al padre (el segundo `←`
+lo colapsa). Con el foco en el panel, `←` es SIEMPRE del árbol —también en el
+nivel raíz sin nada que colapsar ni subir—: la flecha nunca se escapa al editor
+moviendo el cursor por sorpresa.
+
+Con el mouse, el clic sobre la flecha de expansión (`▸`/`▾`, las celdas
+`[depth*2, depth*2+2)` de la fila) alterna colapsado ↔ expandido; el clic en el
+resto de la fila solo selecciona.
 
 ## Falsificación (tests que escriben primero contra el código roto)
 1. Sin árbol (lista plana vieja) → los tests de la vista del árbol no compilan/
@@ -145,3 +150,20 @@ por sorpresa.
 - **Verificación:** `go test ./internal/view/` verde completo,
   `go test -race ./internal/view/` con clang verde, `go vet` y `gofmt` limpios,
   controller del explorador en verde.
+
+### U3b-fix 2 — colapsar una SUBCARPETA (reportado de nuevo por quien usa el editor)
+- **Bug (de mi propia "simplificación" del fix 1):** el `←` corría
+  `selectParentAtCursor` SIEMPRE, también después de colapsar. Al colapsar una
+  subcarpeta de nivel ≥1 la selección saltaba al directorio padre —"colapsás
+  pero terminás en otro lado"—; con anidamiento profundo el usuario no podía
+  cerrar la subcarpeta.
+- **Fix:** cortocircuito en `←` (`if !fb.collapseAtCursor() { fb.selectParentAtCursor() }`):
+  si colapsó, la selección queda EN el dir colapsado; solo sube al padre cuando
+  no había nada que colapsar.
+- **Mouse:** clic sobre la flecha `▸`/`▾` de un directorio alterna
+  colapsado ↔ expandido; el clic en el resto de la fila solo selecciona.
+- **Tests:** `TestFileBrowserLeftCollapsesASubdirectoryInPlace` (RED contra el
+  código viejo: el cursor caía en el abuelo; GREEN tras el fix) y
+  `TestFileBrowserClickOnTheExpansionArrowToggles`.
+- **Verificación:** paquete `view` completo en verde, `-race` con clang en
+  verde (2.40s), `go vet`/`gofmt` limpios, controller del explorador en verde.
