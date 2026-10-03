@@ -29,14 +29,14 @@ tipeo, la marca de modificado, el guardado. La única diferencia observable es
 que deshacer no puede volver más atrás de los últimos 1000 pasos.
 
 ## Tasks
-- [ ] `model`: `var maxUndoHistory` (mutable para tests) + `pushUndo` con el
+- [x] `model`: `var maxUndoHistory` (mutable para tests) + `pushUndo` con el
   corte por el frente y el ajuste de `savedAt`; reemplazar los dos appends de
   `undo` (record y Redo) <!-- id: 0 -->
-- [ ] Tests de modelo: el tope descarta los más viejos (documento tras deshacer
+- [x] Tests de modelo: el tope descarta los más viejos (documento tras deshacer
   todo conserva el efecto de los descartados); `savedAt` se ajusta hasta
   `noSavedAt` (Modified vuelve a true al perder el punto de guardado); redo
   dentro del tope sigue funcionando <!-- id: 1 -->
-- [ ] Verificación: `go vet`, `gofmt`, `go test ./internal/model/` y suite
+- [x] Verificación: `go vet`, `gofmt`, `go test ./internal/model/` y suite
   completa sin fallos nuevos vs base <!-- id: 2 -->
 
 ## Design decisions
@@ -67,4 +67,16 @@ que ya existía.
    no alcanza para cazarlo; la decisión documentada es no topar el redo.
 
 ## Evidence
-(Rellenar por unidad.)
+
+### U-modelo · `26f2682`
+- **RED:** `maxUndoHistory` no existía → no compilaban los 3 tests del tope.
+- **Ajuste del test propio (semántica):** el `savedAt == 0` sigue siendo
+  EXACTAMENTE alcanzable —deshaciendo los cambios posteriores el documento
+  vuelve al estado guardado (los caídos quedaron aplicados en la base y no
+  hacen falta en el historial)—; solo el drop que quita ese último punto lo
+  pasa a `noSavedAt`. El test pedía el cambio un paso antes y se corrigió.
+- **Decisión:** el redo NO se topa (pila LIFO de aplicación; truncar rompería
+  el orden de restauración) y se autorregula (solo crece deshaciendo, a lo
+  sumo `max` pasos con el undo topeado).
+- **Verificación:** `go vet` límpio, paquete `model` sin fallos nuevos, delta
+  completo de `go test ./...` contra base: 0 nuevos, 0 arreglados.
