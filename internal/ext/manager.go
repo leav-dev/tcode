@@ -18,6 +18,11 @@ type Manager struct {
 	registry *Registry
 	keymap   *Keymap
 	states   []*extState
+	// emitting es el guard de reentrancia de Emit: el bucle de eventos es una
+	// sola goroutine, y un hook cuyo comando vuelve a emitir el mismo evento
+	// (p. ej. tcode.closeTab en onDidCloseBuffer) debe cortarse, no recurrir
+	// hasta el stack overflow.
+	emitting bool
 }
 
 // extState es una extensión descubierta con su estado de activación. En el
@@ -105,7 +110,18 @@ func (m *Manager) ActivateEvent(event string) int {
 // hooks evento→comando de las extensiones activas en orden de descubrimiento.
 // Los errores de los hooks se acumulan y devuelven para que el controlador los
 // muestre; un hook roto no corta a los demás.
+//
+// Reentrancia: un hook cuya comando emite de nuevo el mismo evento (un
+// onDidCloseBuffer que invoca tcode.closeTab) no debe recurrir. El guard
+// corta el Emit anidado y devuelve sin efecto; el dispatch es de una sola
+// goroutine, así que el guard no necesita sincronización.
 func (m *Manager) Emit(event string) []error {
+	if m.emitting {
+		return nil
+	}
+	m.emitting = true
+	defer func() { m.emitting = false }()
+
 	m.ActivateEvent(event)
 	var errs []error
 	for _, s := range m.states {

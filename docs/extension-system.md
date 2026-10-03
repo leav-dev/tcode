@@ -80,7 +80,10 @@ declara `onCommand:<id>`.
 
 Los hooks de una extensión corren **solo si está activa**, en orden de
 declaración. Un hook que falla se avisa en la barra de estado y no corta a los
-demás. Nota: `onDidChangeText` queda fuera a propósito —cada tecla es un
+demás. Un hook cuyo comando vuelve a emitir el mismo evento (p. ej.
+`tcode.closeTab` dentro de un `onDidCloseBuffer`) **no recurre**: el Emit
+anidado se corta con un guard, por lo que cerrar pestañas desde un hook jamás
+puede desbordar la pila. Nota: `onDidChangeText` queda fuera a propósito —cada tecla es un
 evento, y sin un diseño de debounce es un riesgo de rendimiento que contradice
 la constitución de eficiencia—.
 

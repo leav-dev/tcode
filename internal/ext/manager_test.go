@@ -195,6 +195,38 @@ func TestManagerStarActivatesOnAnyEvent(t *testing.T) {
 	}
 }
 
+// TestManagerEmitIsReentrantSafe: un hook cuyo comando vuelve a emitir el
+// mismo evento no puede recurrir infinitamente (stack overflow). El Emit
+// anidado se corta por el guard y el hook corre una sola vez.
+func TestManagerEmitIsReentrantSafe(t *testing.T) {
+	m := NewManager()
+	calls := 0
+	if err := m.Registry().Register("loop.close", func() error {
+		calls++
+		m.Emit(EventDidCloseBuffer) // reentrancia: debe cortarse
+		return nil
+	}); err != nil {
+		t.Fatalf("Register falló: %v", err)
+	}
+	addTestExtensions(t, m, `{
+		"id": "ext.loop",
+		"name": "Loop",
+		"version": "1.0.0",
+		"activation": ["onStartup"],
+		"contributes": {
+			"hooks": [{"event": "onDidCloseBuffer", "command": "loop.close"}]
+		}
+	}`)
+	m.ActivateEvent(ActivateStartup)
+
+	if errs := m.Emit(EventDidCloseBuffer); len(errs) != 0 {
+		t.Fatalf("Emit reportó errores: %v", errs)
+	}
+	if calls != 1 {
+		t.Fatalf("el hook corrió %d veces, esperaba 1 (el guard cortó la recursión)", calls)
+	}
+}
+
 // TestManagerDuplicateStubKeepsFirst: dos extensiones declarando el mismo
 // comando no se pisan entre sí: el stub del primero gana (regla del registro).
 func TestManagerDuplicateStubKeepsFirst(t *testing.T) {
