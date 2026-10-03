@@ -311,6 +311,13 @@ func (v *EditorView) moveDocEnd() bool {
 	return true
 }
 
+// MoveCursorToOffset coloca el cursor en un offset de documento. Es lo que
+// necesitan deshacer y rehacer para dejar el cursor donde ocurrió el cambio.
+func (v *EditorView) MoveCursorToOffset(offset int) {
+	v.setCursorAt(offset)
+	v.ensureCursorVisible()
+}
+
 // --- edición ---
 
 // insertText inserta s en la posición del cursor y lo deja después del texto.

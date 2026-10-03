@@ -42,22 +42,48 @@ type PieceTable struct {
 	lineOffsets    []int     // Inicios de línea, en coordenadas de documento
 	docLen         int       // Longitud del documento en bytes
 
-	file     *os.File    // Descriptor del archivo mapeado
-	path     string      // Ruta asociada, tal como la dio el usuario
-	mode     os.FileMode // Permisos a preservar al guardar
-	modified bool        // Hay cambios sin guardar
+	file *os.File    // Descriptor del archivo mapeado
+	path string      // Ruta asociada, tal como la dio el usuario
+	mode os.FileMode // Permisos a preservar al guardar
+
+	// Historial de ediciones. Guardar cambios en lugar de instantáneas del
+	// documento hace que la memoria dependa de lo editado y no del tamaño del
+	// archivo: es lo que la inmutabilidad de las piezas habilita.
+	undo    []Change
+	redo    []Change
+	savedAt int // len(undo) en el último guardado; noSavedAt si quedó inalcanzable
+}
+
+// noSavedAt marca que el estado guardado ya no es alcanzable con deshacer/rehacer.
+const noSavedAt = -1
+
+// Change describe una edición de forma reversible: en Offset se quitó Removed y
+// se puso Inserted. Alcanza para deshacer y rehacer sin guardar instantáneas.
+type Change struct {
+	Offset   int
+	Removed  string
+	Inserted string
 }
 
 // NewPieceTable inicializa una tabla vacía.
 func NewPieceTable() *PieceTable {
-	return &PieceTable{lineOffsets: []int{0}}
+	return &PieceTable{lineOffsets: []int{0}, savedAt: 0}
 }
 
 // Path devuelve la ruta del archivo asociado, o "" si no hay ninguno.
 func (pt *PieceTable) Path() string { return pt.path }
 
-// Modified indica si hay cambios sin guardar.
-func (pt *PieceTable) Modified() bool { return pt.modified }
+// Modified indica si hay cambios sin guardar. Se deduce del historial en lugar de
+// llevarse en un flag aparte: el documento está limpio cuando el historial está
+// justo en el punto de guardado. Así deshacer después de guardar vuelve a marcarlo
+// como modificado, y rehacer hasta ese punto lo vuelve a limpiar.
+func (pt *PieceTable) Modified() bool { return len(pt.undo) != pt.savedAt }
+
+// CanUndo indica si hay algo para deshacer.
+func (pt *PieceTable) CanUndo() bool { return len(pt.undo) > 0 }
+
+// CanRedo indica si hay algo para rehacer.
+func (pt *PieceTable) CanRedo() bool { return len(pt.redo) > 0 }
 
 // LoadFile abre un archivo y lo mapea en memoria para lectura eficiente.
 func (pt *PieceTable) LoadFile(path string) error {
@@ -66,7 +92,10 @@ func (pt *PieceTable) LoadFile(path string) error {
 	if err := pt.openAndMap(); err != nil {
 		return err
 	}
-	pt.modified = false
+	// Documento nuevo: el historial arranca limpio.
+	pt.undo = nil
+	pt.redo = nil
+	pt.savedAt = 0
 	return nil
 }
 
@@ -243,8 +272,21 @@ func (pt *PieceTable) locate(offset int) (idx, within int) {
 	return len(pt.pieces), 0
 }
 
-// Insert inserta text en el offset de documento indicado.
+// Insert inserta text en el offset de documento indicado y lo registra en el
+// historial para poder deshacerlo.
 func (pt *PieceTable) Insert(offset int, text string) error {
+	if text == "" {
+		return nil
+	}
+	if err := pt.insertRaw(offset, text); err != nil {
+		return err
+	}
+	pt.record(Change{Offset: offset, Inserted: text})
+	return nil
+}
+
+// insertRaw inserta sin tocar el historial.
+func (pt *PieceTable) insertRaw(offset int, text string) error {
 	if offset < 0 || offset > pt.docLen {
 		return fmt.Errorf("offset %d fuera del documento (0..%d)", offset, pt.docLen)
 	}
@@ -285,7 +327,6 @@ func (pt *PieceTable) Insert(offset int, text string) error {
 
 	pt.docLen += len(text)
 	pt.insertIntoLineOffsets(offset, text)
-	pt.modified = true
 	return nil
 }
 
@@ -317,6 +358,7 @@ func (pt *PieceTable) insertIntoLineOffsets(offset int, text string) {
 }
 
 // Delete borra el rango de documento [start, end) y devuelve cuántos bytes quitó.
+// La edición queda registrada en el historial.
 func (pt *PieceTable) Delete(start, end int) (int, error) {
 	if start < 0 || end > pt.docLen || start > end {
 		return 0, fmt.Errorf("rango [%d,%d) inválido en documento de %d bytes", start, end, pt.docLen)
@@ -324,6 +366,28 @@ func (pt *PieceTable) Delete(start, end int) (int, error) {
 	if start == end {
 		return 0, nil
 	}
+
+	removed, err := pt.deleteRaw(start, end)
+	if err != nil {
+		return 0, err
+	}
+	pt.record(Change{Offset: start, Removed: removed})
+	return len(removed), nil
+}
+
+// deleteRaw borra sin tocar el historial y devuelve el texto quitado, que es lo que
+// hace falta para reponerlo al deshacer.
+func (pt *PieceTable) deleteRaw(start, end int) (string, error) {
+	if start < 0 || end > pt.docLen || start > end {
+		return "", fmt.Errorf("rango [%d,%d) inválido en documento de %d bytes", start, end, pt.docLen)
+	}
+	if start == end {
+		return "", nil
+	}
+
+	// El texto quitado puede venir de varios buffers, así que se captura antes de
+	// rearmar la lista de piezas.
+	removed := string(pt.slice(start, end))
 
 	kept := make([]Piece, 0, len(pt.pieces))
 	doc := 0
@@ -350,11 +414,10 @@ func (pt *PieceTable) Delete(start, end int) (int, error) {
 		}
 	}
 
-	removed := end - start
+	removedLen := end - start
 	pt.pieces = kept
-	pt.docLen -= removed
+	pt.docLen -= removedLen
 	pt.deleteFromLineOffsets(start, end)
-	pt.modified = true
 	return removed, nil
 }
 
@@ -384,6 +447,83 @@ func (pt *PieceTable) deleteFromLineOffsets(start, end int) {
 		out = append(out, 0)
 	}
 	pt.lineOffsets = out
+}
+
+// record apila un cambio y descarta la rama de rehacer.
+func (pt *PieceTable) record(c Change) {
+	// Deshacer y después editar descarta la rama de rehacer. Si el punto de
+	// guardado vivía en esa rama, deja de ser alcanzable. Hay que comparar contra
+	// la longitud actual, antes de apilar el cambio nuevo: si no, un solo deshacer
+	// seguido de una edición dejaría el documento marcado como limpio sin serlo.
+	if pt.savedAt > len(pt.undo) {
+		pt.savedAt = noSavedAt
+	}
+	pt.undo = append(pt.undo, c)
+	pt.redo = nil
+}
+
+// Undo deshace la última edición y devuelve el cambio aplicado.
+func (pt *PieceTable) Undo() (Change, bool, error) {
+	if len(pt.undo) == 0 {
+		return Change{}, false, nil
+	}
+
+	c := pt.undo[len(pt.undo)-1]
+	pt.undo = pt.undo[:len(pt.undo)-1]
+
+	if err := pt.undoChange(c); err != nil {
+		// Si la inversa falla, el cambio vuelve a la pila para no perder la
+		// posibilidad de deshacerlo.
+		pt.undo = append(pt.undo, c)
+		return Change{}, false, err
+	}
+	pt.redo = append(pt.redo, c)
+	return c, true, nil
+}
+
+// Redo rehace la última edición deshecha y devuelve el cambio aplicado.
+func (pt *PieceTable) Redo() (Change, bool, error) {
+	if len(pt.redo) == 0 {
+		return Change{}, false, nil
+	}
+
+	c := pt.redo[len(pt.redo)-1]
+	pt.redo = pt.redo[:len(pt.redo)-1]
+
+	if err := pt.redoChange(c); err != nil {
+		pt.redo = append(pt.redo, c)
+		return Change{}, false, err
+	}
+	pt.undo = append(pt.undo, c)
+	return c, true, nil
+}
+
+// undoChange quita lo que se había insertado y repone lo que se había borrado.
+// El orden importa: primero se quita y después se repone, porque el reemplazo
+// ocurre en la misma posición.
+func (pt *PieceTable) undoChange(c Change) error {
+	if c.Inserted != "" {
+		if _, err := pt.deleteRaw(c.Offset, c.Offset+len(c.Inserted)); err != nil {
+			return err
+		}
+	}
+	if c.Removed != "" {
+		return pt.insertRaw(c.Offset, c.Removed)
+	}
+	return nil
+}
+
+// redoChange vuelve a aplicar un cambio deshecho.
+func (pt *PieceTable) redoChange(c Change) error {
+	if c.Removed != "" {
+		if _, err := pt.deleteRaw(c.Offset, c.Offset+len(c.Removed)); err != nil {
+			return err
+		}
+	}
+	if c.Inserted != "" {
+		return pt.insertRaw(c.Offset, c.Inserted)
+	}
+	return nil
 }
 
 // GetRange devuelve el texto de las líneas [startLine, endLine).
@@ -468,7 +608,7 @@ func (pt *PieceTable) Save() error {
 	if pt.path == "" {
 		return ErrNoPath
 	}
-	if !pt.modified {
+	if !pt.Modified() {
 		return nil
 	}
 
@@ -519,8 +659,10 @@ func (pt *PieceTable) Save() error {
 		return err
 	}
 
-	// El contenido ya está en disco de forma duradera.
-	pt.modified = false
+	// El contenido ya está en disco de forma duradera. El historial no se toca:
+	// deshacer después de guardar tiene que seguir funcionando, y el marcador de
+	// modificado se deduce de él.
+	pt.savedAt = len(pt.undo)
 
 	// El mapeo y el descriptor siguen apuntando al inodo viejo, que quedó
 	// reemplazado: hay que reabrir para que las piezas vuelvan a apoyarse en algo

@@ -71,5 +71,7 @@ Este archivo registra las decisiones arquitectónicas clave, cambios estructural
 - **Deuda técnica cerrada:** el mapeo inverso celda → offset del documento ya existe (`offsetAtColumn`) y el clic del mouse posiciona el cursor.
 - **Deuda técnica abierta (la más urgente):** el editor **edita pero no guarda**. Sin `Save` a disco, todo el trabajo se pierde al salir. Es la unidad siguiente.
   - **RESUELTO** en `odd/tasks/save-to-disk.md`.
-- **Otras deudas:** sin undo/redo (la Piece Table ya lo permite: las piezas viejas no se destruyen), sin auto-indentación, sin selección ni portapapeles, sin salto de palabra.
+- **Otras deudas:** sin auto-indentación, sin selección ni portapapeles, sin salto de palabra.
+- **Deuda cerrada:** undo/redo implementado en `odd/tasks/undo-redo.md` (la Piece Table ya lo permitía: las piezas viejas no se destruyen).
+- **Deuda nueva de undo/redo:** **sin agrupación de tipeo**, así que cada carácter es un paso de deshacer. Es la mejora más urgente de esa unidad; agrupar tiene reglas finas (cortar en el salto de línea, en el movimiento del cursor y al cambiar de línea). Además el historial no tiene tope.
 - **Deudas nuevas de `Save`:** sin `Save As`; sin detección de cambios externos (si otro proceso toca el archivo, guardar lo pisa); sin recuperación ante corte (puede quedar un `.tcode-*.tmp`).

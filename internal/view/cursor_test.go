@@ -271,6 +271,43 @@ func TestMouseClickBelowTheLastLineIsIgnored(t *testing.T) {
 	}
 }
 
+// TestMoveCursorToOffsetScrolleIntoView cubre el camino que usan deshacer y
+// rehacer: el cursor salta a un offset de documento y el viewport lo acompaña.
+func TestMoveCursorToOffsetScrolleIntoView(t *testing.T) {
+	v := newTestView(t, "uno\ndos\ntres\ncuatro", 20, 2)
+
+	v.MoveCursorToOffset(11) // 's' de "tres"
+
+	if v.cursor.Line != 2 || v.cursor.ByteCol != 3 {
+		t.Fatalf("cursor = (%d,%d), se esperaba (2,3)", v.cursor.Line, v.cursor.ByteCol)
+	}
+	if v.viewport.TopLine != 1 {
+		t.Fatalf("TopLine = %d, se esperaba 1 para que la línea 2 sea visible", v.viewport.TopLine)
+	}
+}
+
+func TestMoveCursorToOffsetOnEmptyDocument(t *testing.T) {
+	v := newTestView(t, "", 20, 2)
+
+	v.MoveCursorToOffset(0)
+
+	if v.cursor.Line != 0 || v.cursor.ByteCol != 0 {
+		t.Fatalf("cursor = (%d,%d), se esperaba (0,0)", v.cursor.Line, v.cursor.ByteCol)
+	}
+}
+
+// TestMoveCursorToOffsetIgnoresOffsetPastTheEnd evita que un offset fuera de
+// rango deje el cursor en un lugar inexistente.
+func TestMoveCursorToOffsetClampsPastTheEnd(t *testing.T) {
+	v := newTestView(t, "uno\ndos", 20, 2)
+
+	v.MoveCursorToOffset(999)
+
+	if v.cursor.Line != 1 || v.cursor.ByteCol != 3 {
+		t.Fatalf("cursor = (%d,%d), se esperaba (1,3): el final del documento", v.cursor.Line, v.cursor.ByteCol)
+	}
+}
+
 // --- dibujado del cursor ---
 
 func TestDrawShowsCursorAtItsCell(t *testing.T) {

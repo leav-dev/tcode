@@ -93,6 +93,16 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 			a.save()
 			return false
 
+		case isRedoKey(ev):
+			a.confirmQuit = false
+			a.applyHistory(a.model.Redo, "Rehecho", "Nada que rehacer")
+			return false
+
+		case isUndoKey(ev):
+			a.confirmQuit = false
+			a.applyHistory(a.model.Undo, "Deshecho", "Nada que deshacer")
+			return false
+
 		case ev.Key() == tcell.KeyEscape || ev.Key() == tcell.KeyCtrlC:
 			// Salir con cambios sin guardar pide confirmación: la primera vez
 			// solo se avisa, así una tecla de más no tira el trabajo.
@@ -124,6 +134,41 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		a.redraw()
 	}
 	return false
+}
+
+// isUndoKey reconoce Ctrl+Z sin modificadores.
+func isUndoKey(ev *tcell.EventKey) bool {
+	return ev.Key() == tcell.KeyCtrlZ && ev.Modifiers()&tcell.ModShift == 0
+}
+
+// isRedoKey reconoce Ctrl+Y y también Ctrl+Shift+Z.
+//
+// tcell solo reporta los códigos KeyCtrl* cuando no hay modificadores: con Shift
+// presente, Ctrl+Shift+Z llega como KeyRune con ModCtrl y ModShift.
+func isRedoKey(ev *tcell.EventKey) bool {
+	if ev.Key() == tcell.KeyCtrlY {
+		return true
+	}
+	return ev.Key() == tcell.KeyRune &&
+		ev.Modifiers()&tcell.ModCtrl != 0 &&
+		ev.Modifiers()&tcell.ModShift != 0 &&
+		(ev.Rune() == 'z' || ev.Rune() == 'Z')
+}
+
+// applyHistory ejecuta deshacer o rehacer y refleja el resultado en la barra.
+func (a *App) applyHistory(op func() (model.Change, bool, error), done, empty string) {
+	change, ok, err := op()
+	switch {
+	case err != nil:
+		a.statusBar.SetMessage("Error: " + err.Error())
+	case !ok:
+		a.statusBar.SetMessage(empty)
+	default:
+		a.editorView.MoveCursorToOffset(change.Offset)
+		a.statusBar.SetMessage(done)
+	}
+	a.syncStatus()
+	a.redraw()
 }
 
 // save escribe el documento y refleja el resultado en la barra de estado.

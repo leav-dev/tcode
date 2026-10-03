@@ -190,6 +190,109 @@ func TestSaveErrorIsReportedAndKeepsTheDocumentDirty(t *testing.T) {
 	}
 }
 
+func TestCtrlZUndoesTheLastEdit(t *testing.T) {
+	app, _ := newTestApp(t, "uno")
+
+	typeRune(app, 'X')
+	if got := app.model.GetContent(); got != "Xuno" {
+		t.Fatalf("contenido = %q", got)
+	}
+
+	if quit := press(app, tcell.KeyCtrlZ); quit {
+		t.Fatal("Ctrl+Z no debe cerrar el editor")
+	}
+
+	if got := app.model.GetContent(); got != "uno" {
+		t.Fatalf("tras deshacer, contenido = %q, se esperaba %q", got, "uno")
+	}
+	if app.model.Modified() {
+		t.Fatal("deshacer hasta el estado inicial debe dejar el documento limpio")
+	}
+}
+
+func TestCtrlYRedoesTheEdit(t *testing.T) {
+	app, _ := newTestApp(t, "uno")
+
+	typeRune(app, 'X')
+	press(app, tcell.KeyCtrlZ)
+	press(app, tcell.KeyCtrlY)
+
+	if got := app.model.GetContent(); got != "Xuno" {
+		t.Fatalf("tras rehacer, contenido = %q, se esperaba %q", got, "Xuno")
+	}
+	if !app.model.Modified() {
+		t.Fatal("tras rehacer el documento debe quedar modificado")
+	}
+}
+
+func TestCtrlShiftZAlsoRedoes(t *testing.T) {
+	app, _ := newTestApp(t, "uno")
+
+	typeRune(app, 'X')
+	press(app, tcell.KeyCtrlZ)
+
+	// tcell reporta Ctrl+Shift+Z como KeyRune con ambos modificadores, no como
+	// KeyCtrlZ, así que es un camino distinto al de Ctrl+Y.
+	app.handleEvent(tcell.NewEventKey(tcell.KeyRune, 'z', tcell.ModCtrl|tcell.ModShift))
+
+	if got := app.model.GetContent(); got != "Xuno" {
+		t.Fatalf("tras rehacer, contenido = %q, se esperaba %q", got, "Xuno")
+	}
+}
+
+func TestUndoWithNothingToUndoIsHarmless(t *testing.T) {
+	app, _ := newTestApp(t, "uno")
+
+	if quit := press(app, tcell.KeyCtrlZ); quit {
+		t.Fatal("Ctrl+Z sin historial no debe cerrar el editor")
+	}
+	if got := app.model.GetContent(); got != "uno" {
+		t.Fatalf("contenido = %q, se esperaba sin cambios", got)
+	}
+}
+
+// TestUndoPlacesTheCursorAtTheChange comprueba de punta a punta que el cursor
+// quede donde ocurrió el cambio, mirando la celda que reporta la pantalla.
+func TestUndoPlacesTheCursorAtTheChange(t *testing.T) {
+	app, _ := newTestApp(t, "uno\ndos")
+
+	app.handleEvent(tcell.NewEventKey(tcell.KeyEnd, 0, tcell.ModCtrl))
+	typeRune(app, 'Z')
+	if got := app.model.GetContent(); got != "uno\ndosZ" {
+		t.Fatalf("contenido = %q", got)
+	}
+
+	press(app, tcell.KeyCtrlZ)
+
+	if got := app.model.GetContent(); got != "uno\ndos" {
+		t.Fatalf("contenido = %q", got)
+	}
+
+	sim, ok := app.screen.(tcell.SimulationScreen)
+	if !ok {
+		t.Fatal("el test espera una pantalla simulada")
+	}
+	x, y, visible := sim.GetCursor()
+	if !visible {
+		t.Fatal("el cursor debe quedar visible")
+	}
+	if x != 3 || y != 1 {
+		t.Fatalf("cursor en (%d,%d), se esperaba (3,1): el final de \"dos\"", x, y)
+	}
+}
+
+func TestUndoThenEscapeQuitsWithoutAsking(t *testing.T) {
+	app, _ := newTestApp(t, "uno")
+
+	typeRune(app, 'X')
+	press(app, tcell.KeyCtrlZ)
+
+	// El documento volvió al estado inicial, así que ya no hay nada que perder.
+	if quit := press(app, tcell.KeyEscape); !quit {
+		t.Fatal("tras deshacer todo, Escape debe cerrar sin pedir confirmación")
+	}
+}
+
 func TestResizeKeepsTheStatusRow(t *testing.T) {
 	app, _ := newTestApp(t, "uno")
 
