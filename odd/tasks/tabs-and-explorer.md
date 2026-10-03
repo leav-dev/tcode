@@ -38,7 +38,14 @@ Se parte en dos para que el review no mezcle refactor con feature.
   (c) arreglar el tamaño determinista de la pantalla en los tests (`SetSize`
   **después** de `NewAppWithScreen`). En la evidencia: `322cf62`.
 
-### U3 — FileBrowser y modos de arranque (view + controller) — pendiente
+### U3 — FileBrowser y modos de arranque (`odd/tasks/file-browser.md`)
+Panel lateral a la izquierda sobre el root de la sesión, listado de una columna
+navegable (dirs primero, `Enter` desciende/abre, `..` sube), `Ctrl+B` lo
+muestra/oculta y el editor arranca en la columna del panel vía la costura de
+U2b. Modos de arranque: sin argumento → explorador sobre cwd; directorio →
+explorador sobre ese dir; archivo → edición clásica con panel oculto. En la
+evidencia: `2355846`.
+
 ### U4 — Menú de pestañas (`Ctrl+T`) y sesión JSON — pendiente
 
 ## Roadmap de decisión

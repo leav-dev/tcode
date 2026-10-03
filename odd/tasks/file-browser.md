@@ -47,7 +47,7 @@ arranque**:
   nada <!-- id: 8 -->
 - [x] Verificación: `go vet`, `gofmt -l` en las superficies, tests de la unidad y
   paquete `view` bajo `-race` con clang <!-- id: 9 -->
-- [ ] Commit de unidad de trabajo <!-- id: 10 -->
+- [x] Commit de unidad de trabajo: `2355846` <!-- id: 10 -->
 
 ## Design decisions
 
@@ -159,4 +159,4 @@ determinista para los tests (en 80 → 24, en 30 → 16, en 20 → 4).
   listado del root se lee SIEMPRE al arrancar —también con el panel oculto— para
   que mostrarlo con `Ctrl+B` aparezca poblado; el panel oculto no dibuja, así que
   ninguna geometría existente cambia.
-- **Commit de unidad de trabajo:** (se registra en el commit de docs siguiente).
+- **Commit de unidad de trabajo:** `2355846`.
