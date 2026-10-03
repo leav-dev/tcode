@@ -23,9 +23,44 @@ unidades de trabajo encadenadas, para no inflar el review.
 - [x] Verificación: `go vet`, `gofmt -l`, `go test -race ./...` <!-- id: 7 -->
 - [x] Commit de unidad de trabajo <!-- id: 8 -->
 
-### U2 — TabBar y navegación (view + controller) — pendiente
+### U2 — Pestañas
+Se parte en dos para que el review no mezcle refactor con feature.
+
+- **U2a — Cablear el Workspace (`odd/tasks/workspace-wiring.md`).** `App` sostiene un
+  `*model.Workspace`, un `EditorView` por buffer, y el estado hoy único
+  (`confirmQuit`, `forceSave`, pedido de Save As) pasa a tener semántica por buffer.
+  Sin UI nueva: es el refactor habilitante.
+- **U2b — TabBar y navegación.** Fila de pestañas, `Ctrl+PageUp`/`Ctrl+PageDown` para
+  cambiar, `Ctrl+W` para cerrar con la misma confirmación no modal que la salida.
+  Debe además: (a) borrar la entrada de `editors` del buffer que se cierra, porque la
+  vista vieja conserva un puntero a un `PieceTable` ya liberado; (b) introducir la
+  costura de superficie con desplazamiento; (c) arreglar el tamaño determinista de la
+  pantalla en los tests (`SetSize` **después** de `NewAppWithScreen`).
+
 ### U3 — FileBrowser y modos de arranque (view + controller) — pendiente
-### U4 — Sesión JSON y salida multi-buffer — pendiente
+### U4 — Menú de pestañas (`Ctrl+T`) y sesión JSON — pendiente
+
+## Roadmap de decisión
+
+### El explorador es un panel lateral fijo, con `Ctrl+B`
+Decisión de quien usa el editor. El árbol ocupa una franja a la izquierda y el editor
+el resto; `Ctrl+B` lo muestra u oculta para ganar ancho. Implica que el editor deja de
+dibujar en la columna 0, y por eso U2b introduce la costura que lo hace sin ensuciar la
+vista.
+
+### La vista dibuja sobre una superficie con desplazamiento, no sobre la pantalla
+`EditorView.Draw` recibe hoy un `tcell.Screen` y escribe en coordenadas propias desde
+(0,0). Con un panel a la izquierda el editor tiene que empezar en la columna del panel.
+La opción barata y equivocada es pasarle un desplazamiento a cada método de dibujo: eso
+mete geometría de la composición dentro de la vista y obliga a tocar los cinco archivos
+de test de la vista.
+
+La costura correcta es una interfaz mínima con los pocos métodos que la vista realmente
+usa (`Put`, `SetContent`, `ShowCursor`, `HideCursor`) más un adaptador que suma un
+desplazamiento y recorta contra la región. `tcell.Screen` ya satisface esa interfaz, así
+que **los tests de la vista no cambian**: siguen llamando `Draw(simScreen)` y dibujando
+desde (0,0), porque el desplazamiento es responsabilidad de quien compone, no de quien
+dibuja.
 
 ## Design decisions
 

@@ -127,6 +127,17 @@ func normalizePath(path string) (string, error) {
 	return clean, nil
 }
 
+// NewUntitled crea un buffer sin archivo asociado, lo agrega al final y lo
+// activa. Es el documento de arranque sin argumentos: no tiene ruta y no entra
+// en la dedupe de Open, así que dos llamadas devuelven dos buffers distintos.
+// Es exactamente el estado desde el que Save As le da una ruta.
+func (w *Workspace) NewUntitled() *PieceTable {
+	pt := NewPieceTable()
+	w.buffers = append(w.buffers, pt)
+	w.activeAt = len(w.buffers) - 1
+	return pt
+}
+
 // Open carga path como buffer y lo activa. Si la ruta ya está abierta (comparada
 // con symlinks resueltos) devuelve el buffer existente sin duplicarlo, sin
 // cambiar el orden; solo lo activa.

@@ -107,6 +107,74 @@ func openFour(t *testing.T) (*Workspace, []string) {
 	return w, paths
 }
 
+// --- NewUntitled ---
+
+func TestNewUntitledCreatesActivePathlessBuffer(t *testing.T) {
+	w := NewWorkspace()
+	buf := w.NewUntitled()
+
+	if got, want := w.Len(), 1; got != want {
+		t.Fatalf("Len() = %d, se esperaba 1", got)
+	}
+	if got := buf.Path(); got != "" {
+		t.Fatalf("Path() = %q, se esperaba vacío (documento sin archivo)", got)
+	}
+	if got, want := w.ActiveIndex(), 0; got != want {
+		t.Fatalf("ActiveIndex() = %d, se esperaba 0", got)
+	}
+	if w.Active() != buf {
+		t.Fatal("el buffer nuevo debe quedar activo")
+	}
+	if got := buf.GetContent(); got != "" {
+		t.Fatalf("GetContent() = %q, se esperaba vacío", got)
+	}
+}
+
+func TestNewUntitledTwiceGivesTwoBuffers(t *testing.T) {
+	w := NewWorkspace()
+	first := w.NewUntitled()
+	second := w.NewUntitled()
+
+	if first == second {
+		t.Fatal("dos NewUntitled deben dar dos buffers distintos (no hay ruta que dedupar)")
+	}
+	if got, want := w.Len(), 2; got != want {
+		t.Fatalf("Len() = %d, se esperaba 2", got)
+	}
+	if got, want := w.ActiveIndex(), 1; got != want {
+		t.Fatalf("ActiveIndex() = %d, se esperaba 1 (el segundo al final)", got)
+	}
+	if w.Active() != second {
+		t.Fatal("el segundo buffer debe quedar activo")
+	}
+}
+
+func TestNewUntitledStartsCleanAndCloseRefusesAfterEdit(t *testing.T) {
+	w := NewWorkspace()
+	buf := w.NewUntitled()
+
+	if w.AnyModified() {
+		t.Fatal("un buffer sin ediciones no debe reportarse como modificado")
+	}
+	if got, want := w.ActiveIndex(), 0; got != want {
+		t.Fatalf("ActiveIndex() = %d, se esperaba 0", got)
+	}
+
+	if err := buf.Insert(0, "edit"); err != nil {
+		t.Fatalf("Insert falló: %v", err)
+	}
+	if !w.AnyModified() {
+		t.Fatal("tras editar, AnyModified debe ser verdadero")
+	}
+	err := w.Close(w.ActiveIndex())
+	if !errors.Is(err, ErrBufferModified) {
+		t.Fatalf("Close(modificado) = %v, se esperaba ErrBufferModified", err)
+	}
+	if got, want := w.Len(), 1; got != want {
+		t.Fatalf("Len() tras el rechazo = %d, se esperaba 1", got)
+	}
+}
+
 func TestWorkspaceOpenIsIdempotent(t *testing.T) {
 	w, paths := openThree(t)
 

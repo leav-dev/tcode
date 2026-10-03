@@ -29,7 +29,7 @@ func TestFullSessionSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAppWithScreen falló: %v", err)
 	}
-	defer func() { app.model.Close(); s.Fini() }()
+	defer func() { app.ws.CloseAll(); s.Fini() }()
 
 	app.redraw()
 
@@ -74,11 +74,11 @@ func TestFullSessionSmoke(t *testing.T) {
 	typeRune(app, '!')
 	press(app, tcell.KeyCtrlS)
 
-	if app.model.Modified() {
+	if app.ws.Active().Modified() {
 		t.Fatal("tras Ctrl+S el documento no debe quedar modificado")
 	}
 	// La invariante que importa: lo que quedó en memoria es lo que está en disco.
-	if got, want := readFile(t, path), app.model.GetContent(); got != want {
+	if got, want := readFile(t, path), app.ws.Active().GetContent(); got != want {
 		t.Fatalf("disco y memoria divergen\ndisco:   %q\nmemoria: %q", got, want)
 	}
 }
@@ -101,7 +101,7 @@ func TestEmptyDocumentSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAppWithScreen falló: %v", err)
 	}
-	defer func() { app.model.Close(); s.Fini() }()
+	defer func() { app.ws.CloseAll(); s.Fini() }()
 
 	app.redraw()
 

@@ -65,6 +65,13 @@ func (v *EditorView) Resize(width, height int) {
 	v.ensureCursorVisible()
 }
 
+// Size devuelve el ancho y el alto del área de dibujo de esta vista, en celdas
+// de terminal. Es la geometría con la que la vista está dibujando ahora mismo,
+// que puede no coincidir con la de la pantalla si todavía no se redimensionó.
+func (v *EditorView) Size() (int, int) {
+	return v.viewport.Width, v.viewport.Height
+}
+
 // --- helpers de grapheme cluster ---
 
 // graphemes itera los clusters de b sin copiarlos: la vista de string comparte la

@@ -14,20 +14,29 @@ import (
 const statusHeight = 1
 
 type App struct {
-	screen      tcell.Screen
-	model       *model.PieceTable
-	editorView  *view.EditorView
-	statusBar   *view.StatusBar
+	screen    tcell.Screen
+	ws        *model.Workspace
+	statusBar *view.StatusBar
+
+	// editors guarda una vista por buffer. La clave es el puntero del buffer:
+	// el workspace ya deduplica por ruta, así que el mapa no puede desincronizarse
+	// de él como podría hacerlo un slice mantenido a mano.
+	editors map[*model.PieceTable]*view.EditorView
+
 	confirmQuit bool
 
-	// forceSave habilita el próximo Ctrl+S a pisar cambios externos, después de
-	// haber avisado una vez.
-	forceSave bool
+	// forceSave es el permiso de pisar cambios externos, por buffer: autorizar
+	// sobrescribir UN archivo no tiene que valer para otro.
+	forceSave map[*model.PieceTable]bool
 
-	// promptActive y promptBuf sostienen el pedido de texto de Save As. Mientras
-	// están activos, el teclado alimenta el pedido y no el documento.
+	// promptActive, promptBuf y promptTarget sostienen el pedido de texto de
+	// Save As. Mientras está activo, el teclado alimenta el pedido y no el
+	// documento. El buffer destino se captura al ABRIR el pedido: el texto que
+	// alguien escribe pertenece al documento que estaba mirando cuando empezó,
+	// no al que esté activo cuando aprieta Enter.
 	promptActive bool
 	promptBuf    string
+	promptTarget *model.PieceTable
 }
 
 // NewApp inicializa la terminal y carga el archivo indicado (si path != "").
@@ -47,20 +56,22 @@ func NewAppWithScreen(s tcell.Screen, path string) (*App, error) {
 	}
 	s.EnableMouse()
 
-	m := model.NewPieceTable()
-	if path != "" {
-		if err := m.LoadFile(path); err != nil {
-			s.Fini()
-			return nil, err
-		}
+	ws := model.NewWorkspace()
+	if path == "" {
+		// Sin argumentos: un documento sin ruta, que es de donde Save As le da
+		// una después.
+		ws.NewUntitled()
+	} else if _, err := ws.Open(path); err != nil {
+		s.Fini()
+		return nil, err
 	}
 
-	width, height := s.Size()
 	app := &App{
-		screen:     s,
-		model:      m,
-		editorView: view.NewEditorView(m, editorHeight(height), width),
-		statusBar:  view.NewStatusBar(),
+		screen:    s,
+		ws:        ws,
+		editors:   make(map[*model.PieceTable]*view.EditorView),
+		forceSave: make(map[*model.PieceTable]bool),
+		statusBar: view.NewStatusBar(),
 	}
 	app.syncStatus()
 	return app, nil
@@ -74,14 +85,38 @@ func editorHeight(height int) int {
 	return height - statusHeight
 }
 
+// activeBuffer devuelve el buffer activo, o nil si el workspace está vacío.
+func (a *App) activeBuffer() *model.PieceTable { return a.ws.Active() }
+
+// activeEditor resuelve la vista del buffer activo, creándola bajo demanda con
+// el tamaño ACTUAL de la pantalla. Devuelve nil si no hay buffer activo.
+func (a *App) activeEditor() *view.EditorView {
+	buf := a.activeBuffer()
+	if buf == nil {
+		return nil
+	}
+	if ev, ok := a.editors[buf]; ok {
+		return ev
+	}
+	width, height := a.screen.Size()
+	ev := view.NewEditorView(buf, editorHeight(height), width)
+	a.editors[buf] = ev
+	return ev
+}
+
 func (a *App) syncStatus() {
-	a.statusBar.SetFile(a.model.Path(), a.model.Modified())
+	buf := a.activeBuffer()
+	if buf == nil {
+		a.statusBar.SetFile("", false)
+		return
+	}
+	a.statusBar.SetFile(buf.Path(), buf.Modified())
 }
 
 // Run ejecuta el loop de eventos hasta que el usuario cierra el editor.
 func (a *App) Run() error {
 	defer a.screen.Fini()
-	defer a.model.Close()
+	defer a.ws.CloseAll()
 
 	a.redraw()
 
@@ -106,6 +141,13 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 			return false
 		}
 
+		// Workspace vacío: no hay nada que editar, guardar ni deshacer. Salir
+		// sigue funcionando, y sin buffers no hay nada que perder.
+		buf := a.activeBuffer()
+		if buf == nil {
+			return ev.Key() == tcell.KeyEscape || ev.Key() == tcell.KeyCtrlC
+		}
+
 		switch {
 		case ev.Key() == tcell.KeyCtrlS:
 			a.confirmQuit = false
@@ -118,18 +160,19 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 
 		case isRedoKey(ev):
 			a.confirmQuit = false
-			a.applyHistory(a.model.Redo, "Rehecho", "Nada que rehacer")
+			a.applyHistory(buf.Redo, "Rehecho", "Nada que rehacer")
 			return false
 
 		case isUndoKey(ev):
 			a.confirmQuit = false
-			a.applyHistory(a.model.Undo, "Deshecho", "Nada que deshacer")
+			a.applyHistory(buf.Undo, "Deshecho", "Nada que deshacer")
 			return false
 
 		case ev.Key() == tcell.KeyEscape || ev.Key() == tcell.KeyCtrlC:
-			// Salir con cambios sin guardar pide confirmación: la primera vez
-			// solo se avisa, así una tecla de más no tira el trabajo.
-			if !a.model.Modified() || a.confirmQuit {
+			// Salir con cambios sin guardar en CUALQUIER buffer pide
+			// confirmación: la primera vez solo se avisa, así una tecla de más
+			// no tira el trabajo de ninguna pestaña.
+			if !a.ws.AnyModified() || a.confirmQuit {
 				return true
 			}
 			a.confirmQuit = true
@@ -141,21 +184,26 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		// Cualquier otra tecla cancela la confirmación pendiente y el permiso de
 		// pisar que se haya dado con un Ctrl+S previo.
 		a.confirmQuit = false
-		a.forceSave = false
+		a.clearForceSave()
 		a.statusBar.ClearMessage()
-		if a.editorView.HandleEvent(ev) {
+		if ed := a.activeEditor(); ed != nil && ed.HandleEvent(ev) {
 			a.redraw()
 		}
 
 	case *tcell.EventMouse:
-		if a.editorView.HandleEvent(ev) {
+		if ed := a.activeEditor(); ed != nil && ed.HandleEvent(ev) {
 			a.redraw()
 		}
 
 	case *tcell.EventResize:
 		a.screen.Sync()
 		width, height := a.screen.Size()
-		a.editorView.Resize(width, editorHeight(height))
+		// El resize cambia el viewport de TODOS los buffers abiertos, no solo
+		// del activo: si no, la vista de otro buffer queda desactualizada y
+		// dibuja mal al volver a esa pestaña.
+		for _, ed := range a.editors {
+			ed.Resize(width, editorHeight(height))
+		}
 		a.redraw()
 	}
 	return false
@@ -180,7 +228,8 @@ func isRedoKey(ev *tcell.EventKey) bool {
 		(ev.Rune() == 'z' || ev.Rune() == 'Z')
 }
 
-// applyHistory ejecuta deshacer o rehacer y refleja el resultado en la barra.
+// applyHistory ejecuta deshacer o rehacer sobre el buffer activo y refleja el
+// resultado en la barra.
 func (a *App) applyHistory(op func() (model.Change, bool, error), done, empty string) {
 	change, ok, err := op()
 	switch {
@@ -189,7 +238,9 @@ func (a *App) applyHistory(op func() (model.Change, bool, error), done, empty st
 	case !ok:
 		a.statusBar.SetMessage(empty)
 	default:
-		a.editorView.MoveCursorToOffset(change.Offset)
+		if ed := a.activeEditor(); ed != nil {
+			ed.MoveCursorToOffset(change.Offset)
+		}
 		a.statusBar.SetMessage(done)
 	}
 	a.syncStatus()
@@ -206,12 +257,14 @@ func isSaveAsKey(ev *tcell.EventKey) bool {
 }
 
 // startPrompt abre el pedido de Save As, prellenado con la ruta actual para poder
-// editarla en lugar de reescribirla entera.
+// editarla en lugar de reescribirla entera. El buffer destino queda capturado
+// acá: no depende de qué pestaña esté activa cuando se termine de tipear.
 func (a *App) startPrompt() {
 	a.confirmQuit = false
-	a.forceSave = false
+	a.clearForceSave()
 	a.promptActive = true
-	a.promptBuf = a.model.Path()
+	a.promptBuf = a.activeBuffer().Path()
+	a.promptTarget = a.activeBuffer()
 	a.refreshPrompt()
 	a.redraw()
 }
@@ -223,8 +276,21 @@ func (a *App) refreshPrompt() {
 func (a *App) endPrompt() {
 	a.promptActive = false
 	a.promptBuf = ""
+	a.promptTarget = nil
 	a.statusBar.SetPrompt("")
 }
+
+// clearForceSave revoca el permiso de pisar de todos los buffers. Reusa el mapa
+// en lugar de asignar uno nuevo: esto corre en el camino caliente del tipeo
+// (cualquier tecla que no sea un atajo lo llama) y alocar un mapa por tecla
+// sería un costo por nada.
+func (a *App) clearForceSave() { clear(a.forceSave) }
+
+// activeForceSave devuelve el permiso de pisar del buffer activo.
+func (a *App) activeForceSave() bool { return a.forceSave[a.activeBuffer()] }
+
+// saveAsFor autoriza a un buffer concreto a pisar cambios externos.
+func (a *App) saveAsFor(buf *model.PieceTable) { a.forceSave[buf] = true }
 
 // handlePromptKey alimenta el pedido de texto. El borrado va por runa y no por
 // grapheme cluster: alcanza para rutas, que son ASCII en la práctica.
@@ -238,8 +304,9 @@ func (a *App) handlePromptKey(ev *tcell.EventKey) {
 
 	case tcell.KeyEnter:
 		path := strings.TrimSpace(a.promptBuf)
+		target := a.promptTarget
 		a.endPrompt()
-		a.saveAs(path)
+		a.saveAs(target, path)
 		return
 
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
@@ -259,19 +326,35 @@ func (a *App) handlePromptKey(ev *tcell.EventKey) {
 	a.redraw()
 }
 
-// saveAs guarda en la ruta elegida y pasa a trabajar sobre ella.
-func (a *App) saveAs(path string) {
+// saveAs guarda el buffer capturado al abrir el pedido en la ruta elegida y pasa
+// a trabajar sobre ella.
+func (a *App) saveAs(target *model.PieceTable, path string) {
 	if path == "" {
 		a.statusBar.SetMessage("Save As cancelado")
 		a.redraw()
 		return
 	}
 
-	if err := a.model.SaveAs(path); err != nil {
+	// El buffer capturado puede haber salido del workspace entre medio: no hay
+	// que escribir en un documento que ya no está abierto.
+	inWorkspace := false
+	for _, b := range a.ws.Buffers() {
+		if b == target {
+			inWorkspace = true
+			break
+		}
+	}
+	if !inWorkspace {
+		a.statusBar.SetMessage("El buffer de destino ya no está abierto")
+		a.redraw()
+		return
+	}
+
+	if err := target.SaveAs(path); err != nil {
 		a.statusBar.SetMessage("Error al guardar como: " + err.Error())
 	} else {
 		a.confirmQuit = false
-		a.forceSave = false
+		a.clearForceSave()
 		a.statusBar.SetMessage("Guardado en " + filepath.Base(path))
 	}
 
@@ -279,23 +362,24 @@ func (a *App) saveAs(path string) {
 	a.redraw()
 }
 
-// save escribe el documento y refleja el resultado en la barra de estado.
+// save escribe el buffer activo y refleja el resultado en la barra de estado.
 //
 // Si el archivo cambió en disco se avisa en lugar de pisarlo; un segundo Ctrl+S
 // seguido fuerza la escritura. La decisión de perder esos cambios queda así en
 // manos de quien usa el editor y no de un valor por defecto.
 func (a *App) save() {
+	buf := a.activeBuffer()
 	var err error
-	if a.forceSave {
-		a.forceSave = false
-		err = a.model.SaveForce()
+	if a.activeForceSave() {
+		a.clearForceSave()
+		err = buf.SaveForce()
 	} else {
-		err = a.model.Save()
+		err = buf.Save()
 	}
 
 	switch {
 	case errors.Is(err, model.ErrFileChangedExternally):
-		a.forceSave = true
+		a.saveAsFor(buf)
 		a.statusBar.SetMessage("El archivo cambió en disco: Ctrl+S de nuevo pisa esos cambios")
 
 	case err != nil:
@@ -310,11 +394,14 @@ func (a *App) save() {
 	a.redraw()
 }
 
-// redraw limpia y vuelve a dibujar todas las Screens activas.
+// redraw limpia y vuelve a dibujar todas las Screens activas. Con el workspace
+// vacío solo dibuja la barra de estado: es un estado válido, no un error.
 func (a *App) redraw() {
 	width, height := a.screen.Size()
 	a.screen.Clear()
-	a.editorView.Draw(a.screen)
+	if ed := a.activeEditor(); ed != nil {
+		ed.Draw(a.screen)
+	}
 	a.statusBar.Draw(a.screen, height-statusHeight, width)
 	a.screen.Show()
 }

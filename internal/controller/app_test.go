@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
+	"tcode/internal/model"
 )
 
 func newTestApp(t *testing.T, content string) (*App, string) {
@@ -29,7 +30,7 @@ func newTestApp(t *testing.T, content string) (*App, string) {
 		t.Fatalf("NewAppWithScreen falló: %v", err)
 	}
 	t.Cleanup(func() {
-		app.model.Close()
+		app.ws.CloseAll()
 		s.Fini()
 	})
 	return app, path
@@ -71,7 +72,7 @@ func TestCtrlSSavesTheDocument(t *testing.T) {
 	app, path := newTestApp(t, "uno")
 
 	typeRune(app, 'X')
-	if !app.model.Modified() {
+	if !app.ws.Active().Modified() {
 		t.Fatal("tras escribir el documento debe quedar modificado")
 	}
 
@@ -82,7 +83,7 @@ func TestCtrlSSavesTheDocument(t *testing.T) {
 	if got := readFile(t, path); got != "Xuno" {
 		t.Fatalf("archivo en disco = %q, se esperaba %q", got, "Xuno")
 	}
-	if app.model.Modified() {
+	if app.ws.Active().Modified() {
 		t.Fatal("tras Ctrl+S el documento no debe quedar modificado")
 	}
 }
@@ -107,7 +108,7 @@ func TestEscapeWithUnsavedChangesAsksFirst(t *testing.T) {
 		t.Fatal("debe quedar pendiente la confirmación de salida")
 	}
 	// El trabajo no se perdió y nada se escribió a disco.
-	if got := app.model.GetContent(); got != "Xuno" {
+	if got := app.ws.Active().GetContent(); got != "Xuno" {
 		t.Fatalf("contenido en memoria = %q", got)
 	}
 	if got := readFile(t, path); got != "uno" {
@@ -184,7 +185,7 @@ func TestSaveErrorIsReportedAndKeepsTheDocumentDirty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAppWithScreen falló: %v", err)
 	}
-	defer func() { app.model.Close(); s.Fini() }()
+	defer func() { app.ws.CloseAll(); s.Fini() }()
 
 	typeRune(app, 'X')
 
@@ -195,7 +196,7 @@ func TestSaveErrorIsReportedAndKeepsTheDocumentDirty(t *testing.T) {
 
 	press(app, tcell.KeyCtrlS)
 
-	if !app.model.Modified() {
+	if !app.ws.Active().Modified() {
 		t.Fatal("un guardado fallido no debe limpiar el estado modificado")
 	}
 	if got := readFile(t, path); got != "uno" {
@@ -211,7 +212,7 @@ func TestCtrlZUndoesTheLastEdit(t *testing.T) {
 	app, _ := newTestApp(t, "uno")
 
 	typeRune(app, 'X')
-	if got := app.model.GetContent(); got != "Xuno" {
+	if got := app.ws.Active().GetContent(); got != "Xuno" {
 		t.Fatalf("contenido = %q", got)
 	}
 
@@ -219,10 +220,10 @@ func TestCtrlZUndoesTheLastEdit(t *testing.T) {
 		t.Fatal("Ctrl+Z no debe cerrar el editor")
 	}
 
-	if got := app.model.GetContent(); got != "uno" {
+	if got := app.ws.Active().GetContent(); got != "uno" {
 		t.Fatalf("tras deshacer, contenido = %q, se esperaba %q", got, "uno")
 	}
-	if app.model.Modified() {
+	if app.ws.Active().Modified() {
 		t.Fatal("deshacer hasta el estado inicial debe dejar el documento limpio")
 	}
 }
@@ -234,10 +235,10 @@ func TestCtrlYRedoesTheEdit(t *testing.T) {
 	press(app, tcell.KeyCtrlZ)
 	press(app, tcell.KeyCtrlY)
 
-	if got := app.model.GetContent(); got != "Xuno" {
+	if got := app.ws.Active().GetContent(); got != "Xuno" {
 		t.Fatalf("tras rehacer, contenido = %q, se esperaba %q", got, "Xuno")
 	}
-	if !app.model.Modified() {
+	if !app.ws.Active().Modified() {
 		t.Fatal("tras rehacer el documento debe quedar modificado")
 	}
 }
@@ -252,7 +253,7 @@ func TestCtrlShiftZAlsoRedoes(t *testing.T) {
 	// KeyCtrlZ, así que es un camino distinto al de Ctrl+Y.
 	app.handleEvent(tcell.NewEventKey(tcell.KeyRune, 'z', tcell.ModCtrl|tcell.ModShift))
 
-	if got := app.model.GetContent(); got != "Xuno" {
+	if got := app.ws.Active().GetContent(); got != "Xuno" {
 		t.Fatalf("tras rehacer, contenido = %q, se esperaba %q", got, "Xuno")
 	}
 }
@@ -263,7 +264,7 @@ func TestUndoWithNothingToUndoIsHarmless(t *testing.T) {
 	if quit := press(app, tcell.KeyCtrlZ); quit {
 		t.Fatal("Ctrl+Z sin historial no debe cerrar el editor")
 	}
-	if got := app.model.GetContent(); got != "uno" {
+	if got := app.ws.Active().GetContent(); got != "uno" {
 		t.Fatalf("contenido = %q, se esperaba sin cambios", got)
 	}
 }
@@ -275,13 +276,13 @@ func TestUndoPlacesTheCursorAtTheChange(t *testing.T) {
 
 	app.handleEvent(tcell.NewEventKey(tcell.KeyEnd, 0, tcell.ModCtrl))
 	typeRune(app, 'Z')
-	if got := app.model.GetContent(); got != "uno\ndosZ" {
+	if got := app.ws.Active().GetContent(); got != "uno\ndosZ" {
 		t.Fatalf("contenido = %q", got)
 	}
 
 	press(app, tcell.KeyCtrlZ)
 
-	if got := app.model.GetContent(); got != "uno\ndos" {
+	if got := app.ws.Active().GetContent(); got != "uno\ndos" {
 		t.Fatalf("contenido = %q", got)
 	}
 
@@ -316,13 +317,13 @@ func TestTypingCoalescesIntoOneUndoInTheEditor(t *testing.T) {
 	app, _ := newTestApp(t, "")
 
 	typeString(app, "hola")
-	if got := app.model.GetContent(); got != "hola" {
+	if got := app.ws.Active().GetContent(); got != "hola" {
 		t.Fatalf("contenido = %q", got)
 	}
 
 	press(app, tcell.KeyCtrlZ)
 
-	if got := app.model.GetContent(); got != "" {
+	if got := app.ws.Active().GetContent(); got != "" {
 		t.Fatalf("tras un Ctrl+Z, contenido = %q, se esperaba vacío", got)
 	}
 }
@@ -337,13 +338,13 @@ func TestMovingTheCursorEndsTheTypingGroup(t *testing.T) {
 	press(app, tcell.KeyRight)
 	typeString(app, "cd")
 
-	if got := app.model.GetContent(); got != "abcdxy" {
+	if got := app.ws.Active().GetContent(); got != "abcdxy" {
 		t.Fatalf("contenido = %q", got)
 	}
 
 	press(app, tcell.KeyCtrlZ)
 
-	if got := app.model.GetContent(); got != "abxy" {
+	if got := app.ws.Active().GetContent(); got != "abxy" {
 		t.Fatalf("tras un Ctrl+Z, contenido = %q, se esperaba %q", got, "abxy")
 	}
 }
@@ -388,10 +389,10 @@ func TestCtrlSWarnsBeforeOverwritingExternalChanges(t *testing.T) {
 	if got := readFile(t, path); got != externo {
 		t.Fatalf("el archivo fue pisado con el primer Ctrl+S: %q", got)
 	}
-	if !app.forceSave {
+	if !app.activeForceSave() {
 		t.Fatal("debe quedar habilitado el forzado para el próximo Ctrl+S")
 	}
-	if !app.model.Modified() {
+	if !app.ws.Active().Modified() {
 		t.Fatal("el documento sigue teniendo cambios sin guardar")
 	}
 
@@ -401,7 +402,7 @@ func TestCtrlSWarnsBeforeOverwritingExternalChanges(t *testing.T) {
 	if got := readFile(t, path); got != "Xuno" {
 		t.Fatalf("tras el segundo Ctrl+S, archivo = %q, se esperaba %q", got, "Xuno")
 	}
-	if app.model.Modified() {
+	if app.ws.Active().Modified() {
 		t.Fatal("tras forzar el guardado el documento queda limpio")
 	}
 }
@@ -415,12 +416,12 @@ func TestAnotherKeyCancelsTheForceSavePermission(t *testing.T) {
 	writeExternally(t, path, "ajeno")
 
 	press(app, tcell.KeyCtrlS)
-	if !app.forceSave {
+	if !app.activeForceSave() {
 		t.Fatal("debe quedar habilitado el forzado")
 	}
 
 	press(app, tcell.KeyDown)
-	if app.forceSave {
+	if app.activeForceSave() {
 		t.Fatal("otra tecla debe cancelar el permiso de pisar")
 	}
 
@@ -464,7 +465,7 @@ func TestSaveAsPromptDoesNotEditTheDocument(t *testing.T) {
 	typeRune(app, 'X')
 	typeRune(app, 'Y')
 
-	if got := app.model.GetContent(); got != "uno" {
+	if got := app.ws.Active().GetContent(); got != "uno" {
 		t.Fatalf("el documento no debía cambiar: %q", got)
 	}
 	if !strings.HasSuffix(app.promptBuf, "XY") {
@@ -493,7 +494,7 @@ func TestSaveAsPromptAcceptsATypedPath(t *testing.T) {
 	if got := readFile(t, dest); got != "uno" {
 		t.Fatalf("destino = %q, se esperaba %q", got, "uno")
 	}
-	if got := app.model.Path(); got != dest {
+	if got := app.ws.Active().Path(); got != dest {
 		t.Fatalf("Path() = %q, se esperaba %q", got, dest)
 	}
 	if got := readFile(t, original); got != "uno" {
@@ -535,7 +536,7 @@ func TestSaveAsPromptWithEmptyPathDoesNothing(t *testing.T) {
 	if app.promptActive {
 		t.Fatal("el pedido debe cerrarse")
 	}
-	if got := app.model.Path(); got != path {
+	if got := app.ws.Active().Path(); got != path {
 		t.Fatalf("la ruta no debía cambiar: %q", got)
 	}
 	if got := readFile(t, path); got != "uno" {
@@ -556,7 +557,7 @@ func TestSaveAsForADocumentWithoutPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAppWithScreen falló: %v", err)
 	}
-	defer func() { app.model.Close(); s.Fini() }()
+	defer func() { app.ws.CloseAll(); s.Fini() }()
 
 	typeString(app, "contenido nuevo")
 
@@ -573,11 +574,226 @@ func TestSaveAsForADocumentWithoutPath(t *testing.T) {
 	if got := readFile(t, dest); got != "contenido nuevo" {
 		t.Fatalf("destino = %q, se esperaba %q", got, "contenido nuevo")
 	}
-	if app.model.Modified() {
+	if app.ws.Active().Modified() {
 		t.Fatal("tras guardar como, el documento queda limpio")
 	}
 }
 
+// --- pruebas multi-buffer ---
+
+// newTwoBufferApp abre dos archivos como dos pestañas. Devuelve la app, las
+// rutas en orden de apertura y el workspace con el buffer 0 activo.
+func newTwoBufferApp(t *testing.T, c0, c1 string) (*App, string, string) {
+	t.Helper()
+
+	dir := t.TempDir()
+	path0 := filepath.Join(dir, "a.txt")
+	path1 := filepath.Join(dir, "b.txt")
+	for path, c := range map[string]string{path0: c0, path1: c1} {
+		if err := os.WriteFile(path, []byte(c), 0o644); err != nil {
+			t.Fatalf("no se pudo crear el archivo: %v", err)
+		}
+	}
+
+	s := tcell.NewSimulationScreen("UTF-8")
+	if err := s.Init(); err != nil {
+		t.Fatalf("no se pudo inicializar la pantalla simulada: %v", err)
+	}
+	s.SetSize(40, 10)
+
+	app, err := NewAppWithScreen(s, path0)
+	if err != nil {
+		t.Fatalf("NewAppWithScreen falló: %v", err)
+	}
+	if _, err := app.ws.Open(path1); err != nil {
+		t.Fatalf("Open falló: %v", err)
+	}
+	app.ws.SetActive(0)
+	t.Cleanup(func() {
+		app.ws.CloseAll()
+		s.Fini()
+	})
+	return app, path0, path1
+}
+
+// bufferAt devuelve el buffer del workspace en el índice i.
+func bufferAt(app *App, i int) *model.PieceTable {
+	return app.ws.Buffers()[i]
+}
+
+// TestCtrlSSavesOnlyTheActiveBuffer: guardar no puede arrastrar los cambios de
+// otras pestañas a sus archivos.
+func TestCtrlSSavesOnlyTheActiveBuffer(t *testing.T) {
+	app, path0, path1 := newTwoBufferApp(t, "uno", "dos")
+
+	// Dejar sucio el buffer 1: si Ctrl+S guardara todos los buffers abiertos, su
+	// archivo en disco tendría que cambiar y este test lo tiene que ver.
+	if err := app.ws.SetActive(1); err != nil {
+		t.Fatalf("SetActive falló: %v", err)
+	}
+	typeRune(app, 'Y')
+	if !bufferAt(app, 1).Modified() {
+		t.Fatal("el buffer 1 debía quedar sucio")
+	}
+
+	// Volver al buffer 0, editarlo y guardarlo.
+	if err := app.ws.SetActive(0); err != nil {
+		t.Fatalf("SetActive falló: %v", err)
+	}
+	typeRune(app, 'X')
+	if quit := press(app, tcell.KeyCtrlS); quit {
+		t.Fatal("Ctrl+S no debe cerrar el editor")
+	}
+
+	if got := readFile(t, path0); got != "Xuno" {
+		t.Fatalf("buffer 0 en disco = %q, se esperaba %q", got, "Xuno")
+	}
+	// La prueba de que no se guardó todo: el archivo del buffer 1 sigue intacto y
+	// su buffer sigue sucio.
+	if got := readFile(t, path1); got != "dos" {
+		t.Fatalf("Ctrl+S escribió el buffer 1, que no era el activo: %q", got)
+	}
+	if !bufferAt(app, 1).Modified() {
+		t.Fatal("el buffer 1 no debía quedar limpio: no se guardó")
+	}
+}
+
+// TestForceSavePermissionDoesNotCrossBuffers: el permiso de pisar cambios externos
+// se da para UN archivo. Autorizar el buffer 0 no puede autorizar el 1, ni heredar
+// la autorización por cambiar de pestaña.
+func TestForceSavePermissionDoesNotCrossBuffers(t *testing.T) {
+	app, path0, path1 := newTwoBufferApp(t, "uno", "dos")
+
+	// Cambio externo en el buffer 0: el primer Ctrl+S avisa y arma el permiso.
+	typeRune(app, 'X')
+	writeExternally(t, path0, "ajeno")
+	press(app, tcell.KeyCtrlS)
+
+	if !app.activeForceSave() {
+		t.Fatal("el buffer 0 debía quedar autorizado a pisar")
+	}
+
+	// Cambiar de pestaña no hereda la autorización.
+	if err := app.ws.SetActive(1); err != nil {
+		t.Fatalf("SetActive falló: %v", err)
+	}
+	if app.activeForceSave() {
+		t.Fatal("el buffer 1 heredó el permiso de pisar del buffer 0")
+	}
+
+	// Y de punta a punta: con el buffer 1 también cambiado en disco, su Ctrl+S
+	// tiene que volver a avisar en lugar de pisar.
+	typeRune(app, 'Y')
+	writeExternally(t, path1, "también ajeno")
+	press(app, tcell.KeyCtrlS)
+
+	if got := readFile(t, path1); got != "también ajeno" {
+		t.Fatalf("el buffer 1 pisó cambios externos sin avisar: %q", got)
+	}
+}
+
+// TestEscapeWarnsWhenAnyBufferIsDirty: la confirmación de salida es sobre TODO
+// el workspace, no solo la pestaña visible.
+func TestEscapeWarnsWhenAnyBufferIsDirty(t *testing.T) {
+	app, _, _ := newTwoBufferApp(t, "uno", "dos")
+
+	// Editar el buffer 0 y cambiar a la pestaña del buffer 1.
+	typeRune(app, 'X')
+	if err := app.ws.SetActive(1); err != nil {
+		t.Fatalf("SetActive falló: %v", err)
+	}
+
+	if quit := press(app, tcell.KeyEscape); quit {
+		t.Fatal("Escape con un buffer sucio en otra pestaña no debe cerrar: primero avisa")
+	}
+	// El buffer activo (el 1) está limpio: si la confirmación mirara solo el
+	// activo, Escape habría cerrado acá.
+	if bufferAt(app, 1).Modified() {
+		t.Fatal("el buffer activo no debía estar sucio")
+	}
+	if app.statusBar.Label() == "" {
+		t.Fatal("debe haber un aviso en la barra")
+	}
+}
+
+// TestSaveAsTargetsTheBufferCapturedAtPromptOpen: el destino es el buffer que
+// estaba activo al abrir el pedido, no el que esté activo al apretar Enter.
+func TestSaveAsTargetsTheBufferCapturedAtPromptOpen(t *testing.T) {
+	app, _, path1 := newTwoBufferApp(t, "uno", "dos")
+
+	dest := filepath.Join(t.TempDir(), "copia.txt")
+
+	// El pedido se abre con el buffer 0 activo.
+	pressSaveAs(app)
+	if app.promptTarget != bufferAt(app, 0) {
+		t.Fatal("el pedido debe capturar el buffer activo al abrirse")
+	}
+
+	// Cambiar de pestaña MIENTRAS el pedido está abierto.
+	if err := app.ws.SetActive(1); err != nil {
+		t.Fatalf("SetActive falló: %v", err)
+	}
+
+	// Limpiar la ruta prellenada y escribir el destino.
+	for range []rune(app.promptBuf) {
+		press(app, tcell.KeyBackspace)
+	}
+	for _, r := range dest {
+		typeRune(app, r)
+	}
+	press(app, tcell.KeyEnter)
+
+	if got := readFile(t, dest); got != "uno" {
+		t.Fatalf("destino = %q, se esperaba el contenido del buffer 0: %q", got, "uno")
+	}
+	if got := bufferAt(app, 0).Path(); got != dest {
+		t.Fatalf("buffer 0 Path() = %q, se esperaba %q", got, dest)
+	}
+	if bufferAt(app, 0).Modified() {
+		t.Fatal("el buffer 0 debe quedar limpio tras su Save As")
+	}
+	if got := bufferAt(app, 1).Path(); got != path1 {
+		t.Fatalf("buffer 1 Path() = %q, no debía cambiar", got)
+	}
+}
+
+// TestResizeUpdatesEveryEditor: el resize alcanza a todas las vistas, no solo a
+// la del buffer activo. Una terminal que cambia de tamaño cambia el viewport de
+// todos los buffers; si solo se redimensionara el activo, la vista de otro buffer
+// dibujaría con el alto viejo al volver a esa pestaña.
+func TestResizeUpdatesEveryEditor(t *testing.T) {
+	app, _, _ := newTwoBufferApp(t, "uno", "dos")
+
+	// Forzar la creación de las dos vistas: cambiar de pestaña y dejar que el
+	// dibujo de cada una las materialice.
+	app.redraw()
+	if err := app.ws.SetActive(1); err != nil {
+		t.Fatalf("SetActive falló: %v", err)
+	}
+	app.redraw()
+	if len(app.editors) != 2 {
+		t.Fatalf("editors = %d, se esperaban 2", len(app.editors))
+	}
+
+	s, ok := app.screen.(tcell.SimulationScreen)
+	if !ok {
+		t.Fatal("el test espera una pantalla simulada")
+	}
+	s.SetSize(30, 5)
+	app.handleEvent(tcell.NewEventResize(30, 5))
+
+	for buf, ed := range app.editors {
+		if ed == nil {
+			t.Fatalf("la vista de %v es nil", buf)
+		}
+		if w, h := ed.Size(); w != 30 || h != 4 {
+			t.Fatalf("la vista de %v quedó con %dx%d, se esperaba 30x4", buf, w, h)
+		}
+	}
+}
+
+// TestResizeKeepsTheStatusRow comprueba que tras un resize el dibujo no entra
+// en pánico y la barra tiene que caber en la última fila.
 func TestResizeKeepsTheStatusRow(t *testing.T) {
 	app, _ := newTestApp(t, "uno")
 
@@ -589,6 +805,49 @@ func TestResizeKeepsTheStatusRow(t *testing.T) {
 	app.handleEvent(tcell.NewEventResize(30, 5))
 
 	// No debe entrar en pánico y la barra tiene que caber en la última fila.
+	app.redraw()
+}
+
+// TestEmptyWorkspaceDoesNotPanic: con el workspace vacío, Active() es nil. Ni
+// el dibujo ni el teclado pueden entrar en pánico; salir sigue siendo posible.
+func TestEmptyWorkspaceDoesNotPanic(t *testing.T) {
+	s := tcell.NewSimulationScreen("UTF-8")
+	if err := s.Init(); err != nil {
+		t.Fatalf("no se pudo inicializar la pantalla: %v", err)
+	}
+	s.SetSize(40, 10)
+
+	app, err := NewAppWithScreen(s, "")
+	if err != nil {
+		t.Fatalf("NewAppWithScreen falló: %v", err)
+	}
+	defer func() { app.ws.CloseAll(); s.Fini() }()
+
+	// Vaciar el workspace de todos los buffers.
+	app.ws.CloseAll()
+
+	app.redraw()
+	if got := app.statusBar.Label(); got == "" {
+		t.Fatal("la barra de estado debe poder dibujarse aunque no haya buffer")
+	}
+
+	// Los atajos que normalmente tocan el buffer activo son el camino con más
+	// punteros sin dueño: sin buffer no pueden entrar en pánico ni hacer nada.
+	for _, key := range []tcell.Key{tcell.KeyCtrlS, tcell.KeyCtrlZ, tcell.KeyCtrlY} {
+		if quit := press(app, key); quit {
+			t.Fatalf("la tecla %v no debe cerrar el editor con el workspace vacío", key)
+		}
+	}
+	pressSaveAs(app)
+	if app.promptActive {
+		t.Fatal("Save As no debe abrirse sin un buffer de destino")
+	}
+	if quit := press(app, tcell.KeyDown); quit {
+		t.Fatal("una tecla común no debe cerrar el editor")
+	}
+	if quit := press(app, tcell.KeyEscape); !quit {
+		t.Fatal("Escape sobre un workspace vacío debe cerrar el editor")
+	}
 	app.redraw()
 }
 
