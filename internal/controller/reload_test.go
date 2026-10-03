@@ -55,9 +55,9 @@ func TestCtrlRArmedIsCancelledByAnotherKey(t *testing.T) {
 	app, _ := newTestApp(t, "uno\n")
 	typeRune(app, 'X')
 
-	press(app, tcell.KeyCtrlR)   // arma
-	typeRune(app, 'y')           // desarma (y escribe)
-	press(app, tcell.KeyCtrlR)   // vuelve a armar, NO recarga
+	press(app, tcell.KeyCtrlR) // arma
+	typeRune(app, 'y')         // desarma (y escribe)
+	press(app, tcell.KeyCtrlR) // vuelve a armar, NO recarga
 
 	if !app.ws.Active().Modified() {
 		t.Fatal("la tecla canceladora no debió permitir la recarga: el buffer sigue sucio")
