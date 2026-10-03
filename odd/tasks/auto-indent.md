@@ -28,14 +28,14 @@ cualquier texto), el movimiento, el borrado de líneas. `Enter` al final del
 documento o en una línea vacía: hereda "" (una línea vacía no indenta nada).
 
 ## Tasks
-- [ ] `view`: `var indentUnit` (default `"    "`) + `autoIndent()`: prefijo de
+- [x] `view`: `var indentUnit` (default `"    "`) + `autoIndent()`: prefijo de
   whitespace de la línea de origen; si su cola termina en `{`/`[`/`:` suma
   `indentUnit`; `handleKey` Enter/LF inserta `"\n"+indent` y Tab inserta
-  `indentUnit` <!-- id: 0 -->
-- [ ] Tests de vista: hereda el prefijo exacto; nivel extra tras `{`, `[`, `:`;
+  `indentUnit` <!-- id: 0 --> · `19bdd6b`
+- [x] Tests de vista: hereda el prefijo exacto; nivel extra tras `{`, `[`, `:`;
   línea plana sin indent; línea vacía; Enter al final; Tab inserta `indentUnit`
-  y respeta el cambio de la variable <!-- id: 1 -->
-- [ ] Verificación: suite completa sin fallos nuevos vs base + `go vet`/`gofmt`
+  y respeta el cambio de la variable <!-- id: 1 --> · `19bdd6b`
+- [x] Verificación: suite completa sin fallos nuevos vs base + `go vet`/`gofmt`
   <!-- id: 2 -->
 
 ## Design decisions
@@ -64,4 +64,19 @@ tests la bajan/alteran para fijar el comportamiento.
 4. Con Tab insertando `\t` → `TestTabInsertsIndentUnit` (espacios) falla.
 
 ## Evidence
-(Rellenar por unidad.)
+
+### Unidad completa · `19bdd6b` (rama `feat/auto-indent`)
+- **RED:** tests sin `indentUnit`/`autoIndent` no compilaban; el Enter no
+  heredaba nada.
+- **Ajustes durante el verde:
+  - Fixture equivocado mío: `"[1, 2"` no termina en `[` (termina en `2`); el
+    caso real es `"arr = ["`.
+  - Contrato viejo de Tab actualizado en dos tests (`editing_test.go` y
+    `app_test.go`): esperaban el tab crudo `\t`; Tab ahora inserta la unidad.
+    El roundtrip tipear/borrar se probó sin el `\t` (edición de bytes frágil:
+    backslashes comidos por el heredoc; se resolvió con `chr(92)`).
+- **GREEN:** herencia exacta, nivel extra tras `{`/`[`/`:` (incluido con
+  whitespace de cola), línea plana sin indent, Tab = unidad por defecto y con
+  la variable cambiada.
+- **Verificación:** `go build`/`go vet` limpios y `go test ./...` con set
+  idéntico al base (48 ambientales de Windows, 0 nuevos).
