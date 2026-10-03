@@ -15,3 +15,7 @@ Este archivo define cómo los agentes de IA externos deben interactuar con **tco
 ## 3. Limitaciones
 - **Escalabilidad:** El agente no debe cargar el archivo completo en su propia memoria. Debe solicitar chunks específicos al `Model`.
 - **Resource Aware:** Si un agente requiere realizar una operación de análisis costosa, debe notificar al usuario para ejecutarse en background, evitando picos de RAM en el editor.
+
+## 4. Versionado (Git Hub)
+- **commit:** El agente al terminar un cambio solicitado realiza el commit de codigo. No se realiza push de manera inmediata
+- **push:** El agente no solicita push inmediato al hacer commit, espera que el usuario lo solicite
