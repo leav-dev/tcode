@@ -157,12 +157,18 @@ terminal escrolle por accidente mientras se cambia de pestaña.
 - **Verificación observada (host Windows):** `go vet ./...` limpio, `go build ./...`
   limpio, `gofmt -l` sin salida para los 9 archivos de la unidad, `go test ./internal/view/`
   verde completo, y los tests nuevos de modelo y controlador en verde.
-- **Bloqueos ambientales del host, ajenos a la unidad:** `go test -race` no puede correr
-  (no hay compilador C / `gcc` fuera del PATH; el detector de carrera requiere CGO). Los
-  fallos de `go test ./...` son los mismos 25 ambientales de Windows —renombres y
-  limpieza de TempDir sobre archivos mapeados (mmap vivo) y `/proc` inexistente—
-  verificados idénticos contra el HEAD limpio en un worktree aparte; ninguna aserción
-  de esta unidad falla.
+- **`-race` resuelto tras la instalación del compilador:** el usuario instaló MSYS2
+  (`mingw-w64` gcc 15.2.0), pero el `ld` de binutils resultó roto en este host (falla
+  incluso ante un error forzado, en silencio y también desde `cmd`). Se resolvió
+  instalando `mingw-w64-ucrt-x86_64-clang` + `lld` y corriendo con
+  `CGO_ENABLED=1 CC=clang`. Verificación observada: los 30 tests de la unidad en verde
+  bajo `-race` (controller 1.92s, model 1.91s, view 1.90s) y el paquete `view` completo
+  bajo `-race` en verde.
+- **Fallos ambientales preexistentes de Windows, ajenos a la unidad:** los fallos de
+  `go test ./...` (con y sin `-race`) son los mismos de siempre —renombres (
+  `Acceso denegado` sobre archivos mapeados) y limpieza de TempDir (`mmap` vivo), con
+  un subconjunto que varía de corrida en corrida—, verificados idénticos contra el
+  HEAD limpio en un worktree aparte; ninguna aserción de esta unidad falla.
 - **Cambios revisados tras la delegación:** dos tests frontera de la TabBar agregados
   por el orquestador (riesgo de revisión del worker, ver arriba); su primera variante
   contaba mal el ancho de la etiqueta (21 vs 20) y asumía un `>` derecho inexistente
