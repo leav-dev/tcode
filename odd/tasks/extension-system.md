@@ -45,7 +45,9 @@ evolución siguiente (palette, y el backend de scripting).
 - [x] `internal/ext` keybindings: parser `"ctrl+k"`, mods combinados, F-keys, teclas nombradas, chords `"ctrl+k ctrl+g"`; `Resolve` sobre `tcell.EventKey` con la máquina de estados de chord <!-- id: 3 -->
 
 *U3 (keybindings) — hash en el próximo update.*
-- [ ] `internal/ext` hooks + activación: bus `onDidOpenBuffer`/`onDidSaveBuffer`/`onDidCloseBuffer`; activación por `onCommand:<id>`/`onDidOpenBuffer`/`onStartup`/`*` <!-- id: 4 -->
+- [x] `internal/ext` hooks + activación: bus `onDidOpenBuffer`/`onDidSaveBuffer`/`onDidCloseBuffer`; activación por `onCommand:<id>`/`onDidOpenBuffer`/`onStartup`/`*` <!-- id: 4 -->
+
+*U4 (manager) — hash en el próximo update.*
 - [ ] Controller: `App` crea el `Manager` con `NewAppWithScreen`; built-ins `tcode.*` (save, saveAs, closeTab, toggleExplorer, undo, redo, switchTabNext/Prev) registrados contra acciones existentes; resolución de keybindings en `handleEvent` después del switch del núcleo y antes del guard de workspace vacío; emisión de hooks en open/save/close; mensajes de estado (activación, comando desconocido, error) <!-- id: 5 -->
 - [ ] Rutas reales de descubrimiento (usuario `~/.tcode/extensions` + proyecto `.tcode/extensions`) con override para tests; `docs/extension-system.md` (spec del manifest, ejemplo completo, referencia de keybindings, roadmap a backend WASM/Lua y palette) <!-- id: 6 -->
 - [ ] Tests de integración del controlador (`SimulationScreen`): built-in por keybinding de extensión, chord de dos tiempos, hook en save/open/close, activación diferida, extensión rota en disco no rompe el arranque <!-- id: 7 -->
