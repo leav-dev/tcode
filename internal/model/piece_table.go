@@ -75,6 +75,33 @@ type PieceTable struct {
 // noSavedAt marca que el estado guardado ya no es alcanzable con deshacer/rehacer.
 const noSavedAt = -1
 
+// maxUndoHistory limita el historial de deshacer: por encima se descarta el
+// cambio MÁS VIEJO (el del frente). Es la deuda de memoria de undo/redo —los
+// cambios guardan los strings removidos/insertados y la sesión larga crece sin
+// límite—; es variable para que los tests puedan bajarlo. El redo NO se topa:
+// es una pila de aplicación LIFO donde truncar por un borde rompería el orden
+// de restauración, y además se autorregula (solo crece deshaciendo, y el undo
+// ya no puede darme más de max pasos).
+var maxUndoHistory = 1000
+
+// pushUndo apila un cambio en el historial y aplica el tope: si sobra, el más
+// viejo cae del frente y el punto de guardado viaja con el descarte —si el
+// guardado era el más viejo (índice 0) se pierde para siempre (noSavedAt); si
+// no, corre uno—.
+func (pt *PieceTable) pushUndo(c Change) {
+	pt.undo = append(pt.undo, c)
+	if len(pt.undo) <= maxUndoHistory {
+		return
+	}
+	pt.undo = pt.undo[1:]
+	switch {
+	case pt.savedAt == 0:
+		pt.savedAt = noSavedAt
+	case pt.savedAt != noSavedAt:
+		pt.savedAt--
+	}
+}
+
 // Change describe una edición de forma reversible: en Offset se quitó Removed y
 // se puso Inserted. Alcanza para deshacer y rehacer sin guardar instantáneas.
 type Change struct {
@@ -536,7 +563,7 @@ func (pt *PieceTable) record(c Change) {
 		pt.undo[len(pt.undo)-1].Inserted += c.Inserted
 		return
 	}
-	pt.undo = append(pt.undo, c)
+	pt.pushUndo(c)
 }
 
 // Undo deshace la última edición y devuelve el cambio aplicado.
@@ -576,7 +603,7 @@ func (pt *PieceTable) Redo() (Change, bool, error) {
 	}
 	// Rehacer también termina el grupo: el próximo tipeo es un cambio nuevo.
 	pt.typingGroupBroken = true
-	pt.undo = append(pt.undo, c)
+	pt.pushUndo(c)
 	return c, true, nil
 }
 
