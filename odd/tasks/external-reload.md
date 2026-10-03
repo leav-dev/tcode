@@ -39,24 +39,24 @@ fuera de esta unidad. Sin indicador visual persistente de "cambió en disco": el
 aviso transitorio y el rechazo del guardado bastan en esta unidad.
 
 ## Tasks
-- [ ] `model.PieceTable.Reload()`: `release()` → `openAndMap()` → historial
+- [x] `model.PieceTable.Reload()`: `release()` → `openAndMap()` → historial
   vacío (`undo`/`redo` nil, `savedAt` 0); errores controlados (`ErrNoPath`,
-  re-mapeo fallido) <!-- id: 0 -->
-- [ ] Tests de modelo: Reload reemplaza contenido y descarta ediciones; undo
+  re-mapeo fallido) <!-- id: 0 --> · `6310b21`
+- [x] Tests de modelo: Reload reemplaza contenido y descarta ediciones; undo
   vacío; archivo encogido recarga sin SIGBUS; `ChangedOnDisk` pasa false tras
-  recargar; error con path vacío <!-- id: 1 -->
-- [ ] `view.EditorView.ClampCursor()`: cursor y viewport dentro del documento
-  tras recargar (doc vacío incluido) <!-- id: 2 -->
-- [ ] Controller `Ctrl+R`: recarga el buffer activo; primera vez avisa si hay
-  ediciones, segunda confirma; cualquier otra tecla desarma el armado <!-- id: 3 -->
-- [ ] Controller detección automática: chequea los buffers abiertos en cada
+  recargar; error con path vacío <!-- id: 1 --> · `6310b21`
+- [x] `view.EditorView.ClampCursor()`: cursor y viewport dentro del documento
+  tras recargar (doc vacío incluido) <!-- id: 2 --> · `a36dcdf`
+- [x] Controller `Ctrl+R`: recarga el buffer activo; primera vez avisa si hay
+  ediciones, segunda confirma; cualquier otra tecla desarma el armado <!-- id: 3 --> · `6c36c5e`
+- [x] Controller detección automática: chequea los buffers abiertos en cada
   evento; el limpio recarga solo (mensaje "Cambios externos recargados"), el
-  sucio no <!-- id: 4 -->
-- [ ] Tests del controlador: recarga manual con confirmación, recarga
+  sucio no <!-- id: 4 --> · `6c36c5e`
+- [x] Tests del controlador: recarga manual con confirmación, recarga
   automática de buffer limpio, buffer sucio que no recarga solo, cursor clamp
   tras recargar; ajustes de los tests existentes que afirmaban la semántica
-  vieja <!-- id: 5 -->
-- [ ] Verificación final: build/vet/gofmt y `go test ./...` sin fallos nuevos
+  vieja <!-- id: 5 --> · `6c36c5e`
+- [x] Verificación final: build/vet/gofmt y `go test ./...` sin fallos nuevos
   vs base <!-- id: 6 -->
 
 ## Design decisions
@@ -108,4 +108,41 @@ a cero con un documento vacío.
    fallaría si el chequeo recargara igual.
 
 ## Evidence
-(Rellenar por unidad: falsificaciones RED, verificación, commits.)
+
+### U-modelo · `6310b21`
+- **RED:** `Reload` no compiló (no existía); los 4 tests de modelo.
+- **Hallazgo Windows:** el helper heredado `writeExternally` (rename) no
+  funciona en este host: Windows bloquea tocar un archivo con una sección
+  mapeada abierta en el MISMO proceso (`ERROR_USER_MAPPED_FILE` — es la raíz
+  de los 48 fallos ambientales históricos: escribir y renombrar se niegan). El
+  test desmapea primero y valida el contrato observable (el disco gana, las
+  ediciones se descartan); un cambio de OTRO proceso sí es válido en vivo.
+- **Diseño:** `Reload` desmapea antes de leer (un archivo encogido leería
+  páginas desmapeadas → SIGBUS), vacía el buffer y re-mapea. `resetDocument`
+  garantiza que ante fallo el buffer quede vacío y limpio, nunca con piezas
+  apuntando a un mapeo liberado.
+
+### U-vista · `a36dcdf`
+- **RED:** `ClampCursor` no compiló; los tests artificiales del clamp.
+- **Semántica del modelo respetada:** un `\n` final deja la última línea vacía
+  direccionable; el clamp cae en `LineCount-1` (vacía) — el fixture se
+  reescribió sin `\n` final para pedir la línea con contenido.
+- **Detalle:** el clamp conserva la columna al recortar la línea (no vuelve al
+  inicio) y recalcula `desiredCol`; `ensureCursorVisible` acompaña el viewport.
+
+### U-controlador · `6c36c5e`
+- **RED:** 5 tests de integración fallaron (la tecla y el chequeo no existían).
+- **Tres bugs en los TESTS (no en el código):** un `Fatal` invertido (doble
+  negación, otra vez), una actividad que escribía en el buffer limpio
+  (`typeRune` en vez de `KeyDown`), y la posición de la `X` al inicio.
+- **Semántica vieja preservada:** delta completo contra base = 0 fallos nuevos,
+  0 arreglados (los tests de external change que combinaban teclas ya estaban
+  entre los ambientales).
+- **Chtimes como simulación de cambio externo:** es metadata (no contenido), y
+  Windows la permite sobre un archivo mapeado; con eso se prueban la recarga
+  automática y el no-toque de buffers sucios.
+
+### Cierre
+- `go build ./...`, `go vet ./...` limpios; `gofmt` limpio en los archivos de
+  la feature; `go test ./...` con set de fallos idéntico al base (48
+  ambientales de Windows, 0 nuevos).
