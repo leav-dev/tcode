@@ -1,5 +1,10 @@
 # Feature: Pestañas y explorador — U3: FileBrowser y modos de arranque
 
+> **Superada por U3b (`odd/tasks/tree-explorer.md`):** el explorador dejó de ser
+> una lista plana con descenso y `..` y es ahora un **árbol expandible anclado al
+> root de la sesión**, con carga perezosa por nivel. La navegación detallada acá
+> (Enter desciende, `..` sube) se complementa con enter→expandir y ←→colapsar.
+
 ## Description
 U2b dejó la composición lista: pestañas en la fila 0, editor en una región
 compuesta con la costura (`OffsetSurface`) y mouse traducido. Esta unidad agrega

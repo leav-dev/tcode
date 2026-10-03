@@ -49,7 +49,7 @@ estén en pantalla.
   de semántica se actualizan (descenso → expansión, `..` → colapso) <!-- id: 10 -->
 - [x] Verificación: `go vet`, `gofmt -l` en las superficies, paquete `view` bajo
   `-race` con clang, tests de la unidad <!-- id: 11 -->
-- [ ] Commit de unidad de trabajo <!-- id: 12 -->
+- [x] Commit de unidad de trabajo: `75a4098` <!-- id: 12 -->
 
 ## Design decisions
 
@@ -124,4 +124,4 @@ sin alternancias sorpresa.
   re-expandir no relee cambios en disco; es el costo del "re-expandir sin
   re-leer" y la carga perezosa (el toggle `Ctrl+B` tampoco relee: el árbol es
   estado en vivo).
-- **Commit de unidad de trabajo:** (se registra en el commit de docs siguiente).
+- **Commit de unidad de trabajo:** `75a4098`.

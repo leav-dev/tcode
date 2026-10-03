@@ -46,6 +46,11 @@ U2b. Modos de arranque: sin argumento → explorador sobre cwd; directorio →
 explorador sobre ese dir; archivo → edición clásica con panel oculto. En la
 evidencia: `2355846`.
 
+**U3b — Árbol expandible (`odd/tasks/tree-explorer.md`):** el panel quedó
+anclado a la ruta base y pasó de lista plana a árbol jerárquico con `../`
+indentados, colapsar/expandir (`→`/`Enter` expande, `←` colapsa) y carga
+perezosa por nivel. El `..` y el descenso desaparecen.
+
 ### U4 — Menú de pestañas (`Ctrl+T`) y sesión JSON (`odd/tasks/tab-menu-session.md`)
 `Ctrl+T` abre un superpuesto transitorio que lista todas las pestañas (cursor
 navegable, `Enter` cambia, cualquier otra tecla cierra y descarta). La sesión
