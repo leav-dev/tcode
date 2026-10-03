@@ -139,7 +139,10 @@ func TestEnterAtTheEndCreatesAnAddressableEmptyLine(t *testing.T) {
 	}
 }
 
-func TestTabInsertsATab(t *testing.T) {
+// TestTabInsertsIndentUnit es el contrato del feature de auto-indentación: la
+// tecla Tab inserta la unidad estándar del editor (4 espacios por defecto), no
+// un tab crudo — el nivel extra del Enter y la tecla coinciden.
+func TestTabInsertsIndentUnit(t *testing.T) {
 	s := newTestScreen(t, 20, 1)
 	v := newTestView(t, "", 20, 1)
 
@@ -147,14 +150,15 @@ func TestTabInsertsATab(t *testing.T) {
 	pressKey(v, tcell.KeyTab)
 	typeRune(v, 'b')
 
-	if got := contentOf(t, v); got != "a\tb" {
-		t.Fatalf("contenido = %q, se esperaba %q", got, "a\tb")
+	if got := contentOf(t, v); got != "a"+indentUnit+"b" {
+		t.Fatalf("contenido = %q, se esperaba %q", got, "a"+indentUnit+"b")
 	}
 
 	draw(v, s)
-	// 'a' en la columna 0, el tab llega al 4, 'b' en la 4.
-	if got := screenLines(s)[0]; got != "a   b" {
-		t.Fatalf("pantalla = %q, se esperaba %q", got, "a   b")
+	// 'a' en la columna 0, los espacios de indentUnit, 'b' al final de ellos.
+	want := "a" + indentUnit + "b"
+	if got := screenLines(s)[0]; got != want {
+		t.Fatalf("pantalla = %q, se esperaba %q", got, want)
 	}
 }
 
@@ -378,7 +382,7 @@ func TestTypingThenBackspacingIsARoundTrip(t *testing.T) {
 	// Ctrl+End lleva al final del documento; End solo va al final de la línea.
 	v.HandleEvent(tcell.NewEventKey(tcell.KeyEnd, 0, tcell.ModCtrl))
 
-	typed := "hola 日 mundo\nnueva línea\ttab"
+	typed := "hola 日 mundo\nnueva línea"
 	typeString(v, typed)
 	if got := contentOf(t, v); got != original+typed {
 		t.Fatalf("tras escribir, contenido = %q, se esperaba %q", got, original+typed)

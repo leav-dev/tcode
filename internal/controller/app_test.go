@@ -1580,8 +1580,9 @@ func TestTabInsertsInTheDocumentWhileTheExplorerIsVisible(t *testing.T) {
 	}
 
 	press(app, tcell.KeyTab)
-	if got := app.ws.Active().GetContent(); got != "\t" {
-		t.Fatalf("contenido = %q, se esperaba %q: Tab inserta con el panel visible", got, "\t")
+	// El tab del editor es la unidad estándar (view.indentUnit): 4 espacios por defecto.
+	if got := app.ws.Active().GetContent(); got != "    " {
+		t.Fatalf("contenido = %q, se esperaba %q: Tab inserta la unidad con el panel visible", got, "    ")
 	}
 	if app.explorerFocused {
 		t.Fatal("Tab con el foco en el editor no debe cambiar el foco")

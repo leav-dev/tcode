@@ -1,6 +1,7 @@
 package view
 
 import (
+	"strings"
 	"unsafe"
 
 	"github.com/gdamore/tcell/v2"
@@ -10,6 +11,12 @@ import (
 
 // tabWidth es la cantidad de columnas a la que se expande una tabulación.
 const tabWidth = 4
+
+// indentUnit es la unidad estándar de indentación del editor: la que inserta
+// Tab y la que se suma como nivel extra tras abrir un bloque. Es una variable
+// (la futura configuración del editor la podrá exponer); por defecto, "el
+// tamaño del tab" del proyecto: 4 espacios.
+var indentUnit = "    "
 
 // Viewport controla qué región del documento se proyecta en la pantalla.
 type Viewport struct {
@@ -367,6 +374,29 @@ func (v *EditorView) MoveCursorToOffset(offset int) {
 // --- edición ---
 
 // insertText inserta s en la posición del cursor y lo deja después del texto.
+// autoIndent calcula la indentación de la línea nueva tras Enter: hereda el
+// prefijo de whitespace de la línea de origen (donde está el cursor) y, si esa
+// línea termina —ignorando el whitespace de cola— en {, [ o :, suma indentUnit
+// (un nivel del estándar del editor). Es una regla mecánica, sin análisis
+// sintáctico: un ':' en un slice o un '{' en una cadena también indenta; se
+// corrige con Backspace y queda anotado como límite de esta versión.
+func (v *EditorView) autoIndent() string {
+	content := v.model.LineContent(v.cursor.Line)
+	i := 0
+	for i < len(content) && (content[i] == ' ' || content[i] == '\t') {
+		i++
+	}
+	prefix := string(content[:i])
+	body := strings.TrimRight(string(content[i:]), " \t")
+	if body == "" {
+		return prefix // línea de origen sin contenido: solo se hereda el prefijo
+	}
+	if last := body[len(body)-1]; last == '{' || last == '[' || last == ':' {
+		return prefix + indentUnit
+	}
+	return prefix
+}
+
 func (v *EditorView) insertText(s string) bool {
 	if s == "" {
 		return false
@@ -589,9 +619,12 @@ func (v *EditorView) handleKey(ev *tcell.EventKey) bool {
 	case tcell.KeyEnter, tcell.KeyLF:
 		// KeyEnter es el camino normal (CR). Algunos terminales y modos de línea
 		// mandan LF, así que se acepta también para no perder el salto de línea.
-		return v.insertText("\n")
+		// La línea nueva hereda la indentación de la línea de origen (autoIndent).
+		return v.insertText("\n" + v.autoIndent())
 	case tcell.KeyTab:
-		return v.insertText("\t")
+		// El tab del editor es la unidad de indentación estándar (4 espacios por
+		// defecto), no un tab crudo: el nivel extra y la tecla coinciden.
+		return v.insertText(indentUnit)
 	}
 
 	// Texto: solo runas sin modificadores. Ctrl y Alt quedan libres para atajos,
