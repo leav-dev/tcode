@@ -357,7 +357,7 @@ func TestEditsMatchReferenceString(t *testing.T) {
 }
 
 // expectedLines parte el texto en líneas con la misma semántica que la tabla: un
-// '\n' final no genera una línea vacía adicional.
+// '\n' final genera una línea vacía adicional, porque es direccionable.
 func expectedLines(s string) []string {
 	if s == "" {
 		return nil
@@ -370,9 +370,7 @@ func expectedLines(s string) []string {
 			start = i + 1
 		}
 	}
-	if start < len(s) {
-		lines = append(lines, s[start:])
-	}
+	lines = append(lines, s[start:])
 	return lines
 }
 

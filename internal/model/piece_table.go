@@ -146,21 +146,16 @@ func (pt *PieceTable) LineAt(offset int) int {
 	return i
 }
 
-// LineCount devuelve la cantidad de líneas del documento.
+// LineCount devuelve la cantidad de líneas direccionables del documento.
+//
+// Un documento que termina en '\n' tiene una línea vacía final, igual que en
+// cualquier editor: es donde el cursor queda después de presionar Enter al final.
+// Un documento vacío, en cambio, no tiene ninguna línea direccionable.
 func (pt *PieceTable) LineCount() int {
 	if pt.docLen == 0 {
 		return 0
 	}
-	n := len(pt.lineOffsets)
-	if n == 0 {
-		return 0
-	}
-	// Si el documento termina en '\n', el último offset es el inicio de una
-	// línea fantasma vacía: no la contamos.
-	if n > 1 && pt.lineOffsets[n-1] == pt.docLen {
-		return n - 1
-	}
-	return n
+	return len(pt.lineOffsets)
 }
 
 // buffer devuelve el buffer al que apunta una pieza.

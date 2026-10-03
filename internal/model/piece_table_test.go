@@ -32,10 +32,19 @@ func TestLineCountWithoutTrailingNewline(t *testing.T) {
 	}
 }
 
-func TestLineCountWithTrailingNewlineDoesNotCountPhantomLine(t *testing.T) {
+// TestLineCountIncludesTrailingEmptyLine: un documento que termina en '\n' tiene
+// una línea vacía final direccionable, que es donde el cursor cae tras un Enter
+// al final. Antes se excluía como "fantasma" y eso dejaba al cursor sin línea.
+func TestLineCountIncludesTrailingEmptyLine(t *testing.T) {
 	pt := loadTable(t, "uno\ndos\n")
-	if got := pt.LineCount(); got != 2 {
-		t.Fatalf("LineCount() = %d, se esperaba 2 (sin línea fantasma)", got)
+	if got := pt.LineCount(); got != 3 {
+		t.Fatalf("LineCount() = %d, se esperaba 3 (\"uno\", \"dos\" y la línea vacía final)", got)
+	}
+	if got := pt.LineStart(2); got != 8 {
+		t.Fatalf("LineStart(2) = %d, se esperaba 8", got)
+	}
+	if got := len(pt.LineContent(2)); got != 0 {
+		t.Fatalf("LineContent(2) = %q, se esperaba vacía", got)
 	}
 }
 

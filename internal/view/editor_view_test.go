@@ -120,9 +120,15 @@ func TestArrowKeysMoveCursor(t *testing.T) {
 		t.Fatalf("cursor.ByteCol = %d, se esperaba 0", v.cursor.ByteCol)
 	}
 
-	// Las letras ya no scrollean: tienen que llegar como texto a la edición.
-	if v.HandleEvent(tcell.NewEventKey(tcell.KeyRune, 'j', tcell.ModNone)) {
-		t.Fatal("'j' no debe mover el cursor ni el viewport")
+	// Las letras ya no scrollean: se insertan como texto en el cursor.
+	if !v.HandleEvent(tcell.NewEventKey(tcell.KeyRune, 'j', tcell.ModNone)) {
+		t.Fatal("'j' debe insertarse como texto")
+	}
+	if got := string(v.model.LineContent(1)); got != "jdos" {
+		t.Fatalf("línea 1 = %q, se esperaba %q", got, "jdos")
+	}
+	if v.viewport.TopLine != 0 {
+		t.Fatalf("TopLine = %d: insertar no debe scrollear el viewport", v.viewport.TopLine)
 	}
 }
 
@@ -242,7 +248,8 @@ func TestDrawDecodesUTF8WithoutSplittingRunes(t *testing.T) {
 func TestEventThatDoesNotChangeViewportReturnsFalse(t *testing.T) {
 	v := newTestView(t, "uno\ndos", 20, 2)
 
-	if v.HandleEvent(tcell.NewEventKey(tcell.KeyRune, 'x', tcell.ModNone)) {
+	// F1 no tiene acción asignada.
+	if v.HandleEvent(tcell.NewEventKey(tcell.KeyF1, 0, tcell.ModNone)) {
 		t.Fatal("una tecla sin acción no debería pedir redibujado")
 	}
 	if v.HandleEvent(tcell.NewEventMouse(0, 0, tcell.ButtonNone, tcell.ModNone)) {

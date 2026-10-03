@@ -311,6 +311,83 @@ func (v *EditorView) moveDocEnd() bool {
 	return true
 }
 
+// --- edición ---
+
+// insertText inserta s en la posición del cursor y lo deja después del texto.
+func (v *EditorView) insertText(s string) bool {
+	if s == "" {
+		return false
+	}
+	off := v.cursorOffset()
+	if err := v.model.Insert(off, s); err != nil {
+		return false
+	}
+	v.setCursorAt(off + len(s))
+	return true
+}
+
+// backspace borra el grapheme cluster anterior al cursor. Al inicio de una línea
+// borra el salto anterior, que es lo que fusiona las dos líneas.
+func (v *EditorView) backspace() bool {
+	line := v.cursor.Line
+
+	if v.cursor.ByteCol > 0 {
+		start := v.model.LineStart(line)
+		content := v.model.LineContent(line)
+		from := start + prevCluster(content, v.cursor.ByteCol)
+		if _, err := v.model.Delete(from, start+v.cursor.ByteCol); err != nil {
+			return false
+		}
+		v.setCursorAt(from)
+		return true
+	}
+
+	if line == 0 {
+		return false
+	}
+
+	// Inicio de línea: se borra el salto completo de la línea anterior.
+	breakLen := v.model.LineBreakLen(line - 1)
+	if breakLen == 0 {
+		return false
+	}
+	at := v.model.LineStart(line)
+	if _, err := v.model.Delete(at-breakLen, at); err != nil {
+		return false
+	}
+	v.setCursorAt(at - breakLen)
+	return true
+}
+
+// deleteForward borra el grapheme cluster que está en el cursor. Al final de una
+// línea borra el salto, fusionandola con la siguiente.
+func (v *EditorView) deleteForward() bool {
+	line := v.cursor.Line
+	start := v.model.LineStart(line)
+	content := v.model.LineContent(line)
+
+	if v.cursor.ByteCol < len(content) {
+		from := start + v.cursor.ByteCol
+		to := start + nextCluster(content, v.cursor.ByteCol)
+		if _, err := v.model.Delete(from, to); err != nil {
+			return false
+		}
+		v.setCursorAt(from)
+		return true
+	}
+
+	breakLen := v.model.LineBreakLen(line)
+	if breakLen == 0 {
+		return false
+	}
+	at := start + len(content)
+	if _, err := v.model.Delete(at, at+breakLen); err != nil {
+		return false
+	}
+	v.setCursorAt(at)
+	return true
+}
+
 // --- Draw ---
 
 // Draw renderiza solo las líneas visibles avanzando por *grapheme cluster* con su
@@ -437,6 +514,25 @@ func (v *EditorView) handleKey(ev *tcell.EventKey) bool {
 			return v.moveDocEnd()
 		}
 		return v.moveLineEnd()
+
+	case tcell.KeyBackspace, tcell.KeyBackspace2:
+		return v.backspace()
+	case tcell.KeyDelete:
+		return v.deleteForward()
+	case tcell.KeyEnter, tcell.KeyLF:
+		// KeyEnter es el camino normal (CR). Algunos terminales y modos de línea
+		// mandan LF, así que se acepta también para no perder el salto de línea.
+		return v.insertText("\n")
+	case tcell.KeyTab:
+		return v.insertText("\t")
+	}
+
+	// Texto: solo runas sin modificadores. Ctrl y Alt quedan libres para atajos,
+	// así que una combinación nunca inserta por accidente.
+	if ev.Key() == tcell.KeyRune && ev.Modifiers()&(tcell.ModCtrl|tcell.ModAlt) == 0 {
+		if r := ev.Rune(); r != 0 {
+			return v.insertText(string(r))
+		}
 	}
 	return false
 }

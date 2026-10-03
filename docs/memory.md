@@ -42,6 +42,11 @@ Este archivo registra las decisiones arquitectónicas clave, cambios estructural
   - **Decisión:** la rueda del mouse scrollea **sin** arrastrar el cursor; las teclas mueven el cursor y el viewport lo acompaña. Son dos comportamientos distintos a propósito.
   - **Bug encontrado por los tests del mouse:** `offsetAtColumn` comparaba `at >= col` antes de sumar el ancho del cluster actual, así que clickear la mitad de un carácter ancho caía **después** del carácter. Con `"日ab"`, la columna 1 devolvía el offset 3 en vez del 0. Fix: comparar `col < at+width`. Falsificado revirtiendo la condición.
   - **Nota:** la columna deseada se compara en **columnas de pantalla**, no en bytes, así que moverse verticalmente entre líneas con caracteres anchos cae donde la gente espera.
+- *2026-10-03:* **Edición por teclado.** Escribir runas, Enter y Tab; Backspace y Delete por *grapheme cluster* con fusión de líneas; Ctrl y Alt quedan libres para atajos. 22 tests nuevos (98 en total: 35 modelo + 63 vista).
+  - **Corrección de semántica (la línea fantasma):** `LineCount()` excluía la línea vacía final que deja un `\n`. Con cursor eso rompía: tras `Enter` al final de `"uno"` el cursor caía en una línea que no existía para el modelo, y la flecha abajo **saltaba hacia arriba**. Ahora `LineCount()` devuelve `len(lineOffsets)` (documento vacío sigue siendo 0), así que un archivo que termina en `\n` tiene una línea vacía final direccionable, como en cualquier editor. Lo exige el modelo de cursor `(línea, byte dentro de línea)`.
+  - **Hallazgo de `tcell`:** `NewEventKey(KeyRune, '\n', ...)` **no** produce `KeyRune`. `Key(0x09)` es `KeyTab` (está en la lista de teclas directamente tipeables de tcell, queda sin modificadores), pero `Key('\n')` es `KeyLF` (10), que **no** está en esa lista, así que tcell la marca con `ModCtrl` y la reporta como `KeyLF`. Con la rama de runas exigiendo sin modificadores, el Enter se perdía **en silencio**. Se agregó `KeyLF` junto a `KeyEnter` porque hay terminales y modos que mandan LF crudo.
+  - **Decisión:** una runa solo inserta si no tiene `ModCtrl` ni `ModAlt`, para que un atajo nunca escriba texto por accidente.
+  - **Lección de test:** usar `End` esperando el final del documento es un error; `End` es de línea y para el documento va `Ctrl+End`. Me pasó dos veces en la misma unidad.
 
 ## 4. Aprendizajes y Notas
 - **Nota de rendimiento:** Evitar `fmt.Scan` o métodos de entrada estándar; usar exclusivamente `tcell` para no corromper el buffer de pantalla.
@@ -56,3 +61,5 @@ Este archivo registra las decisiones arquitectónicas clave, cambios estructural
 - **Deuda técnica abierta:** no existe el mapeo inverso celda → offset del documento, que el hit testing del mouse va a necesitar cuando se implemente el click.
 - **Deuda técnica abierta:** el modelo ya soporta `Insert`/`Delete` y hay cursor, pero **el controlador todavía no invoca la edición**: la interfaz sigue siendo de solo lectura. No hay `Save` a disco tampoco.
 - **Deuda técnica cerrada:** el mapeo inverso celda → offset del documento ya existe (`offsetAtColumn`) y el clic del mouse posiciona el cursor.
+- **Deuda técnica abierta (la más urgente):** el editor **edita pero no guarda**. Sin `Save` a disco, todo el trabajo se pierde al salir. Es la unidad siguiente.
+- **Otras deudas:** sin undo/redo (la Piece Table ya lo permite: las piezas viejas no se destruyen), sin indicador de modificado, sin auto-indentación, sin selección ni portapapeles, sin salto de palabra.
