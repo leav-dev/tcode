@@ -351,30 +351,51 @@ func (pt *PieceTable) insertRaw(offset int, text string) error {
 }
 
 // insertIntoLineOffsets ajusta el índice de líneas tras insertar text en offset.
+//
+// Trabaja en el mismo slice en lugar de armar uno nuevo: el camino caliente es
+// tipear, y ahí el índice llegaba a copiarse entero por tecla.
 func (pt *PieceTable) insertIntoLineOffsets(offset int, text string) {
 	length := len(text)
 
-	// Primer inicio de línea posterior al punto de inserción. Los offsets
-	// anteriores no se mueven.
+	// Primer inicio de línea posterior al punto de inserción. Los anteriores no se
+	// mueven.
 	i := sort.SearchInts(pt.lineOffsets, offset+1)
 
-	// Cada '\n' insertado crea un inicio de línea. Todos caen en
-	// (offset, offset+length], o sea antes que cualquier inicio desplazado,
-	// que pasa a ser > offset+length. Por eso no hace falta intercalar.
-	var inserted []int
+	inserted := 0
 	for j := 0; j < length; j++ {
 		if text[j] == '\n' {
-			inserted = append(inserted, offset+j+1)
+			inserted++
 		}
 	}
 
-	out := make([]int, 0, len(pt.lineOffsets)+len(inserted))
-	out = append(out, pt.lineOffsets[:i]...)
-	out = append(out, inserted...)
-	for _, l := range pt.lineOffsets[i:] {
-		out = append(out, l+length)
+	if inserted == 0 {
+		// Caso normal al tipear: no hay inicios nuevos, solo se corre la cola. Si
+		// se escribe al final no se toca ni una entrada.
+		for k := i; k < len(pt.lineOffsets); k++ {
+			pt.lineOffsets[k] += length
+		}
+		return
 	}
-	pt.lineOffsets = out
+
+	// Con saltos hay que meter entradas nuevas: se crece, se corre la cola y se
+	// escriben en el hueco. copy resuelve el solapamiento.
+	old := len(pt.lineOffsets)
+	pt.lineOffsets = append(pt.lineOffsets, make([]int, inserted)...)
+	copy(pt.lineOffsets[i+inserted:], pt.lineOffsets[i:old])
+
+	k := i
+	for j := 0; j < length; j++ {
+		if text[j] == '\n' {
+			pt.lineOffsets[k] = offset + j + 1
+			k++
+		}
+	}
+
+	// Los nuevos caen en (offset, offset+length] y los corridos quedan por encima,
+	// así que el orden se mantiene sin intercalar.
+	for k := i + inserted; k < len(pt.lineOffsets); k++ {
+		pt.lineOffsets[k] += length
+	}
 }
 
 // Delete borra el rango de documento [start, end) y devuelve cuántos bytes quitó.
@@ -442,31 +463,32 @@ func (pt *PieceTable) deleteRaw(start, end int) (string, error) {
 }
 
 // deleteFromLineOffsets ajusta el índice de líneas tras borrar [start, end).
+//
+// Compacta en el mismo slice: se escribe siempre en una posición menor o igual a
+// la que se lee, así que no hace falta un buffer aparte.
 func (pt *PieceTable) deleteFromLineOffsets(start, end int) {
 	removed := end - start
 
-	out := make([]int, 0, len(pt.lineOffsets))
-	for _, l := range pt.lineOffsets {
-		switch {
-		case l <= start:
-			// El texto anterior a start no se movió, así que el inicio sigue
-			// siendo válido en la misma posición.
-			out = append(out, l)
+	// Los inicios anteriores o iguales a start no se mueven.
+	keep := sort.SearchInts(pt.lineOffsets, start+1)
 
-		case l > end:
-			out = append(out, l-removed)
-
-			// Los inicios en (start, end] desaparecen con su línea. El que caía
-			// justo en end se mapearía a start, pero solo sería un inicio válido
-			// si start ya lo fuera, y en ese caso ya se conservó arriba. Por eso
-			// se descarta siempre y no hace falta deduplicar después.
+	w := keep
+	for k := keep; k < len(pt.lineOffsets); k++ {
+		l := pt.lineOffsets[k]
+		if l > end {
+			pt.lineOffsets[w] = l - removed
+			w++
 		}
+		// Los inicios en (start, end] desaparecen con su línea. El que caía justo
+		// en end se mapearía a start, pero solo sería un inicio válido si start ya
+		// lo fuera, y en ese caso ya se conservó arriba. Por eso se descarta
+		// siempre y no hace falta deduplicar después.
 	}
+	pt.lineOffsets = pt.lineOffsets[:w]
 
-	if len(out) == 0 {
-		out = append(out, 0)
+	if w == 0 {
+		pt.lineOffsets = append(pt.lineOffsets, 0)
 	}
-	pt.lineOffsets = out
 }
 
 // BreakTypingGroup cierra el grupo de tipeo actual: el próximo cambio no se fusiona
