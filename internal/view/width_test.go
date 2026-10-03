@@ -108,6 +108,11 @@ func TestWideCharacterThatDoesNotFitIsNotDrawn(t *testing.T) {
 // TestHorizontalScrollSkipsByDisplayWidth verifica que el scroll horizontal
 // descuente columnas de terminal, no runas.
 func TestHorizontalScrollSkipsByDisplayWidth(t *testing.T) {
+	// Estos tests fijan el scroll HORIZONTAL: sin wrap (el wrap es la
+	// alternativa y envuelve la línea, anulando el desplazamiento).
+	oldWrap := wordWrapEnabled
+	wordWrapEnabled = false
+	defer func() { wordWrapEnabled = oldWrap }()
 	s := newTestScreen(t, 4, 1)
 	v := newTestView(t, "日日ab", 4, 1)
 	v.viewport.LeftColumn = 2

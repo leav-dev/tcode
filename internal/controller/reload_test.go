@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
+	"tcode/internal/view"
 )
 
 // TestCtrlRReloadsCleanBufferDirectly: Ctrl+R sobre un buffer limpio recarga
@@ -113,5 +114,26 @@ func TestDirtyBufferDoesNotAutoReload(t *testing.T) {
 	// La X se inserta en el cursor (inicio del documento) y la y después de ella.
 	if got := string(buf.LineContent(0)); got != "Xyuno" {
 		t.Fatalf("contenido = %q, esperaba las ediciones intactas", got)
+	}
+}
+
+// TestWrapToggleKey: Ctrl+Shift+W alterna el salto de palabra con su mensaje,
+// sin caer al documento.
+func TestWrapToggleKey(t *testing.T) {
+	app, _ := newTestApp(t, "uno")
+
+	want := !view.WordWrapEnabled()
+	hmm := tcell.NewEventKey(tcell.KeyRune, 'w', tcell.ModCtrl|tcell.ModShift)
+	app.handleEvent(hmm)
+
+	if view.WordWrapEnabled() != want {
+		t.Fatalf("WordWrapEnabled() = %v, esperaba %v tras la tecla", view.WordWrapEnabled(), want)
+	}
+	msg := app.statusBar.Message()
+	if (want && !strings.Contains(msg, "activado")) || (!want && !strings.Contains(msg, "desactivado")) {
+		t.Errorf("mensaje = %q, esperaba el aviso del estado nuevo", msg)
+	}
+	if got := app.ws.Active().GetContent(); got != "uno" {
+		t.Fatalf("la tecla del toggle no debe escribir en el documento: %q", got)
 	}
 }

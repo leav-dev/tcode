@@ -191,6 +191,11 @@ func TestViewportFollowsCursorUp(t *testing.T) {
 }
 
 func TestViewportScrollsHorizontallyToKeepCursorVisible(t *testing.T) {
+	// Estos tests fijan el scroll HORIZONTAL: sin wrap (el wrap es la
+	// alternativa y envuelve la línea, anulando el desplazamiento).
+	oldWrap := wordWrapEnabled
+	wordWrapEnabled = false
+	defer func() { wordWrapEnabled = oldWrap }()
 	v := newTestView(t, "abcdefghij", 5, 1)
 
 	for i := 0; i < 6; i++ {

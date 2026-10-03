@@ -773,6 +773,15 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 			a.reloadActive()
 			return false
 
+		case isWrapToggleKey(ev):
+			if view.ToggleWordWrap() {
+				a.statusBar.SetMessage("Salto de palabra activado")
+			} else {
+				a.statusBar.SetMessage("Salto de palabra desactivado")
+			}
+			a.redraw()
+			return false
+
 		case ev.Key() == tcell.KeyEscape || ev.Key() == tcell.KeyCtrlC:
 			// Salir con cambios sin guardar en CUALQUIER buffer pide
 			// confirmación: la primera vez solo se avisa, así una tecla de más
@@ -882,6 +891,15 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 // isUndoKey reconoce Ctrl+Z sin modificadores.
 func isUndoKey(ev *tcell.EventKey) bool {
 	return ev.Key() == tcell.KeyCtrlZ && ev.Modifiers()&tcell.ModShift == 0
+}
+
+// isWrapToggleKey reconoce Ctrl+Shift+W: como Ctrl+Shift+Z, tcell reporta
+// la combinación con Shift como KeyRune con ModCtrl y ModShift.
+func isWrapToggleKey(ev *tcell.EventKey) bool {
+	return ev.Key() == tcell.KeyRune &&
+		ev.Modifiers()&tcell.ModCtrl != 0 &&
+		ev.Modifiers()&tcell.ModShift != 0 &&
+		(ev.Rune() == 'w' || ev.Rune() == 'W')
 }
 
 // isRedoKey reconoce Ctrl+Y y también Ctrl+Shift+Z.

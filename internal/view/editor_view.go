@@ -1,7 +1,6 @@
 package view
 
 import (
-	"bytes"
 	"strings"
 	"unsafe"
 
@@ -53,6 +52,74 @@ type EditorView struct {
 	// theme es la paleta por rol del editor; el valor cero usa la default.
 	// El controller la inyecta con SetTheme tras cargar ~/.tcode/theme.json.
 	theme Theme
+
+	// visCache es la última (línea lógica, fila visual global) computada por
+	// visualRowOfLine: el movimiento secuencial del cursor evita re-sumar las
+	// filas visuales desde el inicio en cada redibujo.
+	visCache struct {
+		line int
+		row  int
+	}
+}
+
+// visualRowOfLine devuelve la fila visual GLOBAL donde empieza la línea lógica
+// line: la suma de las filas visuales de todas las líneas previas (con wrap
+// activo, una línea envuelta ocupa una fila por corte). O(line) por llamada; un
+// caché del último resultado hace el movimiento secuencial del cursor O(1).
+func (v *EditorView) visualRowOfLine(line int) int {
+	if v.visCache.line <= line {
+		// caminar desde la última línea cacheada
+		for last := v.visCache.line; last < line; last++ {
+			if wordWrapEnabled {
+				v.visCache.row += softLineCount(string(v.model.LineContent(last)), v.viewport.Width)
+			} else {
+				v.visCache.row++
+			}
+		}
+	} else {
+		// hacia atrás: recomputar desde 0 (raro: solo con saltos grandes)
+		v.visCache.row = 0
+		for i := 0; i < line && i < v.model.LineCount(); i++ {
+			if wordWrapEnabled {
+				v.visCache.row += softLineCount(string(v.model.LineContent(i)), v.viewport.Width)
+			} else {
+				v.visCache.row++
+			}
+		}
+	}
+	v.visCache.line = line
+	return v.visCache.row
+}
+
+// cursorVisual devuelve la (fila visual global, columna visible) del cursor.
+func (v *EditorView) cursorVisual() (row, col int) {
+	row = v.visualRowOfLine(v.cursor.Line)
+	content := v.model.LineContent(v.cursor.Line)
+	if wordWrapEnabled && v.viewport.Width > 0 {
+		r, c := softLineAt(string(content), v.viewport.Width, v.cursor.ByteCol)
+		return row + r, c
+	}
+	return row, columnAt(content, v.cursor.ByteCol)
+}
+
+// logicalAtVisualRow traduce una fila física (relativa al TopLine) a la línea
+// lógica y a la fila visual dentro de ella.
+func (v *EditorView) logicalAtVisualRow(y int) (line, rowInLine int) {
+	rest := y
+	for l := v.viewport.TopLine; l < v.model.LineCount(); l++ {
+		n := 1
+		if wordWrapEnabled && v.viewport.Width > 0 {
+			n = softLineCount(string(v.model.LineContent(l)), v.viewport.Width)
+		}
+		if rest < n {
+			return l, rest
+		}
+		rest -= n
+	}
+	if v.model.LineCount() == 0 {
+		return 0, 0
+	}
+	return v.model.LineCount() - 1, 0
 }
 
 // SetTheme reemplaza la paleta del editor.
@@ -253,13 +320,21 @@ func (v *EditorView) breakTypingGroup() { v.model.BreakTypingGroup() }
 // testing del mouse: convierte (x, y) en (línea, byte) con el ancho real.
 func (v *EditorView) moveCursorToCell(x, y int) bool {
 	v.breakTypingGroup()
-	line := v.viewport.TopLine + y
+	// Con wrap, la fila física puede ser un corte de una línea envuelta: se
+	// traduce a (línea lógica, fila dentro de la línea) y de ahí al byte.
+	line, rowInLine := v.logicalAtVisualRow(y)
 	if lines := v.lineCount(); lines == 0 || line < 0 || line >= lines {
 		return false
 	}
 
 	content := v.model.LineContent(line)
-	col := offsetAtColumn(content, x+v.viewport.LeftColumn)
+	colVis := x + v.viewport.LeftColumn
+	var col int
+	if wordWrapEnabled && v.viewport.Width > 0 {
+		col = softLineToByte(string(content), v.viewport.Width, rowInLine, colVis)
+	} else {
+		col = offsetAtColumn(content, colVis)
+	}
 	if v.cursor.Line == line && v.cursor.ByteCol == col {
 		return false
 	}
@@ -496,90 +571,117 @@ func (v *EditorView) deleteForward() bool {
 // puede ocupar 0 celdas (combinante huérfano), 1 (ASCII), 2 (CJK, emoji) o más.
 // Contar runas desalinea las columnas y rompe el hit testing del mouse.
 func (v *EditorView) Draw(s Surface) {
-	content := v.model.GetRange(v.viewport.TopLine, v.viewport.TopLine+v.viewport.Height)
 	// El resaltado de sintaxis: por extensión del buffer y por línea visible.
 	hl := newHighlighter(v.model.Path())
 	th := v.themeOrDefault()
-	if len(content) > 0 {
+	cursorLine := v.cursor.Line
+
+	row := 0 // fila física en pantalla
+	for line := v.viewport.TopLine; line < v.model.LineCount() && row < v.viewport.Height; line++ {
 		// COPIA obligatoria, no vista de mmap: tcell retiene el string que le
 		// pasamos en su buffer de celdas (currStr/lastStr) hasta el próximo
 		// redibujo, y cerrar la pestaña desmapea el archivo mientras el buffer
 		// sigue apuntando a él —ese uso-después-de-desmapear segfaulta en el
-		// primer redraw posterior (acceso a memoria liberada en Dirty). La
-		// copia cubre solo la región visible (el viewport), el costo correcto
-		// si el contenido va a llegar a pantalla.
+		// primer redraw posterior (acceso a memoria liberada en Dirty). La copia
+		// cubre solo la región visible (el viewport), el costo correcto si el
+		// contenido va a llegar a pantalla.
+		content := v.model.LineContent(line)
 		text := string(content)
+		isCursorLine := line == cursorLine
 
-		row := 0 // fila física en pantalla
-		col := 0 // columna lógica en celdas de terminal
-		cursorLine := v.cursor.Line
-		// Línea del documento actual y sus límites dentro de content: el
-		// resaltado es por línea visible, así que el rol de cada cluster se
-		// decide contra la línea actual completa (inicio del salto anterior al
-		// próximo \n), nunca contra el rango completo.
-		lineNo := v.viewport.TopLine
-		lineStart := 0
-		lineEnd := len(content)
-		if idx := bytes.IndexByte(content, '\n'); idx >= 0 {
-			lineEnd = idx
-		}
-		g := uniseg.NewGraphemes(text)
-		for g.Next() && row < v.viewport.Height {
-			from, _ := g.Positions()
-			cluster := g.Str()
-
-			switch cluster {
-			case "\n", "\r\n":
-				// GB3 de UAX #29 une CR y LF en un solo cluster.
+		if wordWrapEnabled && v.viewport.Width > 0 {
+			// Las filas visuales de la línea: cada una en su propia fila física.
+			for _, sl := range softLines(text, v.viewport.Width) {
+				if row >= v.viewport.Height {
+					break
+				}
+				v.drawSoftLine(s, th, hl, text, content, sl, row, isCursorLine)
 				row++
-				col = 0
-				lineNo++
-				lineStart = from + len(cluster)
-				lineEnd = len(content)
-				if idx := bytes.IndexByte(content[lineStart:], '\n'); idx >= 0 {
-					lineEnd = lineStart + idx
-				}
-				continue
-			case "\r":
-				// Retorno de carro aislado: vuelve al inicio de la misma fila.
-				col = 0
-				continue
 			}
-
-			width := clusterWidth(g, col)
-			if width <= 0 {
-				// Cluster sin celda propia (combinante huérfano): no hay dónde anclarlo.
-				continue
-			}
-
-			x := col - v.viewport.LeftColumn
-			// Solo se dibuja un cluster que entre completo: escribir uno ancho en la
-			// última celda pisaría la celda de continuación que marca tcell.
-			// Las tabulaciones no se dibujan; la pantalla ya viene limpia.
-			if x >= 0 && x+width <= v.viewport.Width && cluster != "\t" {
-				style := th.StyleForRole(hl.styleAt(content[lineStart:lineEnd], from-lineStart))
-				if lineNo == cursorLine {
-					// La fila del cursor: el fondo del rol marca dónde se edita.
-					style = style.Background(th.CursorLineBg)
-				}
-				s.Put(x, row, cluster, style)
-			}
-			col += width
+			continue
 		}
+
+		v.drawLineUnwrapped(s, th, hl, text, content, row, isCursorLine)
+		row++
 	}
 
 	v.drawCursor(s)
 }
 
+// drawSoftLine pinta una fila visual (un corte de la línea lógica) en la fila
+// física row. text es la copia de la línea (los clusters son substrings suyos,
+// seguros para tcell); content es la vista del modelo solo para calcular roles
+// (nunca se retiene).
+func (v *EditorView) drawSoftLine(s Surface, th Theme, hl *highlighter, text string, content []byte, sl softLine, row int, cursorLine bool) {
+	col := 0
+	g := uniseg.NewGraphemes(sl.text)
+	for g.Next() {
+		cl := g.Str()
+		from, _ := g.Positions()
+		if cl == "" {
+			col = 0 // retorno de carro aislado: vuelve al inicio de la misma fila
+			continue
+		}
+		w := wrapClusterWidth(cl, col)
+		if w <= 0 {
+			continue // combinante huérfano: sin celda propia
+		}
+		x := col - v.viewport.LeftColumn
+		// Solo se dibuja un cluster que entre completo; las tabulaciones no se
+		// dibujan (la pantalla ya viene limpia).
+		if x >= 0 && x+w <= v.viewport.Width && cl != "\t" {
+			st := th.StyleForRole(hl.styleAt(content, sl.in+from))
+			if cursorLine {
+				st = st.Background(th.CursorLineBg) // la línea del cursor: toda su fila
+			}
+			s.Put(x, row, cl, st)
+		}
+		col += w
+	}
+}
+
+// drawLineUnwrapped pinta la línea lógica completa en una fila física (sin
+// wrap): el cluster que no entra se corta contra el borde, como siempre.
+func (v *EditorView) drawLineUnwrapped(s Surface, th Theme, hl *highlighter, text string, content []byte, row int, cursorLine bool) {
+	col := 0
+	g := uniseg.NewGraphemes(text)
+	for g.Next() {
+		cl := g.Str()
+		from, _ := g.Positions()
+		if cl == "" {
+			col = 0 // retorno de carro aislado: vuelve al inicio de la misma fila
+			continue
+		}
+		w := clusterWidth(g, col)
+		if w <= 0 {
+			continue
+		}
+		x := col - v.viewport.LeftColumn
+		// Solo se dibuja un cluster que entre completo; las tabulaciones no se
+		// dibujan (la pantalla ya viene limpia).
+		if x >= 0 && x+w <= v.viewport.Width && cl != "\t" {
+			st := th.StyleForRole(hl.styleAt(content, from))
+			if cursorLine {
+				st = st.Background(th.CursorLineBg)
+			}
+			s.Put(x, row, cl, st)
+		}
+		col += w
+	}
+}
+
 // drawCursor ubica el cursor del terminal en la celda que le corresponde.
 func (v *EditorView) drawCursor(s Surface) {
-	row := v.cursor.Line - v.viewport.TopLine
+	// Con wrap, el cursor vive en la fila visual de su línea: se proyecta a la
+	// fila física restando las filas visuales del TopLine.
+	cr, ccol := v.cursorVisual()
+	row := cr - v.visualRowOfLine(v.viewport.TopLine)
 	if row < 0 || row >= v.viewport.Height {
 		s.HideCursor()
 		return
 	}
 
-	col := columnAt(v.model.LineContent(v.cursor.Line), v.cursor.ByteCol) - v.viewport.LeftColumn
+	col := ccol - v.viewport.LeftColumn
 	if col < 0 || col >= v.viewport.Width {
 		s.HideCursor()
 		return
@@ -701,22 +803,31 @@ func (v *EditorView) handleMouse(ev *tcell.EventMouse) bool {
 // ensureCursorVisible desplaza el viewport lo mínimo necesario para que el cursor
 // quede dentro de la pantalla.
 func (v *EditorView) ensureCursorVisible() {
-	// Vertical
-	if v.cursor.Line < v.viewport.TopLine {
+	// Vertical: en filas visuales (una línea envuelta ocupa varias). El scroll
+	// queda por LÍNEAS lógicas (modelo nano v1): se mueve TopLine de a líneas
+	// hasta cubrir la fila visual del cursor.
+	cr, ccol := v.cursorVisual()
+	if v.viewport.TopLine > v.cursor.Line {
 		v.viewport.TopLine = v.cursor.Line
 	}
-	if bottom := v.viewport.TopLine + v.viewport.Height; v.cursor.Line >= bottom && v.viewport.Height > 0 {
-		v.viewport.TopLine = v.cursor.Line - v.viewport.Height + 1
+	topRow := v.visualRowOfLine(v.viewport.TopLine)
+	if v.viewport.Height > 0 && cr >= topRow+v.viewport.Height {
+		for v.viewport.TopLine < v.cursor.Line &&
+			cr >= v.visualRowOfLine(v.viewport.TopLine)+v.viewport.Height {
+			v.viewport.TopLine++
+		}
+		if v.viewport.TopLine > v.cursor.Line {
+			v.viewport.TopLine = v.cursor.Line
+		}
 	}
 	v.clamp()
 
-	// Horizontal
-	col := columnAt(v.model.LineContent(v.cursor.Line), v.cursor.ByteCol)
-	if col < v.viewport.LeftColumn {
-		v.viewport.LeftColumn = col
+	// Horizontal, en la columna visible del cursor (dentro de su fila visual).
+	if ccol < v.viewport.LeftColumn {
+		v.viewport.LeftColumn = ccol
 	}
-	if v.viewport.Width > 0 && col >= v.viewport.LeftColumn+v.viewport.Width {
-		v.viewport.LeftColumn = col - v.viewport.Width + 1
+	if v.viewport.Width > 0 && ccol >= v.viewport.LeftColumn+v.viewport.Width {
+		v.viewport.LeftColumn = ccol - v.viewport.Width + 1
 	}
 	if v.viewport.LeftColumn < 0 {
 		v.viewport.LeftColumn = 0

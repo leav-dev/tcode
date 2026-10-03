@@ -229,6 +229,11 @@ func TestResizeClampsViewportToDocument(t *testing.T) {
 }
 
 func TestHorizontalScrollSkipsLeadingColumns(t *testing.T) {
+	// Estos tests fijan el scroll HORIZONTAL: sin wrap (el wrap es la
+	// alternativa y envuelve la línea, anulando el desplazamiento).
+	oldWrap := wordWrapEnabled
+	wordWrapEnabled = false
+	defer func() { wordWrapEnabled = oldWrap }()
 	s := newTestScreen(t, 5, 1)
 	v := newTestView(t, "abcdefghij", 5, 1)
 	v.viewport.LeftColumn = 1
