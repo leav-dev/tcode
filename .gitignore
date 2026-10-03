@@ -1,0 +1,26 @@
+# Local Pi runtime state
+.atl/
+
+# Go build output
+/bin/
+/dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+vendor/
+
+# Coverage profiles
+coverage.txt
+coverage.html
+
+# Editor / OS junk
+*.swp
+*.swo
+*~
+.DS_Store
+.idea/
+.vscode/
