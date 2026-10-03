@@ -4,6 +4,22 @@ import (
 	"github.com/rivo/uniseg"
 )
 
+// wordWrapEnabled es la configuración del salto de palabra: mutable (la
+// futura configuración del editor la expondrá) y alternada en vivo por
+// Ctrl+Shift+W. Cuando está apagado, el editor se comporta como antes: la
+// línea excede el ancho y se corta contra el borde con scroll horizontal.
+var wordWrapEnabled = true
+
+// WordWrapEnabled reporta la configuración actual del salto de palabra.
+func WordWrapEnabled() bool { return wordWrapEnabled }
+
+// ToggleWordWrap alterna la configuración y devuelve el estado nuevo. La usa
+// el controlador en la tecla del toggle (Ctrl+Shift+W).
+func ToggleWordWrap() bool {
+	wordWrapEnabled = !wordWrapEnabled
+	return wordWrapEnabled
+}
+
 // softLine es una fila visual: un rebanado de la línea lógica que cabe en
 // width celdas, con el byte de inicio dentro de la línea (para traducir
 // coordenadas). El texto envuelto nunca se copia: son slices de la línea.
@@ -93,9 +109,11 @@ func softLineAt(line string, width, byteCol int) (row, col int) {
 	}
 	ls := softLines(line, width)
 	for r, sl := range ls {
-		// Límite estricto: el byte justo en la frontera pertenece a la fila
-		// siguiente (el texto de la fila es [in, in+len)).
-		if byteCol < sl.in+len(sl.text) {
+		// Límite estricto salvo en la ÚLTIMA fila: el byte justo en la frontera
+		// de una fila intermedia pertenece a la siguiente (el texto de la fila
+		// es [in, in+len)), pero el FINAL de la línea (cursor al final del
+		// documento) debe caer en la última fila con su columna completa.
+		if byteCol < sl.in+len(sl.text) || (r == len(ls)-1 && byteCol <= sl.in+len(sl.text)) {
 			min := byteCol - sl.in
 			if min > len(sl.text) {
 				min = len(sl.text)

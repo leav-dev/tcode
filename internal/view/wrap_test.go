@@ -105,6 +105,11 @@ func TestSoftLineAtFindsTheByte(t *testing.T) {
 	if row, col := softLineAt("hola mundo ancho", 10, 12); row != 1 || col != 1 {
 		t.Fatalf("softLineAt(12) = (%d,%d), esperaba (1,1)", row, col)
 	}
+	// El FINAL de la línea (cursor al final del documento) cae en la última
+	// fila con su columna completa, no en la 0: el bug que destapó el undo.
+	if row, col := softLineAt("dos", 40, 3); row != 0 || col != 3 {
+		t.Fatalf("softLineAt(3) (fin de línea) = (%d,%d), esperaba (0,3)", row, col)
+	}
 }
 
 // TestSoftLineToByteRoundTrip: (fila, col) → byte → at devuelve lo mismo.
