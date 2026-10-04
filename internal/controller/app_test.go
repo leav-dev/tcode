@@ -1389,13 +1389,13 @@ func TestStartupWithDirectoryArgument(t *testing.T) {
 	}
 
 	// El archivo está en el primer nivel del árbol: es el único nodo, el cursor
-	// ya está sobre él y el panel lo dibuja con su prefijo de archivo.
+	// ya está sobre él y el panel lo dibuja con el marcador de la fila activa.
 	app.redraw()
 	if got := app.explorer.CursorPath(); got != doc {
 		t.Fatalf("CursorPath() = %q, se esperaba %q", got, doc)
 	}
-	if got := panelRow(app, 0); got != "  doc.txt" {
-		t.Fatalf("fila 0 del panel = %q, se esperaba %q", got, "  doc.txt")
+	if got := panelRow(app, 0); got != "> doc.txt" {
+		t.Fatalf("fila 0 del panel = %q, se esperaba %q", got, "> doc.txt")
 	}
 }
 

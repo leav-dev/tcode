@@ -49,10 +49,57 @@ func TestFileBrowserDrawsIndentedWithPrefixes(t *testing.T) {
 	}
 }
 
-// TestFileBrowserHighlightsTheCursorRow: la fila del cursor va en estilo
-// invertido (a todo el ancho) y las demás con el estilo por defecto; el cursor
-// por defecto es el primer nodo.
+// TestFileBrowserHighlightsTheCursorRow: la fila del cursor va con la barra de
+// selección (fondo de acento, TreeCursor) a todo el ancho y las demás con el
+// estilo por defecto; el cursor por defecto es el primer nodo. La barra se
+// verifica por fondo explícito —no por Reverse—: el fondo no depende de los
+// colores default de la terminal y es lo que hace visible la selección.
 func TestFileBrowserHighlightsTheCursorRow(t *testing.T) {
+	fb := NewFileBrowser()
+	fb.Resize(20, 5)
+	fb.SetRoot("/cwd")
+	fb.SetRootEntries([]Entry{
+		{Name: "a.txt", Path: "/cwd/a.txt"},
+		{Name: "b.txt", Path: "/cwd/b.txt"},
+	})
+
+	bar := tcell.PaletteColor(24) // el fondo del TreeCursor por defecto
+	s := newTestScreen(t, 20, 5)
+	fb.Draw(s)
+	s.Show()
+
+	if cellBg(s, 0, 0) != bar {
+		t.Fatal("la fila del cursor debe llevar el fondo de la barra de selección")
+	}
+	// La barra de selección es de ancho completo: el final de la fila 0 también
+	// lleva el fondo, aunque la entrada sea corta.
+	if cellBg(s, 10, 0) != bar {
+		t.Fatal("la fila del cursor debe resaltarse a todo el ancho del panel")
+	}
+	if cellBg(s, 0, 1) != tcell.ColorDefault {
+		t.Fatal("las demás filas deben ir con el fondo por defecto")
+	}
+
+	action, handled := fb.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
+	if action != ActionMove || !handled {
+		t.Fatalf("Down devolvió (action=%v, handled=%v), se esperaba (ActionMove, true)", action, handled)
+	}
+	fb.Draw(s)
+	s.Show()
+	if cellBg(s, 0, 1) != bar {
+		t.Fatal("tras Down, la fila 1 debe llevar la barra de selección")
+	}
+	if cellBg(s, 0, 0) != tcell.ColorDefault {
+		t.Fatal("tras Down, la fila 0 pierde la barra de selección")
+	}
+}
+
+// TestFileBrowserActiveFileRowShowsMarker: la fila activa de un ARCHIVO lleva
+// el marcador "> " en lugar del prefijo "  " (misma semántica de 2 celdas),
+// y al mover el cursor el marcador viaja con él. Los DIRECTORIOS conservan su
+// caret ▸/▾ también en la fila activa: el caret es el indicador de expansión,
+// reemplazarlo perdería el estado expandido/colapsado.
+func TestFileBrowserActiveFileRowShowsMarker(t *testing.T) {
 	fb := NewFileBrowser()
 	fb.Resize(20, 5)
 	fb.SetRoot("/cwd")
@@ -64,30 +111,37 @@ func TestFileBrowserHighlightsTheCursorRow(t *testing.T) {
 	s := newTestScreen(t, 20, 5)
 	fb.Draw(s)
 	s.Show()
-
-	if !cellReverse(s, 0, 0) {
-		t.Fatal("la fila del cursor debe ir en estilo invertido")
+	if got := screenLines(s)[0]; got != "> a.txt" {
+		t.Fatalf("fila activa de archivo = %q, se esperaba %q (marcador de posición)", got, "> a.txt")
 	}
-	// La barra de selección es de ancho completo: el final de la fila 0 también
-	// queda invertido, aunque la entrada sea corta.
-	if !cellReverse(s, 10, 0) {
-		t.Fatal("la fila del cursor debe resaltarse a todo el ancho del panel")
-	}
-	if cellReverse(s, 0, 1) {
-		t.Fatal("las demás filas deben ir con el estilo por defecto")
+	if got := screenLines(s)[1]; got != "  b.txt" {
+		t.Fatalf("fila inactiva de archivo = %q, se esperaba %q (prefijo sin marcador)", got, "  b.txt")
 	}
 
-	action, handled := fb.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
-	if action != ActionMove || !handled {
-		t.Fatalf("Down devolvió (action=%v, handled=%v), se esperaba (ActionMove, true)", action, handled)
-	}
+	fb.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
 	fb.Draw(s)
 	s.Show()
-	if !cellReverse(s, 0, 1) {
-		t.Fatal("tras Down, la fila 1 debe ser la resaltada")
+	if got := screenLines(s)[0]; got != "  a.txt" {
+		t.Fatalf("fila inactiva de archivo = %q, se esperaba %q (prefijo sin marcador)", got, "  a.txt")
 	}
-	if cellReverse(s, 0, 0) {
-		t.Fatal("tras Down, la fila 0 pierde el resaltado")
+	if got := screenLines(s)[1]; got != "> b.txt" {
+		t.Fatalf("fila activa tras Down = %q, se esperaba %q (el marcador viaja con el cursor)", got, "> b.txt")
+	}
+
+	// Un dir en la fila activa conserva su caret, sin marcador "> ".
+	fb.SetRoot("/cwd")
+	fb.SetRootEntries([]Entry{{Name: "docs", Path: "/cwd/docs", IsDir: true}})
+	fb.Draw(s)
+	s.Show()
+	if got := screenLines(s)[0]; got != "▸ docs/" {
+		t.Fatalf("fila activa de dir = %q, se esperaba %q (caret de colapsado, no marcador)", got, "▸ docs/")
+	}
+	fb.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	fb.SetChildren([]Entry{{Name: "a.txt", Path: "/cwd/docs/a.txt"}})
+	fb.Draw(s)
+	s.Show()
+	if got := screenLines(s)[0]; got != "▾ docs/" {
+		t.Fatalf("fila activa de dir expandido = %q, se esperaba %q (caret de expandido)", got, "▾ docs/")
 	}
 }
 
@@ -619,11 +673,11 @@ func TestFileBrowserScrollKeepsTheActiveVisible(t *testing.T) {
 	s := newTestScreen(t, 10, 5)
 	fb.Draw(s)
 	s.Show()
-	if got := screenLines(s)[4]; got != "  e29" {
-		t.Fatalf("última fila visible = %q, se esperaba la entrada 29", got)
+	if got := screenLines(s)[4]; got != "> e29" {
+		t.Fatalf("última fila visible = %q, se esperaba %q (entrada activa con marcador)", got, "> e29")
 	}
-	if !cellReverse(s, 0, 4) {
-		t.Fatal("la entrada activa 29 debe dibujarse resaltada en la última fila")
+	if cellBg(s, 0, 4) != tcell.PaletteColor(24) {
+		t.Fatal("la entrada activa 29 debe dibujarse con la barra de selección en la última fila")
 	}
 
 	// Subir una: la activa sigue dentro de la ventana [25,30), así que el

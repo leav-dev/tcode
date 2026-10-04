@@ -417,12 +417,15 @@ func (fb *FileBrowser) HandleEvent(ev tcell.Event) (Action, bool) {
 }
 
 // Draw pinta el árbol en coordenadas propias desde (0,0): el nodo activo va
-// resaltado a todo el ancho del panel. Cada fila es indent + prefijo + nombre
-// (+ "/" en los directorios), con la indentación de dos celdas por nivel y el
-// prefijo como señal del tipo: "▸ " dir colapsado, "▾ " dir expandido, "  "
-// archivo (dos celdas, alineado con las flechas). Los nombres que no entran se
-// recortan contra el ancho del panel (writeString avanza por grapheme
-// cluster). Sin nodos o sin alto no hay nada que dibujar.
+// con la barra de selección (TreeCursor, fondo de acento) a todo el ancho del
+// panel. Cada fila es indent + prefijo + nombre (+ "/" en los directorios),
+// con la indentación de dos celdas por nivel y el prefijo como señal del tipo:
+// "▸ " dir colapsado, "▾ " dir expandido, "  " archivo inactivo y "> "
+// archivo ACTIVO —el marcador viaja con la selección y refuerza la barra sin
+// salir de las dos celdas, así los nombres quedan alineados con los carets de
+// los directorios—. Los nombres que no entran se recortan contra el ancho del
+// panel (writeString avanza por grapheme cluster). Sin nodos o sin alto no hay
+// nada que dibujar.
 func (fb *FileBrowser) Draw(s Surface) {
 	if len(fb.nodes) == 0 || fb.height <= 0 {
 		return
@@ -449,11 +452,18 @@ func (fb *FileBrowser) Draw(s Surface) {
 
 		prefix := "  "
 		if n.isDir {
+			// Los directorios conservan su caret también en la fila activa: el
+			// caret es el indicador de expansión, reemplazarlo en la selección
+			// perdería el estado expandido/colapsado.
 			if n.expanded {
 				prefix = "▾ "
 			} else {
 				prefix = "▸ "
 			}
+		} else if idx == fb.cursor {
+			// El marcador de la fila activa en los archivos: además de la barra
+			// de selección, "> " señala dónde está el cursor en el árbol.
+			prefix = "> "
 		}
 		line := strings.Repeat(" ", n.depth*2) + prefix + n.name
 		if n.isDir {

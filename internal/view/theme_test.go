@@ -12,6 +12,12 @@ func fgOf(st tcell.Style) tcell.Color {
 	return fg
 }
 
+// bgOf extrae el color de fondo de un estilo.
+func bgOf(st tcell.Style) tcell.Color {
+	_, bg, _ := st.Decompose()
+	return bg
+}
+
 // TestThemeDefaultsAreSet: el tema por defecto define todos los roles; los que
 // deben diferenciarse se distinguen, y el fondo de la línea del cursor es
 // válido.
@@ -65,6 +71,15 @@ func TestLoadThemeParsesRoles(t *testing.T) {
 	if fgOf(th.TabActive) != tcell.PaletteColor(36) {
 		t.Errorf("tabActive fg = %v, esperaba índice 36", fgOf(th.TabActive))
 	}
+	// treeCursor es ahora un color de FONDO, como cursorLine: la fila activa
+	// lleva la barra explícita y el texto en el fg por defecto (que se adapta a
+	// terminales claras y oscuras).
+	if bgOf(th.TreeCursor) != tcell.PaletteColor(237) {
+		t.Errorf("treeCursor bg = %v, esperaba índice 237", bgOf(th.TreeCursor))
+	}
+	if fgOf(th.TreeCursor) != tcell.ColorDefault {
+		t.Errorf("treeCursor fg = %v, esperaba default (el texto de la fila activa)", fgOf(th.TreeCursor))
+	}
 	if th.Text != tcell.StyleDefault {
 		t.Errorf("text = %v, esperaba default", th.Text)
 	}
@@ -85,7 +100,7 @@ func TestLoadThemeBrokenJSONFallsBack(t *testing.T) {
 // TestLoadThemeUnknownValueKeepsDefault: un rol con valor no parseable
 // conserva su default (y no rompe el resto).
 func TestLoadThemeUnknownValueKeepsDefault(t *testing.T) {
-	src := `{"keyword": "noexiste", "string": "173"}`
+	src := `{"keyword": "noexiste", "string": "173", "treeCursor": "noexiste"}`
 	th := LoadTheme([]byte(src))
 
 	if th.Keyword != DefaultTheme().Keyword {
@@ -93,6 +108,18 @@ func TestLoadThemeUnknownValueKeepsDefault(t *testing.T) {
 	}
 	if fgOf(th.String) != tcell.PaletteColor(173) {
 		t.Error("el rol válido guardado junto al inválido debe aplicarse")
+	}
+	if th.TreeCursor != DefaultTheme().TreeCursor {
+		t.Error("el valor inválido de treeCursor debe conservar la barra por defecto")
+	}
+}
+
+// TestLoadThemeTreeCursorDefaultKeepsTheBar: "default" en treeCursor conserva
+// la barra de selección por defecto (no la borra ni la vuelve invisible).
+func TestLoadThemeTreeCursorDefaultKeepsTheBar(t *testing.T) {
+	th := LoadTheme([]byte(`{"treeCursor": "default"}`))
+	if th.TreeCursor != DefaultTheme().TreeCursor {
+		t.Error("treeCursor: \"default\" debe conservar la barra por defecto")
 	}
 }
 

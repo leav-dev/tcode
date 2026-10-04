@@ -27,6 +27,15 @@ func cellReverse(s tcell.SimulationScreen, x, y int) bool {
 	return attr&tcell.AttrReverse != 0
 }
 
+// cellBg devuelve el color de fondo de la celda (x, y). La barra de selección
+// del árbol se verifica por fondo explícito (TreeCursor), que es terminal-
+// independiente — Reverse depende de los colores default de la terminal.
+func cellBg(s tcell.SimulationScreen, x, y int) tcell.Color {
+	cells, w, _ := s.GetContents()
+	_, bg, _ := cells[y*w+x].Style.Decompose()
+	return bg
+}
+
 // TestOffsetSurfaceTranslatesAllFourMethods: la superficie suma su origen a
 // Put, SetContent y ShowCursor, y HideCursor delega tal cual.
 func TestOffsetSurfaceTranslatesAllFourMethods(t *testing.T) {

@@ -36,14 +36,19 @@ tocar código.
 | `text` | Texto del documento sin resaltar |
 | `cursorLine` | Fondo de la línea del cursor (un color) |
 | `tabActive` / `tabIdle` | Pestaña activa / inactivas |
-| `treeCursor` | Nodo activo del árbol |
+| `treeCursor` | Fondo de la fila activa del árbol (un color, como `cursorLine`) |
 | `status` / `message` | Barra de estado / mensaje transitorio |
 | `modified` | Marca de documento sucio *(reservado)* |
 | `comment`, `keyword`, `string`, `number`, `type`, `function`, `variable`, `punct` | Roles de sintaxis |
 
-Los roles "activos" (`tabActive`, `treeCursor`) conservan el atributo `Reverse`
-además del color de acento: la noción de "seleccionado" nunca depende solo del
-color de la terminal.
+`tabActive` conserva el atributo `Reverse` además del color de acento: la
+noción de "seleccionado" nunca depende solo del color de la terminal.
+
+`treeCursor` es un color de **fondo** —como `cursorLine`—: la fila activa del
+árbol lleva esa barra de selección a todo el ancho y el texto en el color por
+defecto, que se adapta a terminales claras y oscuras. Así la selección nunca
+cae en un color invisible aunque el tema cargue un índice oscuro (el default es
+blanco sobre azul oscuro, el acento de la barra de estado).
 
 ## Resaltado de sintaxis
 

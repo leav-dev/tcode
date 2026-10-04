@@ -16,7 +16,7 @@ type Theme struct {
 	CursorLineBg tcell.Color // fondo de la línea del cursor
 	TabActive    tcell.Style // pestaña activa
 	TabIdle      tcell.Style // pestañas inactivas
-	TreeCursor   tcell.Style // nodo activo del árbol
+	TreeCursor   tcell.Style // fila activa del árbol: la barra de selección
 	Status       tcell.Style // barra de estado
 	Message      tcell.Style // mensaje transitorio de la barra
 	Modified     tcell.Style // marca [+] de documento sucio
@@ -31,9 +31,11 @@ type Theme struct {
 }
 
 // DefaultTheme es la paleta por defecto: estilo oscuro, tipo VSCode Dark+.
-// Los roles "activos" (TabActive, TreeCursor) conservan el atributo Reverse
-// del diseño original y le suman un color de acento: así el "de qué está
-// seleccionado" nunca depende solo del color de la terminal.
+// La pestaña activa conserva el atributo Reverse del diseño original y le suma
+// un color de acento. La fila activa del árbol (TreeCursor) va con un fondo
+// EXPLÍCITO —blanco sobre azul oscuro, el acento de la barra de estado—: la
+// selección no depende de los colores "default" de la terminal, que es lo que
+// hacía difícil ver el nodo activo.
 func DefaultTheme() Theme {
 	fg := func(c tcell.Color) tcell.Style { return tcell.StyleDefault.Foreground(c) }
 	on := func(fg, bg tcell.Color) tcell.Style { return tcell.StyleDefault.Foreground(fg).Background(bg) }
@@ -43,7 +45,7 @@ func DefaultTheme() Theme {
 		CursorLineBg: tcell.PaletteColor(236),
 		TabActive:    active(tcell.PaletteColor(45)),
 		TabIdle:      tcell.StyleDefault,
-		TreeCursor:   active(tcell.ColorDefault),
+		TreeCursor:   on(tcell.PaletteColor(15), tcell.PaletteColor(24)),
 		Status:       on(tcell.PaletteColor(15), tcell.PaletteColor(24)),
 		Message:      on(tcell.PaletteColor(220), tcell.PaletteColor(24)),
 		Modified:     fg(tcell.PaletteColor(208)),
@@ -90,7 +92,15 @@ func LoadTheme(data []byte) Theme {
 
 	fg(&t.TabActive, "tabActive")
 	fg(&t.TabIdle, "tabIdle")
-	fg(&t.TreeCursor, "treeCursor")
+	// treeCursor es un color de FONDO, como cursorLine: la fila activa del
+	// árbol lleva la barra de selección visible siempre, y el texto queda en el
+	// fg por defecto (se adapta a terminales claras y oscuras). "default" —o
+	// un valor inválido— conserva la barra por defecto.
+	if v := raw["treeCursor"]; v != "" {
+		if c, ok := parseThemeColor(v); ok && c != tcell.ColorDefault {
+			t.TreeCursor = tcell.StyleDefault.Background(c)
+		}
+	}
 	fg(&t.Status, "status")
 	fg(&t.Message, "message")
 	fg(&t.Modified, "modified")
