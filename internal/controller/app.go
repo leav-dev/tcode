@@ -785,6 +785,14 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 			a.switchTab(a.ws.Prev)
 			return false
 
+		case isSwitchTabNextKey(ev):
+			a.switchTab(a.ws.Next)
+			return false
+
+		case isSwitchTabPrevKey(ev):
+			a.switchTab(a.ws.Prev)
+			return false
+
 		case ev.Key() == tcell.KeyCtrlW:
 			a.closeTab()
 			return false
@@ -906,6 +914,27 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		a.redraw()
 	}
 	return false
+}
+
+// isSwitchTabNextKey reconoce Ctrl+K sin Shift: pestaña siguiente. Ctrl+J no
+// existe como par: en la terminal es el byte LF —el Enter que tcode ya trata
+// como activar/insertar salto de línea—, así que el atajo quedó en la familia K.
+func isSwitchTabNextKey(ev *tcell.EventKey) bool {
+	return ev.Key() == tcell.KeyCtrlK && ev.Modifiers()&tcell.ModShift == 0
+}
+
+// isSwitchTabPrevKey reconoce Ctrl+Shift+K: pestaña anterior. Como con
+// Ctrl+Shift+Z y Ctrl+Shift+W, tcell reporta la combinación con Shift como
+// KeyRune con ModCtrl y ModShift; también llega como KeyCtrlK con ModShift,
+// según la terminal.
+func isSwitchTabPrevKey(ev *tcell.EventKey) bool {
+	if ev.Key() == tcell.KeyCtrlK && ev.Modifiers()&tcell.ModShift != 0 {
+		return true
+	}
+	return ev.Key() == tcell.KeyRune &&
+		ev.Modifiers()&tcell.ModCtrl != 0 &&
+		ev.Modifiers()&tcell.ModShift != 0 &&
+		(ev.Rune() == 'k' || ev.Rune() == 'K')
 }
 
 // isUndoKey reconoce Ctrl+Z sin modificadores.

@@ -1001,6 +1001,55 @@ func TestCtrlPageDownSwitchesTabs(t *testing.T) {
 	}
 }
 
+// TestCtrlKSwitchesTabs: Ctrl+K es el atajo de pestañas de la familia K
+// (pedido del usuario; Ctrl+J no existe porque en la terminal es el byte LF,
+// el Enter que ya activa/inserta salto de línea): pasa a la SIGUIENTE con
+// wrap, como Ctrl+PageDown.
+func TestCtrlKSwitchesTabs(t *testing.T) {
+	app := newThreeBufferApp(t, "uno", "dos", "tres")
+	if got := app.ws.ActiveIndex(); got != 2 {
+		t.Fatalf("ActiveIndex() = %d, se esperaba 2", got)
+	}
+
+	app.handleEvent(tcell.NewEventKey(tcell.KeyCtrlK, 0, tcell.ModNone))
+	if got := app.ws.ActiveIndex(); got != 0 {
+		t.Fatalf("tras Ctrl+K, ActiveIndex() = %d, se esperaba 0 (wrap)", got)
+	}
+
+	app.handleEvent(tcell.NewEventKey(tcell.KeyCtrlK, 0, tcell.ModNone))
+	if got := app.ws.ActiveIndex(); got != 1 {
+		t.Fatalf("tras el segundo Ctrl+K, ActiveIndex() = %d, se esperaba 1", got)
+	}
+}
+
+// TestCtrlShiftKSwitchesTabsBackwards: Ctrl+Shift+K vuelve a la ANTERIOR con
+// wrap, aceptando los dos caminos de la terminal (KeyCtrlK con ModShift y
+// KeyRune 'K' con ModCtrl|ModShift, el patrón de Ctrl+Shift+Z/W).
+func TestCtrlShiftKSwitchesTabsBackwards(t *testing.T) {
+	app := newThreeBufferApp(t, "uno", "dos", "tres")
+	if got := app.ws.ActiveIndex(); got != 2 {
+		t.Fatalf("ActiveIndex() = %d, se esperaba 2", got)
+	}
+
+	// Camino KeyCtrlK + ModShift.
+	app.handleEvent(tcell.NewEventKey(tcell.KeyCtrlK, 0, tcell.ModShift))
+	if got := app.ws.ActiveIndex(); got != 1 {
+		t.Fatalf("tras Ctrl+Shift+K (KeyCtrlK), ActiveIndex() = %d, se esperaba 1", got)
+	}
+
+	// Camino KeyRune 'K' con ModCtrl|ModShift.
+	app.handleEvent(tcell.NewEventKey(tcell.KeyRune, 'K', tcell.ModCtrl|tcell.ModShift))
+	if got := app.ws.ActiveIndex(); got != 0 {
+		t.Fatalf("tras Ctrl+Shift+K (KeyRune), ActiveIndex() = %d, se esperaba 0", got)
+	}
+
+	// Wrap al inicio: desde la 0, cae en la última.
+	app.handleEvent(tcell.NewEventKey(tcell.KeyRune, 'K', tcell.ModCtrl|tcell.ModShift))
+	if got := app.ws.ActiveIndex(); got != 2 {
+		t.Fatalf("tras Ctrl+Shift+K en la primera, ActiveIndex() = %d, se esperaba 2 (wrap)", got)
+	}
+}
+
 // TestCtrlWClosesACleanTab: una pestaña limpia se cierra sin confirmación y su
 // vista sale del mapa de vistas.
 func TestCtrlWClosesACleanTab(t *testing.T) {
