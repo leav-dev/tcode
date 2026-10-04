@@ -33,7 +33,7 @@ fuera de la raíz (cursor intacto).
 - [x] Tests del controlador: Shift+Tab revela el buffer activo con E/S real
   (dir colapsado sin hijos), Ctrl+B mostrar revela, el clic no interfiere
   <!-- id: 5 -->
-- [x] Verificación y commit de unidad con Conventional Commit <!-- id: 6 -->
+- [x] Verificación y commit de unidad con Conventional Commit: `b9438a7` <!-- id: 6 -->
 
 ## Design decisions
 - **La vista dice QUÉ expandir; el controlador hace la E/S.** `Reveal` nunca
