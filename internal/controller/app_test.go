@@ -1022,31 +1022,30 @@ func TestCtrlKSwitchesTabs(t *testing.T) {
 	}
 }
 
-// TestCtrlShiftKSwitchesTabsBackwards: Ctrl+Shift+K vuelve a la ANTERIOR con
-// wrap, aceptando los dos caminos de la terminal (KeyCtrlK con ModShift y
-// KeyRune 'K' con ModCtrl|ModShift, el patrón de Ctrl+Shift+Z/W).
-func TestCtrlShiftKSwitchesTabsBackwards(t *testing.T) {
+// TestCtrlLSwitchesTabsBackwards: Ctrl+L vuelve a la ANTERIOR con wrap —el
+// par final es Ctrl+K (siguiente) / Ctrl+L (anterior); Ctrl+Shift+K quedó
+// descartado por pedido del usuario. En Windows Terminal Ctrl+L llega limpio
+// (el form feed de los terminales Unix, que limpian la pantalla, no aplica).
+func TestCtrlLSwitchesTabsBackwards(t *testing.T) {
 	app := newThreeBufferApp(t, "uno", "dos", "tres")
 	if got := app.ws.ActiveIndex(); got != 2 {
 		t.Fatalf("ActiveIndex() = %d, se esperaba 2", got)
 	}
 
-	// Camino KeyCtrlK + ModShift.
-	app.handleEvent(tcell.NewEventKey(tcell.KeyCtrlK, 0, tcell.ModShift))
+	app.handleEvent(tcell.NewEventKey(tcell.KeyCtrlL, 0, tcell.ModNone))
 	if got := app.ws.ActiveIndex(); got != 1 {
-		t.Fatalf("tras Ctrl+Shift+K (KeyCtrlK), ActiveIndex() = %d, se esperaba 1", got)
+		t.Fatalf("tras Ctrl+L, ActiveIndex() = %d, se esperaba 1", got)
 	}
 
-	// Camino KeyRune 'K' con ModCtrl|ModShift.
-	app.handleEvent(tcell.NewEventKey(tcell.KeyRune, 'K', tcell.ModCtrl|tcell.ModShift))
+	app.handleEvent(tcell.NewEventKey(tcell.KeyCtrlL, 0, tcell.ModNone))
 	if got := app.ws.ActiveIndex(); got != 0 {
-		t.Fatalf("tras Ctrl+Shift+K (KeyRune), ActiveIndex() = %d, se esperaba 0", got)
+		t.Fatalf("tras el segundo Ctrl+L, ActiveIndex() = %d, se esperaba 0", got)
 	}
 
 	// Wrap al inicio: desde la 0, cae en la última.
-	app.handleEvent(tcell.NewEventKey(tcell.KeyRune, 'K', tcell.ModCtrl|tcell.ModShift))
+	app.handleEvent(tcell.NewEventKey(tcell.KeyCtrlL, 0, tcell.ModNone))
 	if got := app.ws.ActiveIndex(); got != 2 {
-		t.Fatalf("tras Ctrl+Shift+K en la primera, ActiveIndex() = %d, se esperaba 2 (wrap)", got)
+		t.Fatalf("tras Ctrl+L en la primera, ActiveIndex() = %d, se esperaba 2 (wrap)", got)
 	}
 }
 

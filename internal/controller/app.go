@@ -918,23 +918,18 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 
 // isSwitchTabNextKey reconoce Ctrl+K sin Shift: pestaña siguiente. Ctrl+J no
 // existe como par: en la terminal es el byte LF —el Enter que tcode ya trata
-// como activar/insertar salto de línea—, así que el atajo quedó en la familia K.
+// como activar/insertar salto de línea—, así que el atajo quedó en K y L.
 func isSwitchTabNextKey(ev *tcell.EventKey) bool {
 	return ev.Key() == tcell.KeyCtrlK && ev.Modifiers()&tcell.ModShift == 0
 }
 
-// isSwitchTabPrevKey reconoce Ctrl+Shift+K: pestaña anterior. Como con
-// Ctrl+Shift+Z y Ctrl+Shift+W, tcell reporta la combinación con Shift como
-// KeyRune con ModCtrl y ModShift; también llega como KeyCtrlK con ModShift,
-// según la terminal.
+// isSwitchTabPrevKey reconoce Ctrl+L sin Shift: pestaña anterior. El par final
+// es Ctrl+K (siguiente) / Ctrl+L (anterior); Ctrl+Shift+K quedó descartado.
+// Nota de terminal: en xterm y consolas Unix el form feed (Ctrl+L) limpia la
+// pantalla y no llega a la app; en Windows Terminal, el entorno objetivo,
+// llega limpio.
 func isSwitchTabPrevKey(ev *tcell.EventKey) bool {
-	if ev.Key() == tcell.KeyCtrlK && ev.Modifiers()&tcell.ModShift != 0 {
-		return true
-	}
-	return ev.Key() == tcell.KeyRune &&
-		ev.Modifiers()&tcell.ModCtrl != 0 &&
-		ev.Modifiers()&tcell.ModShift != 0 &&
-		(ev.Rune() == 'k' || ev.Rune() == 'K')
+	return ev.Key() == tcell.KeyCtrlL && ev.Modifiers()&tcell.ModShift == 0
 }
 
 // isUndoKey reconoce Ctrl+Z sin modificadores.

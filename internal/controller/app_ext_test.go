@@ -65,12 +65,12 @@ func TestExtensionKeybindingRunsBuiltin(t *testing.T) {
 		"version": "1.0.0",
 		"activation": ["onStartup"],
 		"contributes": {
-			"keybindings": [{"key": "ctrl+l", "command": "tcode.toggleExplorer"}]
+			"keybindings": [{"key": "ctrl+m", "command": "tcode.toggleExplorer"}]
 		}
 	}`)
 
-	if quit := press(app, tcell.KeyCtrlL); quit {
-		t.Fatal("ctrl+l no debe cerrar el editor")
+	if quit := press(app, tcell.KeyCtrlM); quit {
+		t.Fatal("ctrl+m no debe cerrar el editor")
 	}
 
 	// El built-in corrió: el panel quedó visible. Con foco de teclado verificar
@@ -147,14 +147,14 @@ func TestExtensionDeclaredCommandActivatesAndReports(t *testing.T) {
 		"activation": ["onCommand:ext.stub.saludar"],
 		"contributes": {
 			"commands": [{"id": "ext.stub.saludar", "title": "Saludar"}],
-			"keybindings": [{"key": "ctrl+l", "command": "ext.stub.saludar"}]
+			"keybindings": [{"key": "ctrl+m", "command": "ext.stub.saludar"}]
 		}
 	}`)
 
 	if app.ext.Active("ext.stub") {
 		t.Fatal("la extensión no debería activarse al arrancar")
 	}
-	press(app, tcell.KeyCtrlL)
+	press(app, tcell.KeyCtrlM)
 	if !app.ext.Active("ext.stub") {
 		t.Fatal("ejecutar el comando no activó la extensión")
 	}
@@ -174,11 +174,11 @@ func TestExtensionUnknownCommandShowsStatus(t *testing.T) {
 		"version": "1.0.0",
 		"activation": ["*"],
 		"contributes": {
-			"keybindings": [{"key": "ctrl+l", "command": "tcode.noexiste"}]
+			"keybindings": [{"key": "ctrl+m", "command": "tcode.noexiste"}]
 		}
 	}`)
 
-	press(app, tcell.KeyCtrlL)
+	press(app, tcell.KeyCtrlM)
 	msg := app.statusBar.Message()
 	if !strings.Contains(msg, "desconocido") || !strings.Contains(msg, "tcode.noexiste") {
 		t.Errorf("mensaje = %q, esperaba comando desconocido con su id", msg)
@@ -196,11 +196,11 @@ func TestExtensionChordRunsInController(t *testing.T) {
 		"version": "1.0.0",
 		"activation": ["onStartup"],
 		"contributes": {
-			"keybindings": [{"key": "ctrl+l ctrl+g", "command": "tcode.toggleExplorer"}]
+			"keybindings": [{"key": "ctrl+m ctrl+g", "command": "tcode.toggleExplorer"}]
 		}
 	}`)
 
-	press(app, tcell.KeyCtrlL)
+	press(app, tcell.KeyCtrlM)
 	if app.explorerVisible {
 		t.Fatal("la primera tecla del chord ya ejecutó el comando")
 	}

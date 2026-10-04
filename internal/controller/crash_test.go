@@ -31,11 +31,11 @@ func TestRunRecoversPanicAndLogsTheCrash(t *testing.T) {
 		"version": "1.0.0",
 		"activation": ["onStartup"],
 		"contributes": {
-			"keybindings": [{"key": "ctrl+l", "command": "test.panic"}]
+			"keybindings": [{"key": "ctrl+m", "command": "test.panic"}]
 		}
 	}`)
 
-	if err := app.screen.PostEvent(tcell.NewEventKey(tcell.KeyCtrlL, 0, tcell.ModNone)); err != nil {
+	if err := app.screen.PostEvent(tcell.NewEventKey(tcell.KeyCtrlM, 0, tcell.ModNone)); err != nil {
 		t.Fatalf("PostEvent falló: %v", err)
 	}
 
