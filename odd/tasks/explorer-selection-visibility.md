@@ -34,8 +34,13 @@ cualquier terminal y con cualquier tema:
   la fila activa; párrafo de roles "activos" corregido <!-- id: 4 -->
 - [x] Verificación: `gofmt -l`, `go vet ./...`, `go test ./...` (suite
   completa, vía verifier) <!-- id: 5 -->
+- [x] Verificación: `gofmt -l`, `go vet ./...`, `go test ./...` (suite
+  completa, vía verifier) — gofmt marcado por line endings CRLF del host
+  (artefacto preexistente, probado con `main.go` pristino); `internal/model` y
+  3 tests de `internal/controller` son fallos ambientales de Windows,
+  verificados idénticos en HEAD con el cambio ausente <!-- id: 5 -->
 - [x] Commit de unidad de trabajo en rama `feat/explorer-selection-visibility`
-  con Conventional Commit en inglés <!-- id: 6 -->
+  con Conventional Commit en inglés: `2872d16` <!-- id: 6 -->
 
 ## Design decisions
 - **`treeCursor` es un color de fondo, no un estilo.** La fila activa se pinta
