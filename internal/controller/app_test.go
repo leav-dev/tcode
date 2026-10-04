@@ -1758,6 +1758,110 @@ func TestShiftTabFocusesTheExplorerWithAnEmptyWorkspace(t *testing.T) {
 	}
 }
 
+// newSubtreeApp arma un workspace con directorios anidados y devuelve la app
+// y la ruta del archivo hoja: el árbol arranca con el dir raíz colapsado y
+// SIN hijos (nunca expandido), que es lo que fuerza al reveal a leer el disco.
+func newSubtreeApp(t *testing.T) (*App, string) {
+	t.Helper()
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "internal", "view")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatalf("no se pudo crear el subdirectorio: %v", err)
+	}
+	inner := filepath.Join(sub, "editor.go")
+	if err := os.WriteFile(inner, []byte("package view"), 0o644); err != nil {
+		t.Fatalf("no se pudo crear el archivo: %v", err)
+	}
+	app := newExplorerApp(t, dir)
+	if !app.explorerFocused {
+		t.Fatal("el arranque sobre un directorio enfoca el explorador")
+	}
+	return app, inner
+}
+
+// TestShiftTabRevealsTheActiveFile: Shift+Tab no solo devuelve el foco al
+// explorador: REVELA el buffer activo. El archivo se abrió por el modelo con
+// el árbol todavía colapsado (internal sin hijos cargados); al volver con
+// Shift+Tab el controlador expande el camino con E/S real y deja el cursor
+// sobre editor.go.
+func TestShiftTabRevealsTheActiveFile(t *testing.T) {
+	app, inner := newSubtreeApp(t)
+
+	if _, err := app.ws.Open(inner); err != nil {
+		t.Fatalf("no se pudo abrir el buffer: %v", err)
+	}
+	app.explorerFocused = false // foco al editor
+
+	press(app, tcell.KeyBacktab)
+
+	if !app.explorerFocused {
+		t.Fatal("Shift+Tab debe devolver el foco al explorador")
+	}
+	if got := app.explorer.CursorPath(); got != inner {
+		t.Fatalf("CursorPath() = %q, se esperaba el archivo activo %q (el árbol debe revelarlo)", got, inner)
+	}
+
+	// El panel dibuja el archivo en alguna fila (la activa, con el marcador).
+	found := false
+	for y := 0; y < 5; y++ {
+		if strings.Contains(panelRow(app, y), "editor.go") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("el panel debe dibujar el archivo revelado en alguna fila")
+	}
+}
+
+// TestCtrlBShowRevealsTheActiveFile: mostrar el panel con Ctrl+B es otra
+// puerta de ENTRADA del foco y también revela el buffer activo; ocultarlo no
+// toca el árbol.
+func TestCtrlBShowRevealsTheActiveFile(t *testing.T) {
+	app, inner := newSubtreeApp(t)
+
+	if _, err := app.ws.Open(inner); err != nil {
+		t.Fatalf("no se pudo abrir el buffer: %v", err)
+	}
+	app.explorerFocused = false // foco al editor
+
+	press(app, tcell.KeyCtrlB) // ocultar
+	if app.explorerVisible {
+		t.Fatal("el test requiere el panel oculto")
+	}
+	press(app, tcell.KeyCtrlB) // mostrar: enfoca y revela
+
+	if !app.explorerVisible || !app.explorerFocused {
+		t.Fatal("el segundo Ctrl+B debe volver a mostrar y enfocar el panel")
+	}
+	if got := app.explorer.CursorPath(); got != inner {
+		t.Fatalf("CursorPath() = %q tras mostrar con Ctrl+B, se esperaba el archivo activo %q", got, inner)
+	}
+}
+
+// TestClickOnTheTreeDoesNotReveal: un clic en el árbol es intención del
+// usuario: selecciona la fila del clic y NO se pisa con el reveal del buffer
+// activo, que solo corre al ENTRAR el foco por teclado o al mostrar el panel.
+func TestClickOnTheTreeDoesNotReveal(t *testing.T) {
+	app, inner := newSubtreeApp(t)
+
+	if _, err := app.ws.Open(inner); err != nil {
+		t.Fatalf("no se pudo abrir el buffer: %v", err)
+	}
+	app.explorerFocused = false
+	press(app, tcell.KeyBacktab)
+	if got := app.explorer.CursorPath(); got != inner {
+		t.Fatalf("el test requiere el reveal previo: CursorPath() = %q", got)
+	}
+
+	// Clic sobre el NOMBRE del dir del primer nivel (fuera de su caret): solo
+	// selecciona la fila 0 (internal) y no se re-revela el buffer activo.
+	app.handleEvent(tcell.NewEventMouse(5, tabBarHeight, tcell.Button1, tcell.ModNone))
+	want := filepath.Dir(filepath.Dir(inner)) // el dir internal del nivel raíz
+	if got := app.explorer.CursorPath(); got != want {
+		t.Fatalf("CursorPath() = %q tras el clic, se esperaba el dir clickeado %q (el clic manda)", got, want)
+	}
+}
+
 // TestCtrlBTogglesWithAnEmptyWorkspace: el toggle del panel funciona también
 // sin ningún buffer abierto —el camino de entrada de U3 es el arranque sobre
 // un directorio con el workspace vacío, y ocultar el panel para ganar ancho

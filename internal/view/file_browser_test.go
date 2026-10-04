@@ -790,3 +790,155 @@ func TestFileBrowserCursorPath(t *testing.T) {
 		t.Fatalf("CursorPath() = %q sobre un nodo anidado, se esperaba %q", got, "/cwd/docs/a.txt")
 	}
 }
+
+// TestFileBrowserRevealSelectsAVisibleNode: Reveal de un nodo ya visible lo
+// selecciona y termina; Reveal de un path que NO está en el árbol (ni bajo
+// ningún nodo visible) termina sin mover el cursor.
+func TestFileBrowserRevealSelectsAVisibleNode(t *testing.T) {
+	fb := NewFileBrowser()
+	fb.Resize(10, 5)
+	fb.SetRoot("/cwd")
+	fb.SetRootEntries([]Entry{
+		{Name: "a.txt", Path: "/cwd/a.txt"},
+		{Name: "b.txt", Path: "/cwd/b.txt"},
+	})
+
+	done, dir := fb.Reveal("/cwd/b.txt")
+	if !done || dir != "" {
+		t.Fatalf("Reveal de un nodo visible = (done=%v, dir=%q), se esperaba (true, \"\")", done, dir)
+	}
+	if got := fb.CursorPath(); got != "/cwd/b.txt" {
+		t.Fatalf("CursorPath() = %q tras Reveal, se esperaba el nodo pedido", got)
+	}
+
+	// Un path fuera del árbol (ni siquiera bajo un dir visible): termina sin
+	// mover la selección.
+	done, dir = fb.Reveal("/otro/x.txt")
+	if !done || dir != "" {
+		t.Fatalf("Reveal fuera del árbol = (done=%v, dir=%q), se esperaba (true, \"\")", done, dir)
+	}
+	if got := fb.CursorPath(); got != "/cwd/b.txt" {
+		t.Fatalf("CursorPath() = %q tras un Reveal fuera del árbol, no debía moverse", got)
+	}
+}
+
+// TestFileBrowserRevealExpandsACollapsedAncestor: Reveal de un archivo bajo un
+// dir colapsado pide expandir ese dir ((false, dirPath)); el controlador
+// deposita los hijos con ExpandDir y el Reveal siguiente termina con el cursor
+// sobre el archivo. El acoplamiento vista/controlador es el mismo que
+// Expand/Collapse: la vista nunca lee el filesystem.
+func TestFileBrowserRevealExpandsACollapsedAncestor(t *testing.T) {
+	fb := NewFileBrowser()
+	fb.Resize(10, 5)
+	fb.SetRoot("/cwd")
+	fb.SetRootEntries([]Entry{{Name: "docs", Path: "/cwd/docs", IsDir: true}})
+
+	done, dir := fb.Reveal("/cwd/docs/a.txt")
+	if done || dir != "/cwd/docs" {
+		t.Fatalf("Reveal bajo un dir colapsado = (done=%v, dir=%q), se esperaba (false, \"/cwd/docs\")", done, dir)
+	}
+
+	// ExpandDir es por RUTA (el cursor no tiene que estar sobre el dir) y no
+	// pierde el estado del árbol.
+	if ok := fb.ExpandDir(dir, []Entry{{Name: "a.txt", Path: "/cwd/docs/a.txt"}}); !ok {
+		t.Fatal("ExpandDir debe devolver true para un dir del árbol")
+	}
+	if got := fb.CursorPath(); got != "/cwd/docs" {
+		t.Fatalf("ExpandDir no debe mover el cursor: quedó en %q", got)
+	}
+
+	done, dir = fb.Reveal("/cwd/docs/a.txt")
+	if !done || dir != "" {
+		t.Fatalf("Reveal tras expandir = (done=%v, dir=%q), se esperaba (true, \"\")", done, dir)
+	}
+	if got := fb.CursorPath(); got != "/cwd/docs/a.txt" {
+		t.Fatalf("CursorPath() = %q tras el reveal completo, se esperaba el archivo", got)
+	}
+}
+
+// TestFileBrowserRevealWalksNestedCollapsedDirs: un camino de dos niveles
+// colapsados se reavela en dos pasadas (una por dir que pedir), con el cursor
+// estable fuera del dir que se expande; el reveal no depende del cursor.
+func TestFileBrowserRevealWalksNestedCollapsedDirs(t *testing.T) {
+	fb := NewFileBrowser()
+	fb.Resize(10, 6)
+	fb.SetRoot("/repo")
+	fb.SetRootEntries([]Entry{
+		{Name: "a.txt", Path: "/repo/a.txt"},
+		{Name: "internal", Path: "/repo/internal", IsDir: true},
+	})
+	// El cursor queda en a.txt, lejos de la rama que el reveal va a abrir.
+	if got := fb.CursorPath(); got != "/repo/a.txt" {
+		t.Fatalf("CursorPath() = %q, se esperaba a.txt (cursor de arranque)", got)
+	}
+
+	done, dir := fb.Reveal("/repo/internal/view/editor.go")
+	if done || dir != "/repo/internal" {
+		t.Fatalf("pasada 1 = (done=%v, dir=%q), se esperaba (false, /repo/internal)", done, dir)
+	}
+	fb.ExpandDir(dir, []Entry{
+		{Name: "view", Path: "/repo/internal/view", IsDir: true},
+		{Name: "model", Path: "/repo/internal/model", IsDir: true},
+	})
+
+	done, dir = fb.Reveal("/repo/internal/view/editor.go")
+	if done || dir != "/repo/internal/view" {
+		t.Fatalf("pasada 2 = (done=%v, dir=%q), se esperaba (false, /repo/internal/view)", done, dir)
+	}
+	fb.ExpandDir(dir, []Entry{{Name: "editor.go", Path: "/repo/internal/view/editor.go"}})
+
+	done, dir = fb.Reveal("/repo/internal/view/editor.go")
+	if !done || dir != "" {
+		t.Fatalf("pasada final = (done=%v, dir=%q), se esperaba (true, \"\")", done, dir)
+	}
+	if got := fb.CursorPath(); got != "/repo/internal/view/editor.go" {
+		t.Fatalf("CursorPath() = %q, se esperaba el archivo revelado", got)
+	}
+}
+
+// TestFileBrowserRevealKeepsLoadedChildren: un dir con hijos ya cargados —pero
+// colapsado— se re-expande por ExpandDir SIN duplicar sus hijos (mismo diseño
+// de re-expandir sin re-leer), y un Reveal posterior no re-expande nada.
+func TestFileBrowserRevealKeepsLoadedChildren(t *testing.T) {
+	fb := NewFileBrowser()
+	fb.Resize(10, 6)
+	fb.SetRoot("/cwd")
+	fb.SetRootEntries([]Entry{{Name: "docs", Path: "/cwd/docs", IsDir: true}})
+	fb.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	fb.SetChildren([]Entry{{Name: "a.txt", Path: "/cwd/docs/a.txt"}})
+	fb.HandleEvent(tcell.NewEventKey(tcell.KeyLeft, 0, tcell.ModNone)) // colapsar (guarda los hijos)
+
+	if ok := fb.ExpandDir("/cwd/docs", []Entry{{Name: "a.txt", Path: "/cwd/docs/a.txt"}}); !ok {
+		t.Fatal("ExpandDir debe re-expandir el dir con hijos cargados")
+	}
+	fb.ExpandDir("/cwd/docs", []Entry{{Name: "a.txt", Path: "/cwd/docs/a.txt"}}) // de nuevo: no duplica
+
+	if n := len(fb.nodes); n != 2 {
+		t.Fatalf("aplanado = %d nodos, se esperaba 2 (docs + su único hijo, sin duplicados)", n)
+	}
+	done, dir := fb.Reveal("/cwd/docs/a.txt")
+	if !done || dir != "" {
+		t.Fatalf("Reveal del archivo ya visible = (done=%v, dir=%q), se esperaba (true, \"\")", done, dir)
+	}
+}
+
+// TestFileBrowserRevealStopsWhenTheAncestorCannotContainIt: un ancestro ya
+// expandido cuyo contenido cargado no incluye el target termina el reveal sin
+// mover el cursor: el archivo no existe bajo el árbol actual (el dir se leyó
+// en su momento y no estaba ahí).
+func TestFileBrowserRevealStopsWhenTheAncestorCannotContainIt(t *testing.T) {
+	fb := NewFileBrowser()
+	fb.Resize(10, 5)
+	fb.SetRoot("/cwd")
+	fb.SetRootEntries([]Entry{{Name: "docs", Path: "/cwd/docs", IsDir: true}})
+	fb.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	fb.SetChildren([]Entry{{Name: "a.txt", Path: "/cwd/docs/a.txt"}})
+
+	done, dir := fb.Reveal("/cwd/docs/otro.txt")
+	if !done || dir != "" {
+		t.Fatalf("Reveal de un inexistente en un dir expandido = (done=%v, dir=%q), se esperaba (true, \"\")", done, dir)
+	}
+	if got := fb.CursorPath(); got != "/cwd/docs" {
+		t.Fatalf("CursorPath() = %q, no debía moverse (ni siquiera a la fila del dir)", got)
+	}
+}

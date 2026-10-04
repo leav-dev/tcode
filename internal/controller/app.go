@@ -712,14 +712,17 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		// explorador cuando está a la vista, sin editar el documento (la tecla
 		// no llega a la edición) y sin tocar la visibilidad del panel, que es
 		// decisión de Ctrl+B. El par Tab / Shift+Tab alterna entre panel y
-		// editor —la vuelta al selector de archivos desde el teclado que
-		// "volver con clic o re-mostrando con Ctrl+B" no daba—. Va antes del
-		// guard por la misma razón que Tab: solo mueve foco.
+		// editor —la vuelta al selector de archivos desde el teclado—. Al
+		// ENTRAR el foco se revela el buffer activo: el árbol expande (con
+		// E/S perezosa) el camino hasta el archivo que se está editando y deja
+		// el cursor sobre él, para que el selector no muestre una selección
+		// vieja. Va antes del guard por la misma razón que Tab: solo mueve foco.
 		if ev.Key() == tcell.KeyBacktab && a.explorerVisible && !a.explorerFocused {
 			a.explorerFocused = true
 			a.confirmQuit = false
 			a.confirmClose = false
 			a.clearForceSave()
+			a.revealActiveInExplorer()
 			a.redraw()
 			return false
 		}
@@ -1177,13 +1180,18 @@ func (a *App) redraw() {
 }
 
 // toggleExplorer muestra u oculta el panel lateral. Mostrar enfoca el
-// explorador; ocultar lo desenfoca (el foco queda en el editor). En ambos casos
-// el ancho del editor cambia, así que todas las vistas reciben el mismo
-// tratamiento que un resize —sin eso, la vista de otra pestaña dibujaría con
-// el ancho viejo al volver— y se redibuja.
+// explorador y REVELA el buffer activo —otra puerta de entrada del foco, como
+// Shift+Tab—: el selector nunca vuelve a una selección vieja al reaparecer.
+// Ocultar lo desenfoca (el foco queda en el editor). En ambos casos el ancho
+// del editor cambia, así que todas las vistas reciben el mismo tratamiento que
+// un resize —sin eso, la vista de otra pestaña dibujaría con el ancho viejo al
+// volver— y se redibuja.
 func (a *App) toggleExplorer() {
 	a.explorerVisible = !a.explorerVisible
 	a.explorerFocused = a.explorerVisible
+	if a.explorerVisible {
+		a.revealActiveInExplorer()
+	}
 	a.resizeEditors()
 	a.redraw()
 }
@@ -1247,6 +1255,33 @@ func (a *App) activateExplorerEntry() {
 	a.emitEvent(ext.EventDidOpenBuffer)
 	a.explorerFocused = false
 	a.syncStatus()
+}
+
+// revealActiveInExplorer acerca el selector al buffer activo: el bucle revela
+// un nivel por pasada —Reveal dice qué dir colapsado falta → readEntries lo
+// lee → ExpandDir lo deposita— hasta que el archivo queda visible y
+// seleccionado, o hasta demostrar que no está en el árbol (y el cursor queda
+// intacto). Sin buffer activo no hay nada que revelar. La expansión es
+// perezosa: solo lee los directorios colapsados del camino; un árbol ya
+// desplegado no re-lee nada. Un error de lectura es un no-op silencioso, como
+// en explorerExpand.
+func (a *App) revealActiveInExplorer() {
+	buf := a.activeBuffer()
+	if buf == nil {
+		return
+	}
+	target := buf.Path()
+	for {
+		done, dir := a.explorer.Reveal(target)
+		if done {
+			return
+		}
+		entries, err := readEntries(dir)
+		if err != nil {
+			return
+		}
+		a.explorer.ExpandDir(dir, entries)
+	}
 }
 
 // explorerExpand responde a ActionExpand: lee el directorio del nodo activo
