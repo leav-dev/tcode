@@ -1672,6 +1672,92 @@ func TestTabInsertsInTheDocumentWhileTheExplorerIsVisible(t *testing.T) {
 	}
 }
 
+// TestShiftTabReturnsFocusToTheExplorer: Shift+Tab (KeyBacktab) es el inverso
+// de Tab: con el foco en el editor y el panel visible devuelve el foco al
+// explorador SIN editar el documento (la tecla no llega a la edición) y SIN
+// tocar la visibilidad del panel, que es decisión de Ctrl+B. Tab y Shift+Tab
+// alternan entre panel y editor desde el teclado.
+func TestShiftTabReturnsFocusToTheExplorer(t *testing.T) {
+	dir := t.TempDir()
+	doc := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(doc, []byte(""), 0o644); err != nil {
+		t.Fatalf("no se pudo crear el archivo: %v", err)
+	}
+	app := newExplorerApp(t, dir)
+
+	press(app, tcell.KeyEnter) // abre a.txt: el foco vuelve al editor
+	if app.explorerFocused {
+		t.Fatal("abrir un archivo devuelve el foco al editor")
+	}
+
+	if quit := press(app, tcell.KeyBacktab); quit {
+		t.Fatal("Shift+Tab no debe cerrar el editor")
+	}
+	if !app.explorerFocused {
+		t.Fatal("Shift+Tab con el foco en el editor debe llevarlo al explorador")
+	}
+	if !app.explorerVisible {
+		t.Fatal("Shift+Tab solo mueve el foco: no debe ocultar el panel")
+	}
+	// El foco cambió sin tocar el documento: Shift+Tab no es una tecla de
+	// edición y el editor no llega a recibirla.
+	if got := app.ws.Active().GetContent(); got != "" {
+		t.Fatalf("contenido = %q, se esperaba \"\": Shift+Tab no edita el documento", got)
+	}
+
+	// El par alterna: Tab devuelve al editor y Shift+Tab vuelve al panel.
+	press(app, tcell.KeyTab)
+	if app.explorerFocused {
+		t.Fatal("Tab debe devolver el foco al editor")
+	}
+	press(app, tcell.KeyBacktab)
+	if !app.explorerFocused {
+		t.Fatal("tras Tab+Shift+Tab el foco debe volver al explorador")
+	}
+}
+
+// TestShiftTabWithHiddenExplorerDoesNothing: con el panel oculto Shift+Tab no
+// lo muestra ni cambia el foco: mostrar el panel es decisión de Ctrl+B.
+func TestShiftTabWithHiddenExplorerDoesNothing(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a"), 0o644); err != nil {
+		t.Fatalf("no se pudo crear el archivo: %v", err)
+	}
+	app := newExplorerApp(t, dir)
+
+	press(app, tcell.KeyCtrlB) // ocultar
+	if app.explorerVisible {
+		t.Fatal("el test requiere el panel oculto")
+	}
+	press(app, tcell.KeyBacktab)
+	if app.explorerVisible || app.explorerFocused {
+		t.Fatal("Shift+Tab con el panel oculto no debe mostrarlo ni enfocarlo")
+	}
+}
+
+// TestShiftTabFocusesTheExplorerWithAnEmptyWorkspace: mover el foco no toca
+// ningún buffer, así que Shift+Tab funciona también sin pestañas abiertas —el
+// arranque sobre un directorio—, igual que Tab.
+func TestShiftTabFocusesTheExplorerWithAnEmptyWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a"), 0o644); err != nil {
+		t.Fatalf("no se pudo crear el archivo: %v", err)
+	}
+	app := newExplorerApp(t, dir)
+	if !app.explorerFocused {
+		t.Fatal("el arranque sobre un directorio enfoca el explorador")
+	}
+
+	press(app, tcell.KeyTab) // desenfoca el panel sin abrir nada
+	if app.explorerFocused {
+		t.Fatal("el test requiere el foco en el editor")
+	}
+	press(app, tcell.KeyBacktab)
+	if !app.explorerFocused {
+		t.Fatal("Shift+Tab sin buffers debe devolver el foco al explorador")
+	}
+}
+
 // TestCtrlBTogglesWithAnEmptyWorkspace: el toggle del panel funciona también
 // sin ningún buffer abierto —el camino de entrada de U3 es el arranque sobre
 // un directorio con el workspace vacío, y ocultar el panel para ganar ancho

@@ -697,12 +697,26 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		// Tab devuelve el foco al editor SOLO cuando el explorador lo tiene:
 		// con el foco en el editor, Tab sigue insertando tabulación en el
 		// documento —la edición no pierde su tecla más básica por tener el
-		// panel a la vista—. Volver al panel desde el editor es con clic en
-		// el panel o re-mostrándolo con Ctrl+B. Va antes del guard porque
-		// mover el foco no toca ningún buffer: con el workspace vacío también
-		// tiene que funcionar.
+		// panel a la vista—. Va antes del guard porque mover el foco no toca
+		// ningún buffer: con el workspace vacío también tiene que funcionar.
 		if ev.Key() == tcell.KeyTab && a.explorerVisible && a.explorerFocused {
 			a.explorerFocused = false
+			a.confirmQuit = false
+			a.confirmClose = false
+			a.clearForceSave()
+			a.redraw()
+			return false
+		}
+
+		// Shift+Tab (KeyBacktab) es el inverso de Tab: devuelve el foco al
+		// explorador cuando está a la vista, sin editar el documento (la tecla
+		// no llega a la edición) y sin tocar la visibilidad del panel, que es
+		// decisión de Ctrl+B. El par Tab / Shift+Tab alterna entre panel y
+		// editor —la vuelta al selector de archivos desde el teclado que
+		// "volver con clic o re-mostrando con Ctrl+B" no daba—. Va antes del
+		// guard por la misma razón que Tab: solo mueve foco.
+		if ev.Key() == tcell.KeyBacktab && a.explorerVisible && !a.explorerFocused {
+			a.explorerFocused = true
 			a.confirmQuit = false
 			a.confirmClose = false
 			a.clearForceSave()
