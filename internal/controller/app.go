@@ -1414,6 +1414,17 @@ func (a *App) closeTab() {
 	a.emitEvent(ext.EventDidCloseBuffer)
 	a.confirmClose = false
 	a.statusBar.ClearMessage()
+	// Cerrar la ÚLTIMA pestaña deja el workspace en el estado a propósito
+	// vacío: el foco pasa al explorador —visible aunque estuviera oculto—,
+	// como en el arranque sobre un directorio. Sin buffers no hay documento
+	// que editar, y el árbol es el destino natural del teclado para dirigirse
+	// a otro archivo; si el foco quedara en el editor vacío, el guard de
+	// workspace vacío dejaría las teclas muertas salvo salir. Cerrar una
+	// pestaña que no es la última no toca el foco ni la visibilidad.
+	if a.ws.Len() == 0 {
+		a.explorerVisible = true
+		a.explorerFocused = true
+	}
 	a.tabBar.EnsureActive(a.ws, a.tabBarWidth())
 	a.syncStatus()
 	a.redraw()

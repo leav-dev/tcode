@@ -1103,6 +1103,82 @@ func TestClosingTheLastTabLeavesAnEmptyWorkspace(t *testing.T) {
 	}
 }
 
+// TestClosingTheLastTabReturnsFocusToTheExplorer: cerrar la ÚLTIMA pestaña deja
+// el workspace en el estado a propósito vacío, y el foco pasa al explorador
+// —visible aunque estuviera oculto—, como en el arranque sobre un directorio.
+// Sin buffers no hay documento que editar: el árbol es el destino natural del
+// teclado para dirigirse a otro archivo; si el foco quedara en el editor
+// vacío, el guard de workspace vacío dejaría las teclas muertas salvo salir.
+func TestClosingTheLastTabReturnsFocusToTheExplorer(t *testing.T) {
+	dir := t.TempDir()
+	doc := filepath.Join(dir, "doc.txt")
+	if err := os.WriteFile(doc, []byte("uno"), 0o644); err != nil {
+		t.Fatalf("no se pudo crear el archivo: %v", err)
+	}
+
+	s := tcell.NewSimulationScreen("UTF-8")
+	if err := s.Init(); err != nil {
+		t.Fatalf("no se pudo inicializar la pantalla simulada: %v", err)
+	}
+	app, err := NewAppWithScreen(s, doc) // arranque de editor: panel oculto
+	if err != nil {
+		t.Fatalf("NewAppWithScreen falló: %v", err)
+	}
+	t.Cleanup(func() { app.ws.CloseAll(); s.Fini() })
+
+	if app.explorerVisible || app.explorerFocused {
+		t.Fatal("el arranque con archivo debe dejar el panel oculto y sin foco")
+	}
+
+	press(app, tcell.KeyCtrlW) // una pestaña limpia cierra directo
+	if got := app.ws.Len(); got != 0 {
+		t.Fatalf("Len() = %d, se esperaba 0", got)
+	}
+	if !app.explorerVisible {
+		t.Fatal("cerrar la última pestaña debe mostrar el explorador")
+	}
+	if !app.explorerFocused {
+		t.Fatal("cerrar la última pestaña debe pasar el foco al explorador")
+	}
+
+	// El teclado queda vivo en el árbol: ↓ no sale ni abre nada (una sola
+	// entrada se mantiene), y Enter abre el archivo de la raíz devolviendo el
+	// foco al editor.
+	press(app, tcell.KeyDown)
+	if got := app.explorer.CursorPath(); got != doc {
+		t.Fatalf("CursorPath() = %q, se esperaba %q", got, doc)
+	}
+	press(app, tcell.KeyEnter)
+	if got := app.ws.Len(); got != 1 {
+		t.Fatalf("Len() = %d, se esperaba 1 tras abrir desde el árbol", got)
+	}
+	if app.explorerFocused {
+		t.Fatal("abrir un archivo desde el árbol devuelve el foco al editor")
+	}
+}
+
+// TestClosingANonLastTabKeepsTheEditorFocus: el paso al explorador es SOLO del
+// estado sin buffers —cerrar la última pestaña—, no un efecto lateral de
+// cualquier cierre: cerrar una pestaña que no es la última deja el foco en el
+// editor y el panel oculto queda oculto.
+func TestClosingANonLastTabKeepsTheEditorFocus(t *testing.T) {
+	app, _, _ := newTwoBufferApp(t, "uno", "dos")
+	if app.explorerVisible || app.explorerFocused {
+		t.Fatal("el arranque con archivo debe dejar el panel oculto")
+	}
+
+	press(app, tcell.KeyCtrlW) // cierra el buffer activo (el 0); queda 1
+	if got := app.ws.Len(); got != 1 {
+		t.Fatalf("Len() = %d, se esperaba 1", got)
+	}
+	if app.explorerVisible {
+		t.Fatal("cerrar una pestaña que no es la última no debe mostrar el panel")
+	}
+	if app.explorerFocused {
+		t.Fatal("cerrar una pestaña que no es la última no debe mover el foco")
+	}
+}
+
 // TestClosingATabRemovesItsEditorAndPermission: al cerrar, el controlador
 // borra la vista del buffer (una vista vieja conservaría un puntero a un
 // PieceTable ya desmapeado) y el permiso de pisar (autorizó a un archivo que
