@@ -708,21 +708,24 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 			return false
 		}
 
-		// Shift+Tab (KeyBacktab) es el inverso de Tab: devuelve el foco al
-		// explorador cuando está a la vista, sin editar el documento (la tecla
-		// no llega a la edición) y sin tocar la visibilidad del panel, que es
-		// decisión de Ctrl+B. El par Tab / Shift+Tab alterna entre panel y
-		// editor —la vuelta al selector de archivos desde el teclado—. Al
-		// ENTRAR el foco se revela el buffer activo: el árbol expande (con
+		// Shift+Tab (KeyBacktab) mueve el foco AL OTRO panel: con el explorador
+		// a la vista, Shift+Tab alterna en los dos sentidos. Desde el EDITOR
+		// entra al selector y REVELA el buffer activo —el árbol expande (con
 		// E/S perezosa) el camino hasta el archivo que se está editando y deja
 		// el cursor sobre él, para que el selector no muestre una selección
-		// vieja. Va antes del guard por la misma razón que Tab: solo mueve foco.
-		if ev.Key() == tcell.KeyBacktab && a.explorerVisible && !a.explorerFocused {
-			a.explorerFocused = true
+		// vieja—; desde el SELECCIONADO devuelve el foco al editor, igual que
+		// Tab: quien llega al selector con Shift+Tab no queda atrapado, la
+		// misma tecla lo saca. La tecla nunca llega a la edición y la
+		// visibilidad del panel sigue siendo decisión de Ctrl+B. Va antes del
+		// guard por la misma razón que Tab: solo mueve foco.
+		if ev.Key() == tcell.KeyBacktab && a.explorerVisible {
+			a.explorerFocused = !a.explorerFocused
 			a.confirmQuit = false
 			a.confirmClose = false
 			a.clearForceSave()
-			a.revealActiveInExplorer()
+			if a.explorerFocused {
+				a.revealActiveInExplorer()
+			}
 			a.redraw()
 			return false
 		}

@@ -1758,6 +1758,50 @@ func TestShiftTabFocusesTheExplorerWithAnEmptyWorkspace(t *testing.T) {
 	}
 }
 
+// TestShiftTabFromTheExplorerReturnsToTheEditor: Shift+Tab es SIMÉTRICO: con
+// el foco ya en el explorador, Shift+Tab devuelve el foco al editor —el
+// mismo comportamiento que Tab—. Quien llega al selector con Shift+Tab no
+// queda atrapado: la misma tecla lo saca. El viaje de foco no edita el
+// documento ni toca la visibilidad del panel.
+func TestShiftTabFromTheExplorerReturnsToTheEditor(t *testing.T) {
+	dir := t.TempDir()
+	doc := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(doc, []byte(""), 0o644); err != nil {
+		t.Fatalf("no se pudo crear el archivo: %v", err)
+	}
+	app := newExplorerApp(t, dir)
+
+	press(app, tcell.KeyEnter) // abre a.txt: foco al editor
+	if app.explorerFocused {
+		t.Fatal("abrir un archivo devuelve el foco al editor")
+	}
+
+	// Alternancia completa con la MISMA tecla: editor → Shift+Tab → selector
+	// → Shift+Tab → editor.
+	press(app, tcell.KeyBacktab)
+	if !app.explorerFocused {
+		t.Fatal("Shift+Tab desde el editor debe llevar el foco al selector")
+	}
+	press(app, tcell.KeyBacktab)
+	if app.explorerFocused {
+		t.Fatal("Shift+Tab desde el selector debe devolver el foco al editor (el par alterna)")
+	}
+	if !app.explorerVisible {
+		t.Fatal("el viaje de foco no debe tocar la visibilidad del panel")
+	}
+
+	// Y Tab sigue saliendo del selector también (la vía clásica).
+	press(app, tcell.KeyBacktab) // al selector
+	press(app, tcell.KeyTab)
+	if app.explorerFocused {
+		t.Fatal("Tab desde el selector debe devolver el foco al editor")
+	}
+
+	if got := app.ws.Active().GetContent(); got != "" {
+		t.Fatalf("contenido = %q, se esperaba \"\": el viaje de foco no edita el documento", got)
+	}
+}
+
 // newSubtreeApp arma un workspace con directorios anidados y devuelve la app
 // y la ruta del archivo hoja: el árbol arranca con el dir raíz colapsado y
 // SIN hijos (nunca expandido), que es lo que fuerza al reveal a leer el disco.
