@@ -29,6 +29,91 @@ go build -o tcode .
 
 También crudo para probar: `go run . [archivo-o-directorio]`.
 
+Para armarte tus propios binarios de Linux y macOS sin depender de un release,
+ver [Compilar para Linux y macOS](#compilar-para-linux-y-macos).
+
+## Compilar para Linux y macOS
+
+tcode es Go puro (`tcell`, sin `import "C"` ni build tags por plataforma), así
+que la compilación cruzada no necesita toolchain extra: la cadena de Go ya
+genera los cuatro binarios desde cualquier SO anfitrión.
+
+```bash
+go version                      # hace falta Go 1.25+
+mkdir -p dist
+
+# Linux
+CGO_ENABLED=0 GOOS=linux  GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o dist/tcode-linux-amd64 .
+CGO_ENABLED=0 GOOS=linux  GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o dist/tcode-linux-arm64 .
+
+# macOS
+CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o dist/tcode-darwin-arm64 .
+CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o dist/tcode-darwin-amd64 .
+```
+
+`dist/` ya está en `.gitignore`: los binarios se generan, no se versionan.
+
+| Objetivo | `GOOS` / `GOARCH` | Para qué máquina |
+| --- | --- | --- |
+| `tcode-linux-amd64` | `linux` / `amd64` | PC/server Linux x86-64 |
+| `tcode-linux-arm64` | `linux` / `arm64` | Linux ARM64 (Raspberry Pi, ARM en la nube) |
+| `tcode-darwin-arm64` | `darwin` / `arm64` | Mac con Apple Silicon (M1/M2/M3/M4) |
+| `tcode-darwin-amd64` | `darwin` / `amd64` | Mac con Intel |
+
+### Qué hace cada flag
+
+- **`CGO_ENABLED=0`** — deja los binarios estáticos y sin dependencias del
+  sistema. Hoy el proyecto no usa cgo, pero el flag fija esa garantía: si
+  mañana alguien agrega una dependencia con cgo, el build falla en vez de
+  producir un binario atado a las librerías del anfitrión.
+- **`-trimpath`** — saca las rutas absolutas de tu máquina del binario
+  (reproducibilidad; no filtra tu `$HOME` al distribuir).
+- **`-ldflags="-s -w"`** — omite la tabla de símbolos y la info de debug. En
+  este repo baja de ~6,4 MB a ~4,4 MB por binario. Si necesitás depurar con
+  `dlv` o leer panics con líneas, sacá este flag.
+
+### Verificar los binarios
+
+```bash
+file dist/*        # cada uno debe reportar su arquitectura correcta
+```
+
+Esperás `ELF 64-bit LSB executable, x86-64` (Linux amd64),
+`ELF 64-bit LSB executable, ARM aarch64` (Linux arm64), y
+`Mach-O 64-bit arm64 executable` / `Mach-O 64-bit x86_64 executable` (macOS).
+
+El binario del SO anfitrión se puede probar en el lugar:
+
+```bash
+./dist/tcode-linux-amd64 --list-extensions   # sale sin abrir la UI
+```
+
+Los binarios de otro SO **no** se pueden ejecutar ni testear en el anfitrión:
+`go test ./...` solo corre compilando para la plataforma local. Los `.dmg`,
+`.deb` o tarballs de release quedan fuera de este flujo.
+
+### Notas de macOS
+
+- **En Apple Silicon usá el `arm64`.** El `darwin-amd64` corre bajo Rosetta 2
+  y solo si Rosetta está instalada; no hay motivo para bajar a `x86_64` en un
+  Mac ARM.
+- **Firma y cuarentena.** El linker de Go le pone firma ad-hoc al binario
+  `darwin/arm64`, así que arranca sin certificado de Apple. Pero si el archivo
+  llega descargado, por AirDrop o por carpeta compartida, macOS le agrega el
+  atributo de cuarentena y Gatekeeper lo bloquea con *"no se puede abrir porque
+  proviene de un desarrollador no identificado"*. Se destraba con:
+
+  ```bash
+  xattr -d com.apple.quarantine ./tcode-darwin-arm64
+  chmod +x ./tcode-darwin-arm64
+  ```
+
+  (o clic derecho → Abrir la primera vez). Esto es solo para tu uso local y
+  para pruebas; distribuir binarios a terceros sin notarización es otra
+  historia y necesita cuenta de desarrollador de Apple.
+- **Terminal:** `tcell` ya trae la info de terminales comunes; con
+  `TERM=xterm-256color` no hace falta configurar nada.
+
 ## Uso rápido
 
 | Querés… | Hacé |
