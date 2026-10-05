@@ -17,12 +17,13 @@ Este archivo registra las decisiones arquitectónicas clave, cambios estructural
 - **Versionado (convención del autor, `agents.md` sección 4):** el agente **commitea solo** al terminar un cambio solicitado y **no hace push inmediato**; el push ocurre únicamente cuando el usuario lo pide. Por eso el agente ya no pide autorización para commitear.
 
 ## 2.5 Próxima feature (anunciada por el usuario)
-- **Configuraciones básicas en una ventana flotante (overlay).** Se manejará en
-  una rama nueva dedicada (sugerida: `feat/floating-config`; el nombre lo arma
-  el usuario al arrancar). Espera en `main` recién pusheado (`fa3fa8b`).
-  Pendiente de alcance: qué configuraciones entran, dónde vive el overlay
-  (patrón del menú de pestañas: una vista overlay compuesta sobre el editor) y
-  cómo se persiste (`~/.tcode/config.json` …).
+- **Configuraciones básicas en una ventana flotante (overlay).** Se manejó en la
+  rama `feat/floating-config` (ventana Ctrl+P con Tab size, Word wrap, Panel
+  width y Theme; persistencia en `~/.tcode/config.json`; fondos de documento
+  por tema) y quedó **mergeada a `main`** (`1cd9bab`) por pedido del usuario
+  tras su validación. El proceso de merge usa `git push origin
+  feat/...:main` + `git branch -f main feat/...` + checkout final, porque el
+  checkout de rama choca con el mmap de tcode corriendo.
 
 ## 3. Registro de Cambios (Changelog de Memoria)
 - **Ventana flotante de configuración** (`odd/tasks/floating-config.md`, rama `feat/floating-config`, `docs/config.md`): el usuario pidió manejar configuraciones básicas en un overlay. `Ctrl+,` abre/cierra una ventana flotante (34x5 centrada sobre el editor, patrón del menú de pestañas) con Tab size (1–8), Word wrap (on/off) y Panel width (16–48, paso 2); los cambios aplican EN VIVO (resize de vistas como un resize de terminal) y persisten en `~/.tcode/config.json` (leído al arranque junto a `theme.json`; `*bool` distingue ausencia de false; JSON roto → defaults, jamás rompe). Arquitectura: la config vive en `view/settings.go` (vars `explorerWidth` movida de controller + `IndentSize`/`SetIndentSize`/`SetWordWrapEnabled`/setters y getters exportados), el `ConfigMenu` (view) muta las vars y el controller persiste; el documento `docs/config.md` documenta las keys. Implementación test-first delegada a gentle-ai-worker; verificación via gentle-ai-verify (build/vet/view ok, controller solo los 3 ambientales de Windows preexistentes).
