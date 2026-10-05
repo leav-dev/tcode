@@ -1058,3 +1058,160 @@ func TestUpdateAllUpdatesOnlyChangedAcrossProviders(t *testing.T) {
 		}
 	}
 }
+
+// TestAvailableExtensionsDetectsOnlyTheMissing: el catálogo del proveedor se
+// diff contra lo instalado, así que una extensión que NO está en userRoot se
+// reporta como novedad y la que ya está instalada no aparece.
+func TestAvailableExtensionsDetectsOnlyTheMissing(t *testing.T) {
+	src := providerFixture(t, map[string][3]string{
+		"linter": {"tcode.linter", "Linter", "1.0.0"},
+		"tema":   {"tcode.tema", "Tema", "2.0.0"},
+	})
+	p := remoteProviderForUpdate("remoto")
+	userRoot := t.TempDir()
+	if _, err := InstallByID("tcode.linter", []Provider{p}, userRoot, fetchFake(src), nil); err != nil {
+		t.Fatalf("InstallByID: %v", err)
+	}
+
+	available, errs := AvailableExtensions([]Provider{p}, userRoot, fetchFake(src))
+	if len(errs) != 0 {
+		t.Fatalf("AvailableExtensions reportó errores: %v", errs)
+	}
+	if len(available) != 1 {
+		t.Fatalf("AvailableExtensions devolvió %d novedades, esperaba 1: %+v", len(available), available)
+	}
+	got := available[0]
+	if got.ID != "tcode.tema" || got.Provider.Name != "remoto" || got.Version != "2.0.0" || got.Subdir != "tema" {
+		t.Errorf("AvailableExt inesperado: %+v", got)
+	}
+	if got.Ref() != "remoto/tcode.tema" {
+		t.Errorf("Ref inesperado: %q", got.Ref())
+	}
+	// Instalada también la que faltaba, no queda ninguna novedad.
+	if _, err := InstallByID("tcode.tema", []Provider{p}, userRoot, fetchFake(src), nil); err != nil {
+		t.Fatalf("InstallByID tema: %v", err)
+	}
+	available, errs = AvailableExtensions([]Provider{p}, userRoot, fetchFake(src))
+	if len(errs) != 0 {
+		t.Fatalf("AvailableExtensions reportó errores: %v", errs)
+	}
+	if len(available) != 0 {
+		t.Errorf("no debía reportar novedades con todo instalado: %+v", available)
+	}
+}
+
+// TestAvailableExtensionsIgnoresBrokenProviderAndDedupes: un proveedor con
+// nombre inválido se reporta y se ignora, un repo caído no corta el resto, y
+// el mismo id en dos proveedores aparece UNA vez (gana el primero, como al
+// resolver e instalar).
+func TestAvailableExtensionsIgnoresBrokenProviderAndDedupes(t *testing.T) {
+	primero := providerFixture(t, map[string][3]string{"linter": {"tcode.linter", "Linter", "1.0.0"}})
+	segundo := providerFixture(t, map[string][3]string{
+		"linter": {"tcode.linter", "Linter", "9.9.9"},
+		"tema":   {"tcode.tema", "Tema", "2.0.0"},
+	})
+	caido := "https://example.com/caido.git"
+	fetch := func(url, dest, pattern string) error {
+		switch {
+		case strings.Contains(url, "primero"):
+			return fetchFake(primero)(url, dest, pattern)
+		case strings.Contains(url, "segundo"):
+			return fetchFake(segundo)(url, dest, pattern)
+		}
+		return errors.New("repo inalcanzable")
+	}
+	providers := []Provider{
+		{Name: "../escape", Source: primero, Approved: true},
+		{Name: "primero", Source: "https://example.com/primero.git", Approved: true},
+		{Name: "segundo", Source: "https://example.com/segundo.git", Approved: true},
+		{Name: "caido", Source: caido, Approved: true},
+	}
+
+	available, errs := AvailableExtensions(providers, t.TempDir(), fetch)
+	// Los tres problemas se acumulan: nombre inválido y repo caído.
+	if len(errs) != 2 {
+		t.Fatalf("errores inesperados: %v", errs)
+	}
+	if len(available) != 2 {
+		t.Fatalf("novedades inesperadas: %+v", available)
+	}
+	// El id repetido se reporta solo del primer proveedor, en su versión.
+	if available[0].Ref() != "primero/tcode.linter" || available[0].Version != "1.0.0" {
+		t.Errorf("la dedupe no favoreció al primer proveedor: %+v", available[0])
+	}
+	if available[1].Ref() != "segundo/tcode.tema" {
+		t.Errorf("novedad inesperada: %+v", available[1])
+	}
+}
+
+// TestInstallAvailableInstallsApprovedAndSkipsUnapproved: las novedades de un
+// proveedor aprobado se instalan en <root>/<proveedor>/<id> con sus archivos;
+// las de un proveedor sin aprobar se saltan (quedan para que las reporte quien
+// llama) y no dejan nada en disco.
+func TestInstallAvailableInstallsApprovedAndSkipsUnapproved(t *testing.T) {
+	src := providerFixture(t, map[string][3]string{
+		"linter": {"tcode.linter", "Linter", "1.0.0"},
+		"tema":   {"tcode.tema", "Tema", "2.0.0"},
+	})
+	if err := os.WriteFile(filepath.Join(src, "tema", "main.lua"), []byte("return {}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile main.lua: %v", err)
+	}
+	aprobado := remoteProviderForUpdate("aprobado")
+	sinAprobar := Provider{Name: "sinaprobar", Source: "https://example.com/sinaprobar.git"}
+	available := []AvailableExt{
+		{Provider: aprobado, ID: "tcode.linter", Name: "Linter", Version: "1.0.0", Subdir: "linter"},
+		{Provider: sinAprobar, ID: "tcode.tema", Name: "Tema", Version: "2.0.0", Subdir: "tema"},
+	}
+	userRoot := t.TempDir()
+	fetch := func(url, dest, pattern string) error {
+		if strings.Contains(url, "sinaprobar") {
+			return fetchFake(src)(url, dest, pattern)
+		}
+		return fetchFake(src)(url, dest, pattern)
+	}
+
+	installed, errs := InstallAvailable(available, userRoot, fetch)
+	if len(errs) != 0 {
+		t.Fatalf("InstallAvailable reportó errores: %v", errs)
+	}
+	if len(installed) != 1 || installed[0].Ref() != "aprobado/tcode.linter" {
+		t.Fatalf("solo debía instalarse la aprobada: %+v", installed)
+	}
+	if _, err := os.Stat(filepath.Join(userRoot, "aprobado", "tcode.linter", "extension.json")); err != nil {
+		t.Fatalf("la extensión aprobada no quedó instalada: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(userRoot, "sinaprobar")); !os.IsNotExist(err) {
+		t.Errorf("la extensión sin aprobar no debía tocarse el disco: %v", err)
+	}
+}
+
+// TestInstallAvailableReportsFailureWithoutStopping: una extensión que no se
+// puede instalar se reporta y no impide instalar las siguientes.
+func TestInstallAvailableReportsFailureWithoutStopping(t *testing.T) {
+	src := providerFixture(t, map[string][3]string{
+		"linter": {"tcode.linter", "Linter", "1.0.0"},
+		"roto":   {"tcode.roto", "Roto", "1.0.0"},
+	})
+	p := remoteProviderForUpdate("remoto")
+	available := []AvailableExt{
+		{Provider: p, ID: "tcode.roto", Name: "Roto", Version: "1.0.0", Subdir: "roto"},
+		{Provider: p, ID: "tcode.linter", Name: "Linter", Version: "1.0.0", Subdir: "linter"},
+	}
+	userRoot := t.TempDir()
+
+	// El manifest se invalida después de ser detectado: la instalación lo
+	// vuelve a leer cuando baja los archivos de la subcarpeta.
+	if err := os.WriteFile(filepath.Join(src, "roto", "extension.json"), []byte(`{"id":"tcode.roto","name":"Roto","version":"no-semver"}`), 0o644); err != nil {
+		t.Fatalf("WriteFile manifest roto: %v", err)
+	}
+	installed, errs := InstallAvailable(available, userRoot, fetchFake(src))
+	if len(installed) != 1 || installed[0].Ref() != "remoto/tcode.linter" {
+		t.Fatalf("debía instalarse solo la válida: %+v", installed)
+	}
+	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "tcode.roto") {
+		t.Fatalf("errores inesperados: %v", errs)
+	}
+	if _, err := os.Stat(filepath.Join(userRoot, "remoto", "tcode.roto")); !os.IsNotExist(err) {
+		t.Errorf("el manifest inválido no debía crear nada: %v", err)
+	}
+}
