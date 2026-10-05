@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,6 +35,22 @@ func panelWidth(ancho int) int {
 	return min(view.ExplorerWidth(), max(1, ancho-16))
 }
 
+// fetchCatalog y installExtension son los puntos de entrada al backend de
+// extensiones: variables para que los tests los sustituyan por fakes (el
+// catálogo real consulta la API de GitHub y la instalación clona con git).
+var (
+	fetchCatalog     = ext.FetchCatalog
+	installExtension = ext.InstallFromGitSubdir
+)
+
+// catalogResult es el resultado de la consulta del catálogo que la goroutine
+// deposita en catalogCh: las entradas encontradas y los errores acumulados
+// (FetchCatalog es tolerante: ambos pueden no estar vacíos a la vez).
+type catalogResult struct {
+	entries []ext.CatalogEntry
+	errs    []error
+}
+
 type App struct {
 	screen    tcell.Screen
 	ws        *model.Workspace
@@ -64,7 +81,7 @@ type App struct {
 	// PieceTable ya desmapeado.
 	editors map[*model.PieceTable]*view.EditorView
 
-	lastEscape time.Time // marca del último Escape (doble presión para salir)
+	lastEscape   time.Time // marca del último Escape (doble presión para salir)
 	confirmQuit  bool
 	confirmClose bool
 	// confirmReload arma la confirmación no modal de Ctrl+R sobre un buffer
@@ -98,6 +115,22 @@ type App struct {
 	// del cursor y Enter alterna el booleano.
 	configMenu   *view.ConfigMenu
 	configActive bool
+
+	// extPanel es el panel de extensiones del catálogo (abierto desde la
+	// fila Extensions de la ventana de configuración) y extPanelActive dice
+	// si está abierto. Como la ventana de configuración, mientras está activo
+	// posee el teclado y el mouse: las teclas que el panel no maneja
+	// (Escape incluido) lo cierran y devuelven a la ventana de configuración.
+	extPanel       *view.ExtensionsPanel
+	extPanelActive bool
+
+	// catalog es el último catálogo consultado (lo que el panel muestra) y
+	// catalogCh es el canal por el que la goroutine de consulta deposita el
+	// resultado: el controlador lo drena al llegar un EventInterrupt y
+	// redibuja. Con buffer 1, una consulta que llega con el canal lleno pisa
+	// la anterior (la más reciente gana).
+	catalog   []ext.CatalogEntry
+	catalogCh chan catalogResult
 
 	// sessionEnabled marca los modos con sesión persistida (directorio o sin
 	// argumentos): el modo archivo explícito no guarda ni restaura. Se define
@@ -162,7 +195,10 @@ func NewAppWithScreen(s tcell.Screen, path string) (*App, error) {
 		explorer:   view.NewFileBrowser(),
 		menu:       view.NewTabMenu(),
 		configMenu: view.NewConfigMenu(),
+		extPanel:   view.NewExtensionsPanel(),
 		ext:        ext.NewManager(),
+
+		catalogCh: make(chan catalogResult, 1),
 
 		// La sesión es el estado de los modos explorador; el modo archivo la
 		// apaga abajo.
@@ -229,6 +265,16 @@ func NewAppWithScreen(s tcell.Screen, path string) (*App, error) {
 	// El manager habla con el editor a través del App: los comandos con script
 	// corren Lua con la API tcode.* cableada a App (ScriptAPI).
 	app.ext.SetEditor(app)
+
+	// La fila Extensions de la ventana de configuración abre el panel de
+	// extensiones: el callback vive acá porque abrirlo es decisión del
+	// controlador (consulta el catálogo en goroutine y compone el panel).
+	app.configMenu.SetOnAction(func(label string) bool {
+		if label == "Extensions" {
+			return app.openExtensionsPanel()
+		}
+		return false
+	})
 
 	// El tema se aplica a todas las vistas en el arranque; los editores que se
 	// creen bajo demanda lo reciben en activeEditor.
@@ -372,6 +418,7 @@ func (a *App) applyTheme() {
 	a.explorer.SetTheme(a.theme)
 	a.menu.SetTheme(a.theme)
 	a.configMenu.SetTheme(a.theme)
+	a.extPanel.SetTheme(a.theme)
 	for _, ed := range a.editors {
 		ed.SetTheme(a.theme)
 	}
@@ -854,6 +901,19 @@ var setCrashPaper = func() {
 // handleEvent procesa un evento y devuelve true si la aplicación debe terminar.
 func (a *App) handleEvent(ev tcell.Event) bool {
 	switch ev := ev.(type) {
+	// La goroutine de consulta del catálogo terminó: drena el canal (con
+	// buffer 1, la consulta más reciente gana), deposita el resultado en el
+	// panel y redibuja. Con el panel cerrado el resultado se guarda igual: la
+	// próxima apertura lo muestra.
+	case *tcell.EventInterrupt:
+		select {
+		case res := <-a.catalogCh:
+			a.setCatalog(res)
+			a.redraw()
+		default:
+		}
+		return false
+
 	case *tcell.EventKey:
 		// Cada evento de actividad revisa los buffers abiertos: un archivo que
 		// cambió por fuera y un buffer limpio se recargan solos. Con ediciones
@@ -862,6 +922,48 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		// Con un pedido activo el teclado es del pedido, no del documento.
 		if a.promptActive {
 			a.handlePromptKey(ev)
+			return false
+		}
+
+		// Ctrl+P abre la ventana flotante de configuración —también con el
+		// workspace vacío: la configuración existe sin buffers—. Arrancó como
+		// Ctrl+, pero el terminal del usuario interceptaba la coma: Ctrl+P
+		// (el byte 0x10, KeyCtrlP) pasa limpio en Windows Terminal y en casi
+		// todo terminal estándar. Ctrl+Shift+P queda fuera a propósito: la
+		// Shift del par no pide nadie. Con el panel de extensiones abierto,
+		// Ctrl+P lo cierra y vuelve a la ventana (en vez de abrir la ventana):
+		// va ANTES del panel porque con el panel abierto el teclado es del
+		// panel y el bloque de abajo se lo tragaría.
+		if ev.Key() == tcell.KeyCtrlP && ev.Modifiers()&tcell.ModShift == 0 {
+			if a.extPanelActive {
+				a.extPanelActive = false
+				a.configActive = true
+				a.redraw()
+				return false
+			}
+			a.toggleConfig()
+			return false
+		}
+
+		// El panel de extensiones abierto posee el teclado: (handled, ids,
+		// close) —close si Escape pidió cerrar (vuelve a la ventana de
+		// configuración), ids si Enter pidió instalar (el controlador instala
+		// y refresca), handled para el resto de las teclas del panel. Con el
+		// panel abierto el teclado es del panel, no del documento.
+		if a.extPanelActive {
+			handled, ids, close := a.extPanel.HandleEvent(ev)
+			if close {
+				a.extPanelActive = false
+				a.configActive = true
+				a.redraw()
+				return false
+			}
+			if handled {
+				if len(ids) > 0 {
+					a.installCatalogEntries(ids)
+				}
+				a.redraw()
+			}
 			return false
 		}
 
@@ -970,17 +1072,6 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		// editor cambia: las vistas se redimensionan en el toggle.
 		if ev.Key() == tcell.KeyCtrlB {
 			a.toggleExplorer()
-			return false
-		}
-
-		// Ctrl+P abre la ventana flotante de configuración —también con el
-		// workspace vacío: la configuración existe sin buffers—. Arrancó como
-		// Ctrl+, pero el terminal del usuario interceptaba la coma: Ctrl+P
-		// (el byte 0x10, KeyCtrlP) pasa limpio en Windows Terminal y en casi
-		// todo terminal estándar. Ctrl+Shift+P queda fuera a propósito: la
-		// Shift del par no pide nadie.
-		if ev.Key() == tcell.KeyCtrlP && ev.Modifiers()&tcell.ModShift == 0 {
-			a.toggleConfig()
 			return false
 		}
 
@@ -1094,7 +1185,7 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		// no traduce nada ni redibuja— y el clic no puede cambiar de pestaña,
 		// seleccionar un archivo ni raspar el documento por debajo de lo que el
 		// usuario está escribiendo.
-		if a.menuActive || a.promptActive || a.configActive {
+		if a.menuActive || a.promptActive || a.configActive || a.extPanelActive {
 			return false
 		}
 		a.checkExternalReloads()
@@ -1482,6 +1573,19 @@ func (a *App) redraw() {
 		a.configMenu.Draw(a.editorSurf)
 	}
 
+	// El panel de extensiones flota centrado sobre el área del editor, como
+	// la ventana de configuración: se compone DESPUÉS del editor (tapa el
+	// documento, sin tocar pestañas ni barra) con la misma superficie
+	// recortada a su región.
+	if a.extPanelActive {
+		if a.editorSurf == nil {
+			a.editorSurf = view.NewOffsetSurface(a.screen)
+		}
+		x, y, w, h := a.extPanelRegion()
+		a.editorSurf.SetRegion(x, y, w, h)
+		a.extPanel.Draw(a.editorSurf)
+	}
+
 	a.statusBar.Draw(a.screen, height-statusHeight, width)
 	a.screen.Show()
 }
@@ -1641,20 +1745,145 @@ func (a *App) switchTab(move func() *model.PieceTable) {
 // agranda sola. Comparte la geometría entre toggleConfig (que solo usa el
 // tamaño para Resize) y redraw (que reencuadra la superficie con la posición).
 func (a *App) configRegion() (x, y, w, h int) {
+	return a.centeredRegion(view.ConfigMenuHeight())
+}
+
+// extPanelRegion devuelve la región del panel de extensiones: la misma
+// geometría que la ventana de configuración pero con el alto que el panel
+// necesita (marco + todas sus filas), no el de la ventana.
+func (a *App) extPanelRegion() (x, y, w, h int) {
+	return a.centeredRegion(a.extPanel.Height())
+}
+
+// centeredRegion devuelve la región centrada en el área del editor para un
+// panel de ancho 34 y alto panelH, recortada si la terminal es chica (nunca
+// más ancha que el editor ni más alta que su área).
+func (a *App) centeredRegion(panelH int) (x, y, w, h int) {
 	width, height := a.screen.Size()
 	editorW := width - a.explorerColumn()
-	menuW := 34
-	if menuW > editorW {
-		menuW = editorW
+	w = 34
+	if w > editorW {
+		w = editorW
 	}
-	menuH := view.ConfigMenuHeight()
-	if menuH > editorHeight(height) {
-		menuH = editorHeight(height)
+	h = panelH
+	if h > editorHeight(height) {
+		h = editorHeight(height)
 	}
-	x = a.explorerColumn() + (editorW-menuW)/2
-	y = tabBarHeight + (editorHeight(height)-menuH)/2
-	w, h = menuW, menuH
+	x = a.explorerColumn() + (editorW-w)/2
+	y = tabBarHeight + (editorHeight(height)-h)/2
 	return
+}
+
+// userExtensionRoot devuelve el directorio de extensiones del usuario
+// (~/.tcode/extensions): donde FetchCatalog mira las instaladas y donde
+// installExtension copia las nuevas.
+func userExtensionRoot() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".tcode", "extensions")
+}
+
+// openExtensionsPanel abre el panel de extensiones desde la fila Extensions
+// de la ventana de configuración: cierra la ventana, marca el panel como
+// "consultando", lo dimensiona a su región y lanza la consulta del catálogo
+// en una goroutine (la UI no se congela): el resultado vuelve por catalogCh y
+// un EventInterrupt despierta al loop para drenarlo. Devuelve true (la fila
+// se activó: el controlador persiste y reencuadre).
+func (a *App) openExtensionsPanel() bool {
+	a.configActive = false
+	a.extPanelActive = true
+	a.extPanel.SetLoading()
+	_, _, w, h := a.extPanelRegion()
+	a.extPanel.Resize(w, h)
+	go func() {
+		entries, errs := fetchCatalog(context.Background(), userExtensionRoot())
+		a.catalogCh <- catalogResult{entries: entries, errs: errs}
+		a.screen.PostEvent(tcell.NewEventInterrupt(nil))
+	}()
+	return true
+}
+
+// setCatalog deposita el resultado de la consulta del catálogo: guarda las
+// entradas (lo último consultado), las traduce al tipo del view y las pasa al
+// panel. Sin entradas y con errores, el panel muestra "Sin conexión" con el
+// último error. Installed llega calculado por FetchCatalog (existe <id> bajo
+// userRoot); tras instalar, installCatalogEntries lo refresca.
+func (a *App) setCatalog(res catalogResult) {
+	a.catalog = res.entries
+	entries := make([]view.ExtensionEntry, len(res.entries))
+	for i, e := range res.entries {
+		entries[i] = view.ExtensionEntry{
+			ID:        e.ID,
+			Name:      e.Name,
+			Version:   e.Version,
+			Subdir:    e.Subdir,
+			Installed: e.Installed,
+		}
+	}
+	if len(entries) == 0 && len(res.errs) > 0 {
+		a.extPanel.SetError(res.errs[len(res.errs)-1].Error())
+		return
+	}
+	a.extPanel.SetEntries(entries)
+}
+
+// installCatalogEntries instala las extensiones del catálogo indicadas por id
+// (Enter del panel): busca cada entrada en el último catálogo consultado, la
+// instala con installExtension (clon real si no hay fake) y deja el resultado
+// en la barra: "N instaladas" o "N instaladas · M fallidas". Nunca crashea:
+// cada error se acumula al contador de fallidas. Después refresca el flag
+// Installed de las entradas instaladas y vuelve a depositar la lista en el
+// panel.
+func (a *App) installCatalogEntries(ids []string) {
+	root := userExtensionRoot()
+	var installed, failed int
+	for _, id := range ids {
+		idx := a.catalogIndex(id)
+		if idx < 0 {
+			failed++
+			continue
+		}
+		entry := a.catalog[idx]
+		if _, err := installExtension("https://github.com/"+ext.CatalogRepo, entry.Subdir, root, nil); err != nil {
+			a.statusBar.SetMessage("Error instalando " + entry.ID + ": " + err.Error())
+			failed++
+			continue
+		}
+		a.catalog[idx].Installed = true
+		installed++
+	}
+	switch {
+	case failed == 0:
+		a.statusBar.SetMessage(fmt.Sprintf("%d instaladas", installed))
+	default:
+		a.statusBar.SetMessage(fmt.Sprintf("%d instaladas · %d fallidas", installed, failed))
+	}
+	// Refresca el panel con los flags Installed nuevos.
+	entries := make([]view.ExtensionEntry, len(a.catalog))
+	for i, e := range a.catalog {
+		entries[i] = view.ExtensionEntry{
+			ID:        e.ID,
+			Name:      e.Name,
+			Version:   e.Version,
+			Subdir:    e.Subdir,
+			Installed: e.Installed,
+		}
+	}
+	a.extPanel.SetEntries(entries)
+	a.redraw()
+}
+
+// catalogIndex devuelve el índice de una entrada del último catálogo
+// consultado por id, o -1 si no está.
+func (a *App) catalogIndex(id string) int {
+	for i, e := range a.catalog {
+		if e.ID == id {
+			return i
+		}
+	}
+	return -1
 }
 
 // toggleConfig abre o cierra la ventana flotante de configuración. Abrir la

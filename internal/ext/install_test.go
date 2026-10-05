@@ -293,3 +293,102 @@ func TestInstallFromGitWithRealGit(t *testing.T) {
 		t.Errorf(".git real no debió copiarse: %v", err)
 	}
 }
+
+// TestInstallFromGitSubdirClonesThatFolder verifica que instalar desde una
+// subcarpeta de un monorepo copia SOLO esa carpeta: el manifest válido y su
+// auxiliar entran; la otra carpeta del repo y el .git (en la raíz del clon)
+// no.
+func TestInstallFromGitSubdirClonesThatFolder(t *testing.T) {
+	src := t.TempDir()
+	sub := filepath.Join(src, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatalf("MkdirAll sub: %v", err)
+	}
+	toyExt(t, sub, "tcode.subplug", "Sub Plug", "0.3.0")
+	if err := os.WriteFile(filepath.Join(sub, "extra.txt"), []byte("extra"), 0o644); err != nil {
+		t.Fatalf("WriteFile extra.txt: %v", err)
+	}
+	// El .git del repo vive en la raíz del clon, junto a otra extensión del
+	// monorepo: ninguna de las dos debe llegar a la instalación.
+	gitDir := filepath.Join(src, ".git")
+	if err := os.MkdirAll(gitDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll .git: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(gitDir, "HEAD"), []byte("ref: refs/heads/main"), 0o644); err != nil {
+		t.Fatalf("WriteFile .git/HEAD: %v", err)
+	}
+	other := filepath.Join(src, "otro")
+	if err := os.MkdirAll(other, 0o755); err != nil {
+		t.Fatalf("MkdirAll otro: %v", err)
+	}
+	toyExt(t, other, "tcode.otro", "Outro", "1.0.0")
+
+	userRoot := t.TempDir()
+	id, err := InstallFromGitSubdir("file:///monorepo", "sub", userRoot, cloneFake(src))
+	if err != nil {
+		t.Fatalf("InstallFromGitSubdir: %v", err)
+	}
+	if id != "tcode.subplug" {
+		t.Errorf("id = %q, esperaba tcode.subplug", id)
+	}
+
+	dest := filepath.Join(userRoot, id)
+	data, err := os.ReadFile(filepath.Join(dest, "extension.json"))
+	if err != nil {
+		t.Fatalf("extension.json instalado: %v", err)
+	}
+	if !strings.Contains(string(data), `"version":"0.3.0"`) {
+		t.Errorf("extension.json sin la versión instalada: %s", data)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "extra.txt")); err != nil {
+		t.Errorf("archivo auxiliar de la subcarpeta no copiado: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "otro")); !os.IsNotExist(err) {
+		t.Errorf("la otra carpeta del monorepo no debió copiarse: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, ".git")); !os.IsNotExist(err) {
+		t.Errorf(".git no debió copiarse: %v", err)
+	}
+}
+
+// TestInstallFromGitSubdirRejectsBrokenManifest verifica que un manifest
+// inválido en la subcarpeta aborta sin tocar el destino.
+func TestInstallFromGitSubdirRejectsBrokenManifest(t *testing.T) {
+	src := t.TempDir()
+	sub := filepath.Join(src, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatalf("MkdirAll sub: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "extension.json"), []byte(`{"id": "tcode.roto", "version": `), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	userRoot := t.TempDir()
+	id, err := InstallFromGitSubdir("file:///repo-roto", "sub", userRoot, cloneFake(src))
+	if err == nil {
+		t.Fatalf("InstallFromGitSubdir aceptó un manifest inválido (id %q)", id)
+	}
+	if !strings.Contains(err.Error(), "manifiesto inválido") {
+		t.Errorf("error sin contexto de manifest: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(userRoot, "tcode.roto")); !os.IsNotExist(statErr) {
+		t.Errorf("el destino no debió crearse: %v", statErr)
+	}
+}
+
+// TestInstallFromGitSubdirMissingFolder verifica el error claro cuando el clon
+// no trae la subcarpeta pedida.
+func TestInstallFromGitSubdirMissingFolder(t *testing.T) {
+	src := t.TempDir() // clon sin la carpeta "sub"
+	if err := os.WriteFile(filepath.Join(src, "extension.json"), []byte(`{"id":"tcode.raiz","name":"Raiz","version":"1.0.0"}`), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	_, err := InstallFromGitSubdir("file:///repo-sin-sub", "sub", t.TempDir(), cloneFake(src))
+	if err == nil {
+		t.Fatal("InstallFromGitSubdir aceptó un clon sin la subcarpeta")
+	}
+	if !strings.Contains(err.Error(), "el repositorio no contiene sub") {
+		t.Errorf("error poco claro: %v", err)
+	}
+}
