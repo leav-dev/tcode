@@ -2187,20 +2187,25 @@ func (a *App) switchTab(move func() *model.PieceTable) {
 }
 
 // configRegion devuelve la región de la ventana flotante de configuración:
-// 34x(ConfigMenuHeight) centrada en el área del editor (columna según el
-// panel, fila tras la de pestañas), recortada si la terminal es chica (nunca
-// más ancha que el editor ni más alta que su área). El alto lo decide la
-// ventana (marco + todas sus filas), no un número fijo: cada fila nueva la
-// agranda sola. Comparte la geometría entre toggleConfig (que solo usa el
-// tamaño para Resize) y redraw (que reencuadra la superficie con la posición).
+// centrada en el área del editor (columna según el panel, fila tras la de
+// pestañas), recortada si la terminal es chica (nunca más ancha que el editor
+// ni más alta que su área). El alto crece con las filas hasta el tope
+// (ConfigMenuMaxHeight: 8 filas visibles + marco); con más filas, el scroll
+// interno de la ventana navega. El ancho crece con el contenido (la fila más
+// ancha) desde la base actual (34) hasta el tope (ConfigMenuMaxWidth: 40).
+// Comparte la geometría entre toggleConfig (que solo usa el tamaño para
+// Resize) y redraw (que reencuadra la superficie con la posición).
 func (a *App) configRegion() (x, y, w, h int) {
 	width, height := a.screen.Size()
 	editorW := width - a.explorerColumn()
-	menuW := 34
+	// Ancho: el contenido (la fila más ancha) puede ensanchar la ventana desde
+	// la base hasta el tope, sin pasar del editor.
+	menuW := min(max(view.ConfigMenuContentWidth(), view.ConfigMenuBaseWidth), view.ConfigMenuMaxWidth)
 	if menuW > editorW {
 		menuW = editorW
 	}
-	menuH := view.ConfigMenuHeight()
+	// Alto: todas las filas hasta el tope; con más filas, el scroll interno.
+	menuH := min(view.ConfigMenuHeight(), view.ConfigMenuMaxHeight)
 	if menuH > editorHeight(height) {
 		menuH = editorHeight(height)
 	}

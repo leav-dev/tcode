@@ -88,11 +88,37 @@ func configItems() []configItem {
 	}
 }
 
+// Los topes de geometría de la ventana flotante. La base de ancho es el ancho
+// actual (34): la ventana arranca así y solo se ensancha si el contenido lo
+// exige. El ancho máximo (40) es el tope de ese crecimiento por contenido. El
+// alto máximo (10) son 8 filas visibles más el marco: con más filas, el scroll
+// interno (cursor/top) navega; con menos, la ventana mide lo que necesita. El
+// controlador recorta ambos topes al tamaño real del editor.
+const (
+	ConfigMenuBaseWidth = 34
+	ConfigMenuMaxWidth  = 40
+	ConfigMenuMaxHeight = 10
+)
+
 // ConfigMenuHeight es el alto que la ventana necesita para mostrar TODAS sus
 // filas: el marco de arriba y el de abajo más las filas. El controlador lo usa
-// para dimensionar la región flotante (configRegion): cada fila nueva la
-// agranda sola.
+// para dimensionar la región flotante (configRegion), recortado al alto máximo
+// (ConfigMenuMaxHeight): cada fila nueva la agranda hasta el tope, nunca más.
 func ConfigMenuHeight() int { return len(configItems()) + 2 }
+
+// ConfigMenuContentWidth es el ancho que la ventana necesita para su fila más
+// ancha: la etiqueta, un espacio de separación, el valor y el marco de los
+// lados. El controlador lo usa para el crecimiento por contenido: la ventana
+// se ensancha cuando una fila supera la base, hasta el ancho máximo.
+func ConfigMenuContentWidth() int {
+	w := 0
+	for _, it := range configItems() {
+		if n := displayWidth(it.label) + 1 + displayWidth(configValueText(it)); n > w {
+			w = n
+		}
+	}
+	return w + 2 // el marco de los lados
+}
 
 // ConfigMenu es la ventana flotante de configuración (Ctrl+P): una lista de
 // cuatro filas con cursor (la mecánica exacta del menú de pestañas —cursor/top
@@ -128,7 +154,8 @@ func (m *ConfigMenu) SetTheme(th Theme) { m.theme = th }
 // count es la cantidad de filas fijas de la ventana.
 func (m *ConfigMenu) count() int { return len(configItems()) }
 
-// clamp mantiene cursor y top dentro del rango de filas (y del alto).
+// clamp mantiene cursor y top dentro del rango de filas (y de las filas
+// visibles).
 func (m *ConfigMenu) clamp() {
 	n := m.count()
 	if n == 0 {
@@ -136,25 +163,36 @@ func (m *ConfigMenu) clamp() {
 		return
 	}
 	m.cursor = min(max(m.cursor, 0), n-1)
-	maxTop := n - m.height
+	maxTop := n - m.visibleRows()
 	if maxTop < 0 {
 		maxTop = 0
 	}
 	m.top = min(max(m.top, 0), maxTop)
 }
 
+// visibleRows es cuántas filas del interior muestra la ventana (el alto menos
+// el marco de arriba y abajo), mínimo 0. Es el alto real del scroll: con más
+// filas que estas, cursor y top navegan (como ExtManager.visibleRows).
+func (m *ConfigMenu) visibleRows() int {
+	if rows := m.height - 2; rows > 0 {
+		return rows
+	}
+	return 0
+}
+
 // ensureCursorVisible corre top lo mínimo para que la fila del cursor quede
-// dentro del alto de la ventana, como el explorador con su lista.
+// dentro de las filas visibles, como el explorador con su lista.
 func (m *ConfigMenu) ensureCursorVisible() {
 	n := m.count()
-	if n == 0 || m.height <= 0 {
+	rows := m.visibleRows()
+	if n == 0 || rows <= 0 {
 		return
 	}
 	if m.cursor < m.top {
 		m.top = m.cursor
 	}
-	if m.cursor >= m.top+m.height {
-		m.top = m.cursor - m.height + 1
+	if m.cursor >= m.top+rows {
+		m.top = m.cursor - rows + 1
 	}
 	m.clamp()
 }
@@ -188,13 +226,18 @@ func (m *ConfigMenu) moveCursor(delta int) bool {
 	return true
 }
 
-// page es el salto de página: lo que cabe en el alto de la ventana, mínimo 1.
+// page es el salto de página: lo que cabe en las filas visibles, mínimo 1.
 func (m *ConfigMenu) page() int {
-	if m.height > 1 {
-		return m.height
+	if rows := m.visibleRows(); rows > 1 {
+		return rows
 	}
 	return 1
 }
+
+// Top expone el scroll de la ventana para los tests del reencuadre: con más
+// filas que el alto, top dice cuál es la primera visible (patrón de
+// ExtManager.topFor).
+func (m *ConfigMenu) Top() int { return m.top }
 
 // Resize actualiza las dimensiones de la ventana y reencuadra el scroll, como
 // el resize del explorador: la fila del cursor queda visible y el top dentro

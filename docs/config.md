@@ -11,6 +11,8 @@ tcode maneja sus **configuraciones básicas** desde una **ventana flotante**
 │ Tab size           4   │
 │ Word wrap        on    │
 │ Panel width       24   │
+│ Theme          Custom  │
+│ Extensiones      abrir │
 └────────────────────────┘
 ```
 
@@ -19,6 +21,11 @@ tcode maneja sus **configuraciones básicas** desde una **ventana flotante**
   números se mueven con paso y límites).
 - `Enter` alterna los booleanos; en los números no hace nada.
 - `Escape` (o cualquier otra tecla) cierra la ventana.
+
+La ventana tiene **topes de geometría**: muestra hasta **8 filas** y, si hay
+más, scrollea con `Up`/`Down` (y `PageUp`/`PageDown`) en vez de crecer. Su
+ancho arranca en **34** y puede ensancharse con el contenido (una fila más
+ancha) hasta un **máximo de 40**; nunca pasa del tamaño del editor.
 
 ## El archivo
 
@@ -54,5 +61,5 @@ un valor desconocido se ignora al cargar (queda String vacío → Custom/default
   un directorio temporal (patrón de `themeFilePath`).
 
 En el código: `view/settings.go` (estado de la config), `view/config_menu.go`
-(el overlay), `internal/controller/app.go` (`loadConfig`/`saveConfig`/
-`toggleConfig`).
+(el overlay y sus topes de geometría), `internal/controller/app.go`
+(`loadConfig`/`saveConfig`/`toggleConfig`/`configRegion`).

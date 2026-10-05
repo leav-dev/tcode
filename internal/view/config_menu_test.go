@@ -424,3 +424,106 @@ func TestConfigMenuHasTheExtensionsRow(t *testing.T) {
 		t.Fatalf("la última fila = %q, debe contener la etiqueta %q", line, "Extensiones")
 	}
 }
+
+// TestConfigMenuExposesItsGeometry: la ventana expone los topes de geometría
+// que el controlador usa para dimensionarla: la base de ancho (34, el ancho
+// actual), el ancho máximo (40, el tope del crecimiento por contenido) y el
+// alto máximo (10, 8 filas visibles + marco). ConfigMenuContentWidth es el
+// ancho de la fila más ancha + el marco: con las filas actuales es 19 (la
+// fila "Extensiones"/"abrir" mide 11+1+5 = 17, + 2 de marco), menor a la
+// base, así que la ventana arranca en 34 y solo crece si una fila futura lo
+// exige.
+func TestConfigMenuExposesItsGeometry(t *testing.T) {
+	resetConfigDefaults(t)
+
+	if got := ConfigMenuBaseWidth; got != 34 {
+		t.Fatalf("ConfigMenuBaseWidth = %d, se esperaba 34 (el ancho actual)", got)
+	}
+	if got := ConfigMenuMaxWidth; got != 40 {
+		t.Fatalf("ConfigMenuMaxWidth = %d, se esperaba 40", got)
+	}
+	if got := ConfigMenuMaxHeight; got != 10 {
+		t.Fatalf("ConfigMenuMaxHeight = %d, se esperaba 10 (8 filas visibles + marco)", got)
+	}
+
+	// La fila más ancha hoy es "Extensiones" + "abrir" (11+1+5 = 17):
+	// 17 + 2 de marco = 19.
+	if got := ConfigMenuContentWidth(); got != 19 {
+		t.Fatalf("ConfigMenuContentWidth() = %d, se esperaba 19 (fila más ancha + marco)", got)
+	}
+	// Con las filas actuales el contenido no llega a la base: la ventana
+	// arranca en 34, como hoy.
+	if ConfigMenuContentWidth() >= ConfigMenuBaseWidth {
+		t.Fatalf("el contenido (%d) no puede superar la base (%d) con las filas actuales: la ventana no crecería nunca",
+			ConfigMenuContentWidth(), ConfigMenuBaseWidth)
+	}
+}
+
+// TestConfigMenuScrollsWithinTheHeight: con más filas que el alto visible, el
+// scroll interno reencuadra top para que la fila del cursor quede visible
+// (End con alto 4 deja top en 3, Home lo vuelve a 0). Con menos filas que el
+// alto máximo no hay scroll: top queda en 0 aunque el cursor llegue al final.
+func TestConfigMenuScrollsWithinTheHeight(t *testing.T) {
+	resetConfigDefaults(t)
+
+	// Alto 4 = 2 filas visibles, con 5 filas: el scroll entra.
+	m := NewConfigMenu()
+	m.Resize(34, 4)
+	if got := m.Top(); got != 0 {
+		t.Fatalf("top inicial = %d, se esperaba 0", got)
+	}
+	// End: el cursor salta a la última fila y top la deja visible.
+	m.HandleEvent(tcell.NewEventKey(tcell.KeyEnd, 0, tcell.ModNone))
+	if got := m.Top(); got != 3 {
+		t.Fatalf("top tras End = %d, se esperaba 3 (la última fila visible con 2 filas de alto)", got)
+	}
+	// Home: vuelve al principio.
+	m.HandleEvent(tcell.NewEventKey(tcell.KeyHome, 0, tcell.ModNone))
+	if got := m.Top(); got != 0 {
+		t.Fatalf("top tras Home = %d, se esperaba 0", got)
+	}
+	// Down seguido: el cursor llega al final y top lo sigue.
+	for range 4 {
+		m.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
+	}
+	if got := m.Top(); got != 3 {
+		t.Fatalf("top tras los Down = %d, se esperaba 3", got)
+	}
+
+	// Alto 10 (el máximo) con 5 filas: no hay scroll, top siempre en 0.
+	m.Resize(34, ConfigMenuMaxHeight)
+	m.HandleEvent(tcell.NewEventKey(tcell.KeyEnd, 0, tcell.ModNone))
+	if got := m.Top(); got != 0 {
+		t.Fatalf("top con alto máximo y 5 filas = %d, se esperaba 0 (no hay scroll)", got)
+	}
+}
+
+// TestConfigMenuDrawsScrolledRows: con el scroll corrido, el dibuja muestra
+// las filas visibles desde top (no desde la 0) y la del cursor con la barra
+// de selección en la última fila interior.
+func TestConfigMenuDrawsScrolledRows(t *testing.T) {
+	resetConfigDefaults(t)
+
+	m := NewConfigMenu()
+	m.Resize(34, 4) // 2 filas visibles
+	// Cursor a la última fila: top queda en 3, visibles las filas 3 y 4.
+	m.HandleEvent(tcell.NewEventKey(tcell.KeyEnd, 0, tcell.ModNone))
+
+	s := newTestScreen(t, 34, 4)
+	drawConfigMenu(m, s)
+
+	lines := screenLines(s)
+	// Primera fila interior: la fila 3 (Theme), no la 0 (Tab size).
+	if !strings.Contains(lines[1], "Theme") {
+		t.Fatalf("primera fila visible = %q, debe ser la fila 3 (Theme) con top=3", lines[1])
+	}
+	// Última fila interior: la fila 4 (Extensiones), con la barra de selección.
+	if !strings.Contains(lines[2], "Extensiones") {
+		t.Fatalf("última fila visible = %q, debe ser la fila 4 (Extensiones)", lines[2])
+	}
+	for x := 1; x < 33; x++ {
+		if bg := cellBg(s, x, 2); bg != tcell.PaletteColor(24) {
+			t.Fatalf("fondo de la fila del cursor en x=%d = %v, se esperaba %v (TreeCursor)", x, bg, tcell.PaletteColor(24))
+		}
+	}
+}

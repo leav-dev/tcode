@@ -267,3 +267,47 @@ func TestConfigWithoutThemeKeepsCustom(t *testing.T) {
 		t.Fatal("sin Theme en el config, el tema aplicado debe ser el Custom de theme.json")
 	}
 }
+
+// TestConfigRegionBoundsTheFloatingWindow: configRegion dimensiona la ventana
+// flotante con los topes de geometría. Con un editor sano (80x25, panel
+// oculto) la ventana queda en la base de ancho (el contenido no llega a 34)
+// y con todas sus filas (5 + marco = 7, menos que el tope de 10), centrada
+// sobre el área del editor. Con un editor angosto o bajo, la región se recorta
+// al editor: nunca más ancha ni más alta que su área.
+func TestConfigRegionBoundsTheFloatingWindow(t *testing.T) {
+	resetConfigVars(t)
+
+	// Editor sano: ancho base y todas las filas, centrada.
+	app, _ := newTestApp(t, "uno")
+	resizeApp(app, 80, 25)
+	x, y, w, h := app.configRegion()
+	if w != view.ConfigMenuBaseWidth {
+		t.Fatalf("ancho = %d, se esperaba la base %d (el contenido no la supera)", w, view.ConfigMenuBaseWidth)
+	}
+	if h != view.ConfigMenuHeight() {
+		t.Fatalf("alto = %d, se esperaba %d (todas las filas, menos que el tope)", h, view.ConfigMenuHeight())
+	}
+	// Centrada: x reparte el sobrante del editor, y parte de la fila de pestañas.
+	editorW := 80 // panel oculto: el editor ocupa todo el ancho
+	editorH := 25 - statusHeight - tabBarHeight
+	if wantX := (editorW - w) / 2; x != wantX {
+		t.Fatalf("x = %d, se esperaba %d (centrada)", x, wantX)
+	}
+	if wantY := tabBarHeight + (editorH-h)/2; y != wantY {
+		t.Fatalf("y = %d, se esperaba %d (centrada tras las pestañas)", y, wantY)
+	}
+
+	// Editor angosto (30 de ancho): la ventana se recorta al editor.
+	resizeApp(app, 30, 25)
+	_, _, w, _ = app.configRegion()
+	if w != 30 {
+		t.Fatalf("ancho con editor de 30 = %d, se esperaba 30 (recortado al editor)", w)
+	}
+
+	// Editor bajo (8 de alto): la ventana se recorta al área del editor.
+	resizeApp(app, 80, 8)
+	_, _, _, h = app.configRegion()
+	if want := 8 - statusHeight - tabBarHeight; h != want {
+		t.Fatalf("alto con editor de 8 filas = %d, se esperaba %d (recortado al área)", h, want)
+	}
+}
