@@ -11,21 +11,21 @@ distribuyen: se compilan en la máquina destino (el `.gitignore` ya excluye
 `*.exe` y `/bin/`).
 
 ## Tasks
-- [ ] `scripts/install.sh` (bash, macOS+Linux): compila a `~/.tcode/bin/tcode`;
+- [x] `scripts/install.sh` (bash, macOS+Linux): compila a `~/.tcode/bin/tcode`;
   agrega el bloque marcado `# >>> tcode >>>` con `export PATH="$HOME/.tcode/bin:$PATH"`
   a `~/.zshrc` y `~/.bashrc` (creándolos si faltan, idempotente); `--uninstall`
   borra `bin/` y el bloque; mensaje de terminal nueva para el PATH <!-- id: 0 -->
-- [ ] `scripts/install.ps1` (Windows): compila a `~\.tcode\bin\tcode.exe`;
+- [x] `scripts/install.ps1` (Windows): compila a `~\.tcode\bin\tcode.exe`;
   agrega el bin al PATH **de usuario** vía `[Environment]::SetEnvironmentVariable('Path',...,'User')`
   (dedupe case-insensitive, sin pisar el PATH system); `-Uninstall`; parámetros
   `-InstallDir` y `-NoPath` (para pruebas y uso avanzado) <!-- id: 1 -->
-- [ ] `docs/install.md`: prerequisitos, comandos por SO, qué hace (compilación
+- [x] `docs/install.md`: prerequisitos, comandos por SO, qué hace (compilación
   local, dónde cae, PATH de usuario), limitaciones (PATH en terminales NUEVAS;
   no instalar en system), desinstalar <!-- id: 2 -->
-- [ ] Verificación funcional: correr `install.sh` con `HOME` temporal (crea
+- [x] Verificación funcional: correr `install.sh` con `HOME` temporal (crea
   binario y bloque en los rcs) y `install.ps1` con `-InstallDir` temporal y
   `-NoPath` (crea el exe, no toca el PATH real); `sh -n`/sintaxis <!-- id: 3 -->
-- [ ] Commit de unidad <!-- id: 4 -->
+- [x] Commit de unidad: `54b622a` <!-- id: 4 -->
 
 ## Design decisions
 - **Compilación local, no binarios distribuidos:** no hay releases/CI; el
