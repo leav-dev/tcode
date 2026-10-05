@@ -16,6 +16,14 @@ Este archivo registra las decisiones arquitectónicas clave, cambios estructural
 - **Commits:** Conventional Commits en inglés. Una unidad de trabajo por commit, con tests y docs junto al código.
 - **Versionado (convención del autor, `agents.md` sección 4):** el agente **commitea solo** al terminar un cambio solicitado y **no hace push inmediato**; el push ocurre únicamente cuando el usuario lo pide. Por eso el agente ya no pide autorización para commitear.
 
+## 2.5 Próxima feature (anunciada por el usuario)
+- **Configuraciones básicas en una ventana flotante (overlay).** Se manejará en
+  una rama nueva dedicada (sugerida: `feat/floating-config`; el nombre lo arma
+  el usuario al arrancar). Espera en `main` recién pusheado (`fa3fa8b`).
+  Pendiente de alcance: qué configuraciones entran, dónde vive el overlay
+  (patrón del menú de pestañas: una vista overlay compuesta sobre el editor) y
+  cómo se persiste (`~/.tcode/config.json` …).
+
 ## 3. Registro de Cambios (Changelog de Memoria)
 - *2024-05-23:* Inicialización del proyecto, `go.mod` y estructura de directorios MVC. Implementación del esqueleto `tcell` con soporte de mouse. Definición de `constitution.md`.
 - *2024-05-23:* Creación de `agents.md` para estandarizar la interacción con agentes externos y `memory.md` para el registro de estado.
