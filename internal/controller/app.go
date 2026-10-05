@@ -40,6 +40,14 @@ type App struct {
 	statusBar *view.StatusBar
 	tabBar    *view.TabBar
 
+	// toast es la notificación transitoria de la esquina superior derecha
+	// (confirmaciones y errores de guardado, y tcode.notify de extensiones):
+	// vive sobre pestañas y editor y se borra sola a los segundos.
+	toast *view.Toast
+	// toastSeq es el número del toast vigente: el timer de un toast viejo
+	// trae un seq menor y el manejador lo ignora.
+	toastSeq int
+
 	// editorSurf es la superficie recortada con la que se componen los dos
 	// panes del redibujo: el explorador y el editor activo. Se reusa entre
 	// redibujos: el controlador la reencuadra con SetRegion (primero para el
@@ -195,6 +203,7 @@ func NewAppWithScreen(s tcell.Screen, path string) (*App, error) {
 		forceSave:  make(map[*model.PieceTable]bool),
 		statusBar:  view.NewStatusBar(),
 		tabBar:     view.NewTabBar(),
+		toast:      view.NewToast(),
 		explorer:   view.NewFileBrowser(),
 		menu:       view.NewTabMenu(),
 		configMenu: view.NewConfigMenu(),
@@ -424,6 +433,7 @@ func (a *App) applyTheme() {
 	a.theme = a.themeFor()
 	a.statusBar.SetTheme(a.theme)
 	a.tabBar.SetTheme(a.theme)
+	a.toast.SetTheme(a.theme)
 	a.explorer.SetTheme(a.theme)
 	a.menu.SetTheme(a.theme)
 	a.configMenu.SetTheme(a.theme)
@@ -586,6 +596,16 @@ type extSnapshotEvent struct {
 	// Err es el último error tolerado de la lectura (proveedor caído, lista con
 	// problemas). No es fatal: el editor sigue con lo que ya está instalado.
 	Err error
+}
+
+// toastEvent es el sobre con el que el timer de un toast avisa al bucle de
+// eventos que la notificación expiró. Viaja como tcell.EventInterrupt, igual
+// que extSnapshotEvent: screen.PostEvent es la única puerta thread-safe hacia
+// el loop. Seq es el número del toast que lo produjo: el manejador solo limpia
+// si coincide con el toast vigente —el timer de un toast viejo no puede borrar
+// al nuevo—.
+type toastEvent struct {
+	Seq int
 }
 
 // prefetchExtensions dispara la lectura de los proveedores en segundo plano y
@@ -860,6 +880,22 @@ func (a *App) InsertAtCursor(text string) error {
 
 // StatusMessage muestra msg en la barra de estado (ScriptAPI).
 func (a *App) StatusMessage(msg string) { a.statusBar.SetMessage(msg) }
+
+// Notify muestra una notificación del toast desde una extensión (ScriptAPI):
+// mismo camino que las confirmaciones de guardado —mismo timer, mismo dibujo—.
+// kind es "success" (default) o "error"; un kind desconocido es un error que
+// la extensión ve.
+func (a *App) Notify(msg string, kind string) error {
+	switch kind {
+	case "", "success":
+		a.showToast(msg, view.ToastSuccess)
+	case "error":
+		a.showToast(msg, view.ToastError)
+	default:
+		return fmt.Errorf("tcode.notify: kind %q desconocido (\"success\" | \"error\")", kind)
+	}
+	return nil
+}
 
 // LineCount devuelve la cantidad de líneas del buffer activo (ScriptAPI);
 // sin buffer activo, ok=false, como ActiveBuffer.
@@ -1352,6 +1388,14 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 			a.redraw()
 		}
 
+		if p, ok := ev.Data().(toastEvent); ok {
+			// Expiración del toast: solo limpia si el seq es el del toast vigente.
+			if p.Seq == a.toastSeq {
+				a.toast.Clear()
+				a.redraw()
+			}
+		}
+
 	case *tcell.EventMouse:
 		// Con el menú abierto el mouse es del menú como el teclado, con la
 		// ventana de configuración abierta es de la ventana, y con un pedido
@@ -1667,15 +1711,15 @@ func (a *App) saveAs(target *model.PieceTable, path string) {
 	}
 
 	if err := target.SaveAs(path); err != nil {
-		a.statusBar.SetMessage("Error al guardar como: " + err.Error())
+		a.showToast("Error al guardar como: "+err.Error(), view.ToastError)
 	} else {
 		a.confirmQuit = false
 		a.clearForceSave()
 		if a.dedupSaveAsConsolidates(other) {
 			// La ruta ya estaba abierta en otra pestaña: se consolidó en una sola.
-			a.statusBar.SetMessage("Guardado en " + filepath.Base(path) + " — ruta ya abierta: una sola pestaña")
+			a.showToast("Guardado en "+filepath.Base(path)+" — ruta ya abierta: una sola pestaña", view.ToastSuccess)
 		} else {
-			a.statusBar.SetMessage("Guardado en " + filepath.Base(path))
+			a.showToast("Guardado en "+filepath.Base(path), view.ToastSuccess)
 		}
 		a.emitEvent(ext.EventDidSaveBuffer)
 	}
@@ -1684,7 +1728,22 @@ func (a *App) saveAs(target *model.PieceTable, path string) {
 	a.redraw()
 }
 
-// save escribe el buffer activo y refleja el resultado en la barra de estado.
+// showToast muestra una notificación en la esquina superior derecha y arma
+// el timer que la borra sola: el toast vive view.ToastDuration y después el
+// evento toastEvent (con el seq de ESTE toast) vuelve por PostEvent al bucle,
+// que limpia y redibuja. Mostrar otro toast antes de que expire el anterior
+// renueva el seq: el timer viejo ya no encuentra el suyo y no borra al nuevo.
+func (a *App) showToast(msg string, kind view.ToastKind) {
+	a.toastSeq++
+	seq := a.toastSeq
+	a.toast.Show(msg, kind)
+	a.redraw()
+	time.AfterFunc(view.ToastDuration, func() {
+		a.screen.PostEvent(tcell.NewEventInterrupt(toastEvent{Seq: seq}))
+	})
+}
+
+// save escribe el buffer activo y refleja el resultado en un toast.
 //
 // Si el archivo cambió en disco se avisa en lugar de pisarlo; un segundo Ctrl+S
 // seguido fuerza la escritura. La decisión de perder esos cambios queda así en
@@ -1702,14 +1761,14 @@ func (a *App) save() {
 	switch {
 	case errors.Is(err, model.ErrFileChangedExternally):
 		a.saveAsFor(buf)
-		a.statusBar.SetMessage("El archivo cambió en disco: Ctrl+S de nuevo pisa esos cambios")
+		a.showToast("El archivo cambió en disco: Ctrl+S de nuevo pisa esos cambios", view.ToastError)
 
 	case err != nil:
-		a.statusBar.SetMessage("Error al guardar: " + err.Error())
+		a.showToast("Error al guardar: "+err.Error(), view.ToastError)
 
 	default:
 		a.confirmQuit = false
-		a.statusBar.SetMessage("Guardado")
+		a.showToast("Guardado", view.ToastSuccess)
 		a.emitEvent(ext.EventDidSaveBuffer)
 	}
 
@@ -1797,6 +1856,9 @@ func (a *App) redraw() {
 	}
 
 	a.statusBar.Draw(a.screen, height-statusHeight, width)
+	// El toast es el overlay último: se compone después de pestañas, editor y
+	// barra, con su fondo propio sobre lo que haya debajo.
+	a.toast.Draw(a.screen, width)
 	a.screen.Show()
 }
 

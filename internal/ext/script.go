@@ -23,6 +23,10 @@ type ScriptAPI interface {
 	InsertAtCursor(text string) error
 	// StatusMessage muestra un mensaje en la barra de estado.
 	StatusMessage(msg string)
+	// Notify muestra una notificación en la esquina superior derecha (toast,
+	// con desaparición automática): kind es "success" (default) o "error";
+	// un kind desconocido es un error.
+	Notify(msg string, kind string) error
 	// LineCount devuelve el número de líneas del buffer activo; ok es false
 	// cuando no hay buffer abierto.
 	LineCount() (n int, ok bool)
@@ -131,6 +135,23 @@ func NewScriptHost(code string, api ScriptAPI, source string) (*ScriptHost, erro
 	// tcode.message(msg): texto en la barra de estado.
 	L.SetField(tcode, "message", L.NewFunction(func(L *lua.LState) int {
 		api.StatusMessage(L.CheckString(1))
+		return 0
+	}))
+	// tcode.notify(msg, kind): notificación en la esquina superior derecha, con
+	// desaparición automática —la misma que muestra el editor al guardar. kind
+	// es "success" (default) o "error"; un kind desconocido es un error de Lua.
+	L.SetField(tcode, "notify", L.NewFunction(func(L *lua.LState) int {
+		msg := L.CheckString(1)
+		kind := ""
+		if v := L.Get(2); v.Type() != lua.LTNil {
+			if v.Type() != lua.LTString {
+				L.RaiseError("tcode.notify: el kind debe ser un string (\"success\" | \"error\")")
+			}
+			kind = string(v.(lua.LString))
+		}
+		if err := api.Notify(msg, kind); err != nil {
+			L.RaiseError("%v", err)
+		}
 		return 0
 	}))
 	// tcode.error(msg): fallo declarado del propio script; Call lo devuelve
