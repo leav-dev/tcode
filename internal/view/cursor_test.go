@@ -1,6 +1,7 @@
 package view
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
@@ -159,15 +160,16 @@ func TestHomeAndEndMoveWithinTheLine(t *testing.T) {
 func TestViewportFollowsCursorDown(t *testing.T) {
 	v := newTestView(t, "1\n2\n3\n4\n5\n6\n7\n8", 20, 3)
 
-	// Baja hasta la línea 4: debe entrar en pantalla con el mínimo desplazamiento.
+	// Baja hasta la línea 4: con el centrado el top la deja en el medio del alto 3
+	// (4 - 3/2 = 3), no con el mínimo desplazamiento.
 	for i := 0; i < 4; i++ {
 		v.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
 	}
 	if v.cursor.Line != 4 {
 		t.Fatalf("cursor.Line = %d, se esperaba 4", v.cursor.Line)
 	}
-	if v.viewport.TopLine != 2 {
-		t.Fatalf("TopLine = %d, se esperaba 2 para que la línea 4 sea visible", v.viewport.TopLine)
+	if v.viewport.TopLine != 3 {
+		t.Fatalf("TopLine = %d, se esperaba 3: la línea 4 queda centrada en el alto 3", v.viewport.TopLine)
 	}
 }
 
@@ -185,8 +187,116 @@ func TestViewportFollowsCursorUp(t *testing.T) {
 	if v.cursor.Line != 2 {
 		t.Fatalf("cursor.Line = %d, se esperaba 2", v.cursor.Line)
 	}
-	if v.viewport.TopLine != 2 {
-		t.Fatalf("TopLine = %d, se esperaba 2: el viewport sube junto al cursor", v.viewport.TopLine)
+	if v.viewport.TopLine != 1 {
+		t.Fatalf("TopLine = %d, se esperaba 1: el viewport centra la línea 2 (2 - 3/2)", v.viewport.TopLine)
+	}
+}
+
+// TestCursorScrollCentersTheCursor: el scroll vertical ya no es mínimo; la línea
+// del cursor tiende al CENTRO del viewport (top = línea - alto/2) cuando hay
+// contenido arriba y abajo, y en los bordes el clamp la deja pegada (primera
+// línea → top 0; última → top = LineCount - Height).
+func TestCursorScrollCentersTheCursor(t *testing.T) {
+	v := newTestView(t, "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20", 20, 6)
+
+	// Ctrl+End baja a la última línea (19) y 9 flechas arriba dejan el cursor
+	// en la línea 10: el top debe centrarla (10 - 6/2 = 7).
+	v.HandleEvent(tcell.NewEventKey(tcell.KeyEnd, 0, tcell.ModCtrl))
+	for i := 0; i < 9; i++ {
+		v.HandleEvent(tcell.NewEventKey(tcell.KeyUp, 0, tcell.ModNone))
+	}
+	if v.cursor.Line != 10 {
+		t.Fatalf("cursor.Line = %d, se esperaba 10", v.cursor.Line)
+	}
+	if v.viewport.TopLine != 7 {
+		t.Fatalf("TopLine = %d, se esperaba 7 (10 - 6/2): la línea del cursor queda centrada", v.viewport.TopLine)
+	}
+
+	// Primera línea → borde superior.
+	v.HandleEvent(tcell.NewEventKey(tcell.KeyHome, 0, tcell.ModCtrl))
+	if v.viewport.TopLine != 0 {
+		t.Fatalf("TopLine = %d, se esperaba 0 con el cursor en la primera línea", v.viewport.TopLine)
+	}
+
+	// Última línea → borde inferior (LineCount - Height).
+	v.HandleEvent(tcell.NewEventKey(tcell.KeyEnd, 0, tcell.ModCtrl))
+	if v.viewport.TopLine != 14 {
+		t.Fatalf("TopLine = %d, se esperaba 14 (20 - 6) con el cursor en la última línea", v.viewport.TopLine)
+	}
+}
+
+// TestCursorScrollClampsToDocumentBounds aísla el clamp del centrado: en un
+// documento grande el top centra la línea del cursor en el medio y queda
+// pegado a los límites exactos (primera línea → 0, última → LineCount - Height).
+func TestCursorScrollClampsToDocumentBounds(t *testing.T) {
+	v := newTestView(t, "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20", 20, 6)
+
+	for _, tc := range []struct {
+		line, top int
+	}{
+		{0, 0},   // borde superior
+		{10, 7},  // centro: 10 - 6/2
+		{19, 14}, // borde inferior: 20 - 6
+	} {
+		v.cursor.Line = tc.line
+		v.cursor.ByteCol = 0
+		v.cursor.desiredCol = 0
+		v.ClampCursor()
+		if v.viewport.TopLine != tc.top {
+			t.Fatalf("cursor en la línea %d: TopLine = %d, se esperaba %d",
+				tc.line, v.viewport.TopLine, tc.top)
+		}
+	}
+}
+
+// TestCursorScrollKeepsTopZeroWhenDocumentIsShort: un documento más corto que la
+// pantalla nunca se desplaza: el cursor se mueve pero el top sigue en 0.
+func TestCursorScrollKeepsTopZeroWhenDocumentIsShort(t *testing.T) {
+	v := newTestView(t, "1\n2\n3", 20, 6)
+
+	v.HandleEvent(tcell.NewEventKey(tcell.KeyEnd, 0, tcell.ModCtrl))
+	if v.cursor.Line != 2 {
+		t.Fatalf("cursor.Line = %d, se esperaba 2", v.cursor.Line)
+	}
+	if v.viewport.TopLine != 0 {
+		t.Fatalf("TopLine = %d, se esperaba 0: el documento cabe entero en la pantalla", v.viewport.TopLine)
+	}
+
+	v.HandleEvent(tcell.NewEventKey(tcell.KeyHome, 0, tcell.ModCtrl))
+	if v.viewport.TopLine != 0 {
+		t.Fatalf("TopLine = %d, se esperaba 0 con el cursor arriba", v.viewport.TopLine)
+	}
+}
+
+// TestCursorScrollWrapSafety: con el wrap activo, una línea larga ocupa varias
+// filas visuales y el centrado (por líneas lógicas) puede dejar la fila del
+// cursor fuera del alto; la red de seguridad por filas visuales debe
+// recuperarla: tras mover el cursor, su fila visual siempre cae en [0, Height).
+func TestCursorScrollWrapSafety(t *testing.T) {
+	oldWrap := wordWrapEnabled
+	wordWrapEnabled = true
+	defer func() { wordWrapEnabled = oldWrap }()
+
+	// 1 línea larga (envuelta en varias filas visuales) + 20 líneas cortas.
+	content := strings.Repeat("B", 40) + "\n" +
+		"l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10\n" +
+		"l11\nl12\nl13\nl14\nl15\nl16\nl17\nl18\nl19\nl20"
+	v := newTestView(t, content, 6, 6)
+
+	inView := func() int {
+		cr, _ := v.cursorVisual()
+		return cr - v.visualRowOfLine(v.viewport.TopLine)
+	}
+
+	for _, line := range []int{1, 5, 15, 20} {
+		v.cursor.Line = line
+		v.cursor.ByteCol = 0
+		v.cursor.desiredCol = 0
+		v.ClampCursor()
+		if row := inView(); row < 0 || row >= v.viewport.Height {
+			t.Fatalf("cursor en la línea %d quedó en la fila visual %d, fuera de [0,%d) (top %d)",
+				line, row, v.viewport.Height, v.viewport.TopLine)
+		}
 	}
 }
 

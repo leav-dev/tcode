@@ -863,13 +863,34 @@ func (v *EditorView) handleMouse(ev *tcell.EventMouse) bool {
 
 // --- viewport ---
 
-// ensureCursorVisible desplaza el viewport lo mínimo necesario para que el cursor
-// quede dentro de la pantalla.
+// ensureCursorVisible desplaza el viewport para que el cursor quede dentro de la
+// pantalla. Verticalmente el scroll es CENTRADO (la línea del cursor tiende al
+// medio del viewport), con una red de seguridad por filas visuales para no
+// perder el cursor cuando el wrap desajusta las filas.
 func (v *EditorView) ensureCursorVisible() {
-	// Vertical: en filas visuales (una línea envuelta ocupa varias). El scroll
-	// queda por LÍNEAS lógicas (modelo nano v1): se mueve TopLine de a líneas
-	// hasta cubrir la fila visual del cursor.
 	cr, ccol := v.cursorVisual()
+
+	// Vertical: centrado. La línea del cursor tiende al centro del viewport,
+	// SOLO si el documento tiene suficiente contenido arriba y abajo; si no, el
+	// clamp la deja pegada al borde (1ª línea → top 0; última → top máximo;
+	// documento más corto que la pantalla → top 0).
+	h := v.viewport.Height
+	if h > 0 && v.lineCount() > h {
+		target := v.cursor.Line - h/2
+		if target < 0 {
+			target = 0
+		}
+		if maxTop := v.lineCount() - h; target > maxTop {
+			target = maxTop
+		}
+		v.viewport.TopLine = target
+	}
+
+	// Red de seguridad por FILAS visuales (wrap): el centrado trabaja por líneas
+	// lógicas y una línea envuelta ocupa varias filas, así que la fila del
+	// cursor podría quedar fuera del alto. Si pasa, se corre el desplazamiento
+	// mínimo viejo SOLO en esa dirección, moviendo TopLine de a líneas lógicas
+	// (modelo nano v1) hasta cubrir la fila visual del cursor; nunca se pierde.
 	if v.viewport.TopLine > v.cursor.Line {
 		v.viewport.TopLine = v.cursor.Line
 	}
@@ -883,6 +904,7 @@ func (v *EditorView) ensureCursorVisible() {
 			v.viewport.TopLine = v.cursor.Line
 		}
 	}
+
 	v.clamp()
 
 	// Horizontal, en la columna visible del cursor (dentro de su fila visual).

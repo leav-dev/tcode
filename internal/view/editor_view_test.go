@@ -161,7 +161,7 @@ func TestScrollDownClampsAtDocumentEnd(t *testing.T) {
 }
 
 // TestPageDownMovesCursorByViewportHeight: PgDn mueve el cursor y el viewport lo
-// sigue con el mínimo desplazamiento necesario.
+// sigue CENTRÁNDOLO: la línea 3 queda en el medio del alto 3 (3 - 3/2 = 2).
 func TestPageDownMovesCursorByViewportHeight(t *testing.T) {
 	v := newTestView(t, "1\n2\n3\n4\n5\n6\n7\n8\n9\n10", 20, 3)
 
@@ -169,8 +169,8 @@ func TestPageDownMovesCursorByViewportHeight(t *testing.T) {
 	if v.cursor.Line != 3 {
 		t.Fatalf("cursor.Line = %d, se esperaba 3 tras PgDn", v.cursor.Line)
 	}
-	if v.viewport.TopLine != 1 {
-		t.Fatalf("TopLine = %d, se esperaba 1: el viewport sigue al cursor", v.viewport.TopLine)
+	if v.viewport.TopLine != 2 {
+		t.Fatalf("TopLine = %d, se esperaba 2: la línea 3 queda centrada tras PgDn", v.viewport.TopLine)
 	}
 }
 
