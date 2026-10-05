@@ -16,20 +16,20 @@ fondo del tema base (dark); con `"text": "default"` vuelve a depender de la
 terminal (comportamiento original, documentado).
 
 ## Tasks
-- [ ] `view/theme.go`: `docBg()` (bg de `Text`); `StyleForRole` compone
+- [x] `view/theme.go`: `docBg()` (bg de `Text`); `StyleForRole` compone
   `.Background(docBg())` en roles (default devuelve `t.Text`); `DarkTheme` y
   `DefaultTheme` pasan a compartir una sola construcción con fg/bg explícitos;
   las seis fábricas ganan `Text = on(fg, bg)` y `TabIdle = on(fg, bg)` con los
   colores del documento de cada paleta <!-- id: 0 -->
-- [ ] `view/editor_view.go`: en `Draw`, relleno del viewport completo con
+- [x] `view/editor_view.go`: en `Draw`, relleno del viewport completo con
   `th.Text` antes de pintar las líneas (guard de width/height) <!-- id: 1 -->
-- [ ] Ajustes de expectativas: `file_browser_test.go` (el fondo del texto de
+- [x] Ajustes de expectativas: `file_browser_test.go` (el fondo del texto de
   las filas inactivas ya no es `ColorDefault`) y cualquier otro assert de
   fondo que falle en la superficie al correr la suite <!-- id: 2 -->
-- [ ] Tests nuevos: las 6 paletas con `Text` fg+bg no-default; `StyleForRole`
+- [x] Tests nuevos: las 6 paletas con `Text` fg+bg no-default; `StyleForRole`
   del keyword hereda el bg del tema; un tema sin bg (StyleDefault) deja los
   roles con bg default (sigue dependiendo de la terminal) <!-- id: 3 -->
-- [ ] Verificación y commit <!-- id: 4 -->
+- [x] Verificación y commit: `37538bd` <!-- id: 4 -->
 
 ## Design decisions
 - **`StyleForRole` es la única costura del highlighter** (grep: ningún
