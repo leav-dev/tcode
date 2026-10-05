@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -49,30 +50,580 @@ func installFixture(t *testing.T, id, name, version string) string {
 // depender de git: emula lo mínimo de un clone para los tests.
 func cloneFake(src string) CloneFunc {
 	return func(_ string, dest string) error {
-		return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			rel, err := filepath.Rel(src, path)
-			if err != nil {
-				return err
-			}
-			if rel == "." {
+		return walkCopy(src, dest, func(string) bool { return true })
+	}
+}
+
+// fetchFake es una FetchFunc que emula el sparse checkout de git sobre un
+// "repositorio" en disco: deja en dest SOLO lo que casa con pattern. Cubre las
+// dos formas que usa el código real —"*/extension.json", que trae los manifests
+// del proveedor, y el nombre de una subcarpeta, que trae esa extensión
+// entera— para que los tests puedan afirmar qué se baja y qué no.
+func fetchFake(src string) FetchFunc {
+	return func(_ string, dest, pattern string) error {
+		return walkCopy(src, dest, func(rel string) bool { return sparseMatch(pattern, rel) })
+	}
+}
+
+// sparseMatch decide si un archivo del clon entra en el sparse checkout. Un
+// patrón con "/" es de archivo (path.Match); los demás son de carpeta y
+// matchean todo lo que hay debajo, igual que un gitignore.
+func sparseMatch(pattern, rel string) bool {
+	if strings.Contains(pattern, "/") {
+		matched, err := path.Match(pattern, rel)
+		return err == nil && matched
+	}
+	return rel == pattern || strings.HasPrefix(rel, pattern+"/")
+}
+
+// walkCopy copia de src a dest los archivos (con rutas relativas) que accept
+// devuelve verdadero, creando las carpetas hechas falta. Es la base de los
+// fakes de clonación: sin git, sin red y sin ruido de .git.
+func walkCopy(src, dest string, accept func(rel string) bool) error {
+	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, p)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return os.MkdirAll(dest, 0o755)
+		}
+		rel = filepath.ToSlash(rel)
+		if d.IsDir() {
+			// No se crean carpetas vacías: el sparse checkout de git tampoco
+			// materializa un directorio sin archivos.
+			if !sparseHasFilesBelow(src, rel, accept) {
 				return nil
 			}
-			to := filepath.Join(dest, rel)
-			if d.IsDir() {
-				return os.MkdirAll(to, 0o755)
+			return os.MkdirAll(filepath.Join(dest, filepath.FromSlash(rel)), 0o755)
+		}
+		if !d.Type().IsRegular() || !accept(rel) {
+			return nil
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		to := filepath.Join(dest, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(to), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(to, data, 0o644)
+	})
+}
+
+// sparseHasFilesBelow dice si hay algún archivo aceptado bajo rel, para no
+// materializar carpetas vacías en el clon simulado.
+func sparseHasFilesBelow(src, rel string, accept func(string) bool) bool {
+	entries, err := os.ReadDir(filepath.Join(src, filepath.FromSlash(rel)))
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			if sparseHasFilesBelow(src, rel+"/"+e.Name(), accept) {
+				return true
 			}
-			if !d.Type().IsRegular() {
-				return nil
+			continue
+		}
+		if accept(rel + "/" + e.Name()) {
+			return true
+		}
+	}
+	return false
+}
+
+// gitMonorepoFixture crea un "monorepo" con un repo git real en un temporal:
+// una subcarpeta por extensión, cada una con su extension.json y un main.lua
+// (el archivo de código que el listado liviano NO debe bajar). Devuelve la ruta
+// del repo, servible con file://.
+func gitMonorepoFixture(t *testing.T, exts map[string][3]string) string {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git no disponible")
+	}
+	repo := t.TempDir()
+	for dir, spec := range exts {
+		full := filepath.Join(repo, dir)
+		if err := os.MkdirAll(full, 0o755); err != nil {
+			t.Fatalf("MkdirAll %s: %v", dir, err)
+		}
+		toyExt(t, full, spec[0], spec[1], spec[2])
+		if err := os.WriteFile(filepath.Join(full, "main.lua"), []byte("return {}\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile main.lua: %v", err)
+		}
+	}
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("init", "-b", "main")
+	run("-c", "user.name=tcode-test", "-c", "user.email=tcode-test@example.com", "add", "-A")
+	run("-c", "user.name=tcode-test", "-c", "user.email=tcode-test@example.com", "commit", "-m", "init")
+	return repo
+}
+
+// localProvider es un proveedor de carpeta local (el "monorepo en disco") con
+// la subcarpeta por extensión que pide exts.
+func localProvider(t *testing.T, name string, exts map[string][3]string) Provider {
+	t.Helper()
+	return Provider{Name: name, Source: providerFixture(t, exts), Approved: true}
+}
+
+// TestInstallByIDResolvesAcrossProviders instala por id y verifica el destino
+// namespaced <root>/<proveedor>/<id> con los archivos de la extensión.
+func TestInstallByIDResolvesAcrossProviders(t *testing.T) {
+	proveedores := []Provider{
+		localProvider(t, "primero", map[string][3]string{"nada": {"tcode.nada", "Nada", "0.1.0"}}),
+		localProvider(t, "segundo", map[string][3]string{"linter": {"tcode.linter", "Linter", "1.2.3"}}),
+	}
+	userRoot := filepath.Join(t.TempDir(), ".tcode", "extensions")
+
+	res, err := InstallByID("tcode.linter", proveedores, userRoot, nil, nil)
+	if err != nil {
+		t.Fatalf("InstallByID: %v", err)
+	}
+	if res.Ref() != "segundo/tcode.linter" {
+		t.Errorf("Ref = %q, esperaba segundo/tcode.linter", res.Ref())
+	}
+	dest := filepath.Join(userRoot, "segundo", "tcode.linter")
+	if _, err := os.Stat(filepath.Join(dest, "extension.json")); err != nil {
+		t.Errorf("extension.json no instalado: %v", err)
+	}
+	// Nada se instala en la raíz plana ni en el otro proveedor.
+	if _, err := os.Stat(filepath.Join(userRoot, "tcode.linter")); !os.IsNotExist(err) {
+		t.Error("la extensión se instaló sin namespacer por proveedor")
+	}
+	if _, err := os.Stat(filepath.Join(userRoot, "primero", "tcode.nada")); !os.IsNotExist(err) {
+		t.Error("instaló una extensión que el usuario no pidió")
+	}
+}
+
+// TestInstallByIDFirstProviderWins: ante ids repetidos entre proveedores gana el
+// primero de la lista, así que el proveedor por defecto resuelve la colisión.
+func TestInstallByIDFirstProviderWins(t *testing.T) {
+	proveedores := []Provider{
+		localProvider(t, "gana", map[string][3]string{"dup": {"tcode.dup", "Del primero", "1.0.0"}}),
+		localProvider(t, "pierde", map[string][3]string{"dup": {"tcode.dup", "Del segundo", "9.9.9"}}),
+	}
+	userRoot := t.TempDir()
+	res, err := InstallByID("tcode.dup", proveedores, userRoot, nil, nil)
+	if err != nil {
+		t.Fatalf("InstallByID: %v", err)
+	}
+	if res.Provider != "gana" {
+		t.Errorf("Provider = %q, esperaba gana (el primero en orden)", res.Provider)
+	}
+	data, err := os.ReadFile(filepath.Join(userRoot, "gana", "tcode.dup", "extension.json"))
+	if err != nil {
+		t.Fatalf("leyendo el manifest instalado: %v", err)
+	}
+	if !strings.Contains(string(data), "1.0.0") {
+		t.Errorf("se instaló la versión del segundo proveedor: %s", data)
+	}
+}
+
+// TestInstallByIDUnapprovedProviderNeedsTrust: instalar desde un proveedor sin
+// aprobar exige confirmación explícita; sin confirm (no interactivo) el error
+// dice cómo aprobarlo, y un "no" cancela sin instalar.
+func TestInstallByIDUnapprovedProviderNeedsTrust(t *testing.T) {
+	nueva := func() ([]Provider, string) {
+		p := localProvider(t, "sospechoso", map[string][3]string{"x": {"tcode.x", "X", "1.0.0"}})
+		p.Approved = false
+		return []Provider{p}, t.TempDir()
+	}
+
+	proveedores, userRoot := nueva()
+	_, err := InstallByID("tcode.x", proveedores, userRoot, nil, nil)
+	if err == nil {
+		t.Fatal("InstallByID instaló sin aprobar el proveedor")
+	}
+	if !strings.Contains(err.Error(), "--approve-provider") {
+		t.Errorf("el error no dice cómo aprobar: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(userRoot, "sospechoso", "tcode.x")); !os.IsNotExist(statErr) {
+		t.Error("un proveedor rechazado no debe dejar nada instalado")
+	}
+
+	// Un "no" explícito cancela.
+	proveedores, userRoot = nueva()
+	_, err = InstallByID("tcode.x", proveedores, userRoot, nil, func(Provider) bool { return false })
+	if err == nil || !strings.Contains(err.Error(), "cancelada") {
+		t.Errorf("una cancelación debería cortar la instalación, err = %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(userRoot, "sospechoso", "tcode.x")); !os.IsNotExist(statErr) {
+		t.Error("una cancelación no debe dejar nada instalado")
+	}
+
+	// Un "sí" instala, y el prompt se hace con el proveedor sin aprobar.
+	proveedores, userRoot = nueva()
+	var preguntado Provider
+	res, err := InstallByID("tcode.x", proveedores, userRoot, nil, func(p Provider) bool {
+		preguntado = p
+		return true
+	})
+	if err != nil {
+		t.Fatalf("InstallByID con confirmación: %v", err)
+	}
+	if preguntado.Name != "sospechoso" {
+		t.Errorf("se preguntó por %q, esperaba sospechoso", preguntado.Name)
+	}
+	if res.Ref() != "sospechoso/tcode.x" {
+		t.Errorf("Ref = %q, esperaba sospechoso/tcode.x", res.Ref())
+	}
+}
+
+// TestInstallByIDFetchesOnlyTheChosenExtension: la instalación pide la
+// subcarpeta de la extensión (y solo ella), mientras la resolución pide solo
+// manifests. Es el reparto de descargas del diseño liviano.
+func TestInstallByIDFetchesOnlyTheChosenExtension(t *testing.T) {
+	src := providerFixture(t, map[string][3]string{
+		"linter": {"tcode.linter", "Linter", "1.2.3"},
+		"tema":   {"tcode.tema", "Tema", "0.4.0"},
+	})
+	for _, sub := range []string{"linter", "tema"} {
+		if err := os.WriteFile(filepath.Join(src, sub, "main.lua"), []byte("return {}\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile main.lua: %v", err)
+		}
+	}
+	// Carpeta local: el patrón no aplica, pero el destino sigue siendo el
+	// namespaced y con los archivos de la extensión elegida.
+	proveedores := []Provider{{Name: "local", Source: src, Approved: true}}
+	userRoot := t.TempDir()
+	if _, err := InstallByID("tcode.linter", proveedores, userRoot, nil, nil); err != nil {
+		t.Fatalf("InstallByID: %v", err)
+	}
+	dest := filepath.Join(userRoot, "local", "tcode.linter")
+	if _, err := os.Stat(filepath.Join(dest, "main.lua")); err != nil {
+		t.Errorf("la extensión instalada no trae su código: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(userRoot, "local", "tcode.tema")); !os.IsNotExist(err) {
+		t.Error("se instaló otra extensión del mismo proveedor")
+	}
+
+	// Proveedor git: los patrones pedidos son manifests primero y subcarpeta
+	// después, nunca el repo entero.
+	var patrones []string
+	fetch := func(_ string, dest, pattern string) error {
+		patrones = append(patrones, pattern)
+		return fetchFake(src)(src, dest, pattern)
+	}
+	userRoot = t.TempDir()
+	_, err := InstallByID("tcode.linter", []Provider{{Name: "remoto", Source: "https://example.com/r.git", Approved: true}}, userRoot, fetch, nil)
+	if err != nil {
+		t.Fatalf("InstallByID git: %v", err)
+	}
+	want := []string{"*/extension.json", "linter"}
+	if len(patrones) != len(want) || patrones[0] != want[0] || patrones[1] != want[1] {
+		t.Errorf("patrones pedidos = %v, esperaba %v", patrones, want)
+	}
+	if _, err := os.Stat(filepath.Join(userRoot, "remoto", "tcode.linter", "main.lua")); err != nil {
+		t.Errorf("el clon acotado no trajo el código de la extensión: %v", err)
+	}
+}
+
+// TestInstallByIDRejectsUnknownID: un id que nadie ofrece da un error que
+// lista lo disponible, y nada se instala.
+func TestInstallByIDRejectsUnknownID(t *testing.T) {
+	proveedores := []Provider{localProvider(t, "local", map[string][3]string{"a": {"tcode.a", "A", "0.1.0"}})}
+	userRoot := t.TempDir()
+	_, err := InstallByID("tcode.inexistente", proveedores, userRoot, nil, nil)
+	if err == nil {
+		t.Fatal("InstallByID aceptó un id inexistente")
+	}
+	if !strings.Contains(err.Error(), "local/tcode.a") {
+		t.Errorf("el error no lista lo disponible: %v", err)
+	}
+	entries, readErr := os.ReadDir(userRoot)
+	if readErr == nil && len(entries) > 0 {
+		t.Errorf("un id inexistente no debe instalar nada, hay %d entradas", len(entries))
+	}
+}
+
+// TestInstallByIDRejectsUnsafeID: un id con separadores nunca puede escapar de
+// la raíz de usuario.
+func TestInstallByIDRejectsUnsafeID(t *testing.T) {
+	if _, err := InstallByID("../mal", nil, t.TempDir(), nil, nil); err == nil {
+		t.Error("InstallByID aceptó un id con ..")
+	}
+}
+
+// TestInstallByIDInvalidProviderNameIsSkipped: un proveedor guardado con un
+// nombre fuera de la gramática no puede ser carpeta de instalación, así que se
+// ignora en vez de escribir fuera del root.
+func TestInstallByIDInvalidProviderNameIsSkipped(t *testing.T) {
+	bueno := localProvider(t, "ok", map[string][3]string{"a": {"tcode.a", "A", "0.1.0"}})
+	proveedores := []Provider{{Name: "../mal", Source: bueno.Source, Approved: true}, bueno}
+	userRoot := t.TempDir()
+	if _, err := InstallByID("tcode.a", proveedores, userRoot, nil, nil); err != nil {
+		t.Fatalf("InstallByID: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(userRoot, "ok", "tcode.a")); err != nil {
+		t.Errorf("no se instaló desde el proveedor válido: %v", err)
+	}
+}
+
+// TestInstallByIDPropagatesFetchFailure: si la extensión se resuelve pero su
+// descarga falla, el error se propaga: no se cae al siguiente proveedor (que
+// sería OTRA extensión con el mismo id) ni se reporta como "no encontrada".
+func TestInstallByIDPropagatesFetchFailure(t *testing.T) {
+	p := localProvider(t, "ok", map[string][3]string{"a": {"tcode.a", "A", "1.0.0"}})
+	_, err := InstallByID("tcode.a", []Provider{{Name: "remoto", Source: "https://example.com/r.git", Approved: true}, p}, t.TempDir(),
+		func(_, dest, pattern string) error {
+			if pattern == manifestsPattern {
+				return fetchFake(p.Source)(p.Source, dest, pattern)
 			}
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return err
+			return os.ErrPermission
+		}, nil)
+	if err == nil {
+		t.Fatal("InstallByID ignoró el fallo de descarga de la extensión")
+	}
+	if !strings.Contains(err.Error(), "descarga") && !strings.Contains(err.Error(), "permission denied") {
+		t.Errorf("el error no explica el fallo de descarga: %v", err)
+	}
+}
+
+// TestResolveExtensionReportsAndPropagates: resolver devuelve el proveedor que
+// ofrece el id; si no está, el error junta lo disponible con los problemas de
+// los proveedores que no se pudieron leer.
+func TestResolveExtensionReportsAndPropagates(t *testing.T) {
+	ok := localProvider(t, "ok", map[string][3]string{"a": {"tcode.a", "A", "0.1.0"}})
+	res, err := ResolveExtension("tcode.a", []Provider{ok}, nil)
+	if err != nil {
+		t.Fatalf("ResolveExtension: %v", err)
+	}
+	if res.Provider.Name != "ok" || res.Ext.ID != "tcode.a" {
+		t.Errorf("resolución inesperada: %+v", res)
+	}
+
+	caido := Provider{Name: "caido", Source: "https://example.com/caido.git"}
+	_, err = ResolveExtension("tcode.b", []Provider{ok, caido},
+		func(_, dest, pattern string) error {
+			if dest == "" {
+				return os.ErrPermission
 			}
-			return os.WriteFile(to, data, 0o644)
+			return fetchFake(ok.Source)(ok.Source, dest, pattern)
 		})
+	if err == nil {
+		t.Fatal("ResolveExtension aceptó un id inexistente")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "ok/tcode.a") || !strings.Contains(msg, "caido") {
+		t.Errorf("el error no junta disponibilidad y fallos: %v", err)
+	}
+}
+
+// TestInstallByIDWithRealGit es la integración del camino completo con git
+// real sobre un monorepo: resolución liviana (solo manifests) y clon acotado de
+// la extensión elegida.
+func TestInstallByIDWithRealGit(t *testing.T) {
+	repo := gitMonorepoFixture(t, map[string][3]string{
+		"linter": {"tcode.linter", "Linter", "1.2.3"},
+		"tema":   {"tcode.tema", "Tema", "0.4.0"},
+	})
+	proveedores := []Provider{{
+		Name:     "monorepo",
+		Source:   "file://" + filepath.ToSlash(repo),
+		Approved: true,
+	}}
+
+	exts, err := ListExtensions(proveedores[0], nil)
+	if err != nil {
+		t.Fatalf("ListExtensions con git real: %v", err)
+	}
+	if len(exts) != 2 {
+		t.Fatalf("ListExtensions devolvió %d, esperaba 2: %+v", len(exts), exts)
+	}
+
+	userRoot := t.TempDir()
+	res, err := InstallByID("tcode.linter", proveedores, userRoot, nil, nil)
+	if err != nil {
+		t.Fatalf("InstallByID con git real: %v", err)
+	}
+	if res.Ref() != "monorepo/tcode.linter" {
+		t.Errorf("Ref = %q, esperaba monorepo/tcode.linter", res.Ref())
+	}
+	dest := filepath.Join(userRoot, "monorepo", "tcode.linter")
+	if _, err := os.Stat(filepath.Join(dest, "extension.json")); err != nil {
+		t.Errorf("extension.json no instalado: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "main.lua")); err != nil {
+		t.Errorf("el .lua de la extensión no bajó: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, ".git")); !os.IsNotExist(err) {
+		t.Errorf(".git no debió copiarse: %v", err)
+	}
+	// La otra extensión del proveedor no se bajó: la instalación es acotada.
+	if _, err := os.Stat(filepath.Join(userRoot, "monorepo", "tcode.tema")); !os.IsNotExist(err) {
+		t.Error("se instaló una extensión que el usuario no pidió")
+	}
+}
+
+// TestRemoveNamespacedValidates: ni el nombre del proveedor ni el id pueden
+// escapar de la raíz de usuario.
+func TestRemoveNamespacedValidates(t *testing.T) {
+	userRoot := t.TempDir()
+	if err := RemoveNamespaced(userRoot, "../mal", "tcode.a"); err == nil {
+		t.Error("RemoveNamespaced aceptó un proveedor con ..")
+	}
+	if err := RemoveNamespaced(userRoot, "ok", "../mal"); err == nil {
+		t.Error("RemoveNamespaced aceptó un id con ..")
+	}
+	if err := RemoveNamespaced("", "ok", "tcode.a"); err == nil {
+		t.Error("RemoveNamespaced aceptó una raíz vacía")
+	}
+	err := RemoveNamespaced(userRoot, "ok", "tcode.a")
+	if err == nil || !strings.Contains(err.Error(), "no está instalada") {
+		t.Errorf("una extensión ausente debería dar un error claro: %v", err)
+	}
+}
+
+// TestRemoveRefAcceptsProviderAndSearch: la forma "proveedor:id" borra
+// exactamente esa, y un id suelto se busca en todos los proveedores (gana el
+// primero por orden de carpetas). Una instalación plana heredada sigue
+// borrándose por id.
+func TestRemoveRefAcceptsProviderAndSearch(t *testing.T) {
+	proveedores := []Provider{
+		localProvider(t, "uno", map[string][3]string{"dup": {"tcode.dup", "Uno", "1.0.0"}}),
+		localProvider(t, "dos", map[string][3]string{"dup": {"tcode.dup", "Dos", "1.0.0"}, "otro": {"tcode.otro", "Otro", "1.0.0"}}),
+	}
+	userRoot := t.TempDir()
+	for _, p := range proveedores {
+		exts, err := ListExtensions(p, nil)
+		if err != nil {
+			t.Fatalf("ListExtensions: %v", err)
+		}
+		for _, e := range exts {
+			if _, err := InstallByID(e.ID, []Provider{p}, userRoot, nil, nil); err != nil {
+				t.Fatalf("preparando %s/%s: %v", p.Name, e.ID, err)
+			}
+		}
+	}
+	// Heredada plana, sin proveedor.
+	plana := filepath.Join(userRoot, "tcode.plana")
+	if err := os.MkdirAll(plana, 0o755); err != nil {
+		t.Fatalf("MkdirAll plana: %v", err)
+	}
+	toyExt(t, plana, "tcode.plana", "Plana", "0.1.0")
+
+	// Id suelto: gana el primer proveedor por orden de carpeta (ReadDir
+	// ordena: "dos" antes que "uno").
+	ref, err := RemoveRef(userRoot, "tcode.dup")
+	if err != nil {
+		t.Fatalf("RemoveRef por id: %v", err)
+	}
+	if ref != "dos:tcode.dup" {
+		t.Errorf("RemoveRef = %q, esperaba dos:tcode.dup", ref)
+	}
+	if _, err := os.Stat(filepath.Join(userRoot, "uno", "tcode.dup")); err != nil {
+		t.Errorf("el otro proveedor no debía tocarse: %v", err)
+	}
+
+	// Forma explícita "proveedor:id".
+	ref, err = RemoveRef(userRoot, "dos:tcode.otro")
+	if err != nil {
+		t.Fatalf("RemoveRef por referencia: %v", err)
+	}
+	if ref != "dos:tcode.otro" {
+		t.Errorf("RemoveRef = %q, esperaba dos:tcode.otro", ref)
+	}
+
+	// Heredada plana.
+	ref, err = RemoveRef(userRoot, "tcode.plana")
+	if err != nil {
+		t.Fatalf("RemoveRef de la plana: %v", err)
+	}
+	if ref != "tcode.plana" {
+		t.Errorf("RemoveRef = %q, esperaba tcode.plana", ref)
+	}
+
+	if _, err := RemoveRef(userRoot, "tcode.inexistente"); err == nil {
+		t.Error("RemoveRef aceptó una extensión no instalada")
+	}
+	if _, err := RemoveRef(userRoot, "../mal"); err == nil {
+		t.Error("RemoveRef aceptó un id con ..")
+	}
+	if _, err := RemoveRef("", "tcode.a"); err == nil {
+		t.Error("RemoveRef aceptó una raíz vacía")
+	}
+}
+
+// providerFirstID devuelve el único id que ofrece el proveedor (las fixtures de
+// remove usan un id compartido entre proveedores, no uno por nombre de carpeta).
+func providerFirstID(t *testing.T, p Provider) string {
+	t.Helper()
+	exts, err := ListExtensions(p, nil)
+	if err != nil {
+		t.Fatalf("ListExtensions: %v", err)
+	}
+	if len(exts) == 0 {
+		t.Fatal("el proveedor no ofrece extensiones")
+	}
+	return exts[0].ID
+}
+
+// TestListIgnoresEmptyProviderFolder: al borrar la última extensión de un
+// proveedor queda su carpeta vacía, y eso no es una extensión rota que avisar.
+func TestListIgnoresEmptyProviderFolder(t *testing.T) {
+	userRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(userRoot, "vacio"), 0o755); err != nil {
+		t.Fatalf("MkdirAll vacio: %v", err)
+	}
+	infos, errs := List(userRoot)
+	if len(errs) != 0 {
+		t.Errorf("una carpeta vacía no debería registrarse como error: %v", errs)
+	}
+	if len(infos) != 0 {
+		t.Errorf("List devolvió %d extensiones, esperaba 0: %+v", len(infos), infos)
+	}
+}
+
+// TestListNamespacedAndFlatLayouts: List reporta el layout namespaced con su
+// proveedor y sigue reportando las instalaciones planas heredadas con el
+// proveedor vacío.
+func TestListNamespacedAndFlatLayouts(t *testing.T) {
+	proveedores := []Provider{
+		localProvider(t, "uno", map[string][3]string{"a": {"tcode.a", "A", "0.1.0"}}),
+		localProvider(t, "dos", map[string][3]string{"b": {"tcode.b", "B", "0.2.0"}}),
+	}
+	userRoot := t.TempDir()
+	for _, p := range proveedores {
+		if _, err := InstallByID(providerFirstID(t, p), []Provider{p}, userRoot, nil, nil); err != nil {
+			t.Fatalf("instalando desde %s: %v", p.Name, err)
+		}
+	}
+	plana := filepath.Join(userRoot, "tcode.plana")
+	if err := os.MkdirAll(plana, 0o755); err != nil {
+		t.Fatalf("MkdirAll plana: %v", err)
+	}
+	toyExt(t, plana, "tcode.plana", "Plana", "0.1.0")
+
+	infos, errs := List(userRoot)
+	if len(errs) != 0 {
+		t.Errorf("List reportó errores inesperados: %v", errs)
+	}
+	if len(infos) != 3 {
+		t.Fatalf("List devolvió %d, esperaba 3: %+v", len(infos), infos)
+	}
+	vistos := map[string]Info{}
+	for _, i := range infos {
+		vistos[i.Ref()] = i
+	}
+	if got := vistos["uno/tcode.a"]; got.Provider != "uno" || got.Version != "0.1.0" {
+		t.Errorf("extensión namespaced inesperada: %+v", got)
+	}
+	if got := vistos["dos/tcode.b"]; got.Provider != "dos" || got.Name != "B" {
+		t.Errorf("extensión namespaced inesperada: %+v", got)
+	}
+	if got := vistos["tcode.plana"]; got.Provider != "" {
+		t.Errorf("la instalación heredada no debería tener proveedor: %+v", got)
 	}
 }
 
@@ -232,6 +783,11 @@ func TestListSkipsBrokenFolders(t *testing.T) {
 	toyExt(t, good, "tcode.buena", "", "0.1.0")
 	if err := os.MkdirAll(filepath.Join(userRoot, "sinmanifest"), 0o755); err != nil {
 		t.Fatalf("MkdirAll sinmanifest: %v", err)
+	}
+	// Con contenido: una carpeta suelta que no es extensión se reporta. Las
+	// carpetas VACÍAS se ignoran (TestListIgnoresEmptyProviderFolder).
+	if err := os.WriteFile(filepath.Join(userRoot, "sinmanifest", "notas.md"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("WriteFile notas.md: %v", err)
 	}
 	broken := filepath.Join(userRoot, "rota")
 	if err := os.MkdirAll(broken, 0o755); err != nil {

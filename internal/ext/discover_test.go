@@ -91,3 +91,41 @@ func TestDiscoverMissingRoot(t *testing.T) {
 		t.Fatalf("Discover = (%d ext, %d errs), esperaba (0, 0)", len(exts), len(errs))
 	}
 }
+
+// TestDiscoverFindsNamespacedExtensions cubre el layout de instalación por
+// proveedor: <root>/<proveedor>/<id>/extension.json. El editor instala así
+// (namespaced) y el arranque tiene que encontrarlas; antes Discover solo
+// escaneaba un nivel y estas no se cargaban en el editor.
+func TestDiscoverFindsNamespacedExtensions(t *testing.T) {
+	root := t.TempDir()
+	// Plano (raíz de proyecto): <root>/<id>/extension.json
+	writeExtension(t, root, "plana", validManifest)
+	// Namespaced (raíz de usuario): <root>/<proveedor>/<id>/extension.json
+	provDir := filepath.Join(root, "tcode-extention", "tcode.errordetector")
+	if err := os.MkdirAll(provDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(provDir, "extension.json"), []byte(validManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	exts, errs := Discover(root)
+	if len(errs) != 0 {
+		t.Fatalf("Discover reportó errores: %v", errs)
+	}
+	if len(exts) != 2 {
+		t.Fatalf("Discover devolvió %d extensiones, esperaba 2 (plana + namespaced)", len(exts))
+	}
+	var foundPlana, foundNamespaced bool
+	for _, e := range exts {
+		switch e.Dir {
+		case filepath.Join(root, "plana"):
+			foundPlana = true
+		case filepath.Join(root, "tcode-extention", "tcode.errordetector"):
+			foundNamespaced = true
+		}
+	}
+	if !foundPlana || !foundNamespaced {
+		t.Fatalf("Discover no encontró ambas: plana=%v namespaced=%v; exts=%+v", foundPlana, foundNamespaced, exts)
+	}
+}

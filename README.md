@@ -13,7 +13,7 @@ resaltado de sintaxis, temas y configuración desde una ventana flotante.
 | Pestañas | Fila de pestañas, menú (`Ctrl+T`), cambio rápido desde teclado, reabrir y deduplicar rutas |
 | Apariencia | 6 paletas (Light, Dark, Light/Dark HC, Tokyo Night, Dracula) con fondo propio, resaltado por rol para Go, Python, JS/TS, C-like y JSON, tema del usuario por JSON |
 | Configuración | Ventana flotante (`Ctrl+P`): tamaño de tab, salto de palabra, ancho del panel, tema — cambios en vivo y persistidos en `~/.tcode/config.json` |
-| Extensiones | Manifiestos JSON declarativos (comandos, keybindings, hooks) con **backend de scripting Lua** (comandos con implementación propia), instalación por CLI de tus repos: `tcode --install-extension <url-git>` (`docs/extension-system.md`) |
+| Extensiones | Manifiestos JSON declarativos (comandos, keybindings, hooks) con **backend de scripting Lua** (comandos con implementación propia), **sistema de proveedores**: se instalan por id desde un catálogo (el oficial o el que agregues) con `tcode --install-extension <id>` (`docs/extension-system.md`) |
 | Portabilidad | Go puro (`tcell`), sin dependencias nativas; instalador multi-SO en camino |
 
 ## Instalación
@@ -156,6 +156,9 @@ Los binarios de otro SO **no** se pueden ejecutar ni testear en el anfitrión:
 | Configuración | `Ctrl+P` |
 | Salto de palabra | `Ctrl+Shift+W` |
 | Deshacer / rehacer | `Ctrl+Z` / `Ctrl+Y` o `Ctrl+Shift+Z` |
+| Instalar una extensión por id | `tcode --install-extension tcode.vimlite` |
+| Agregar una fuente de extensiones | `tcode --add-provider <url-git\|carpeta>` (luego `tcode --approve-provider <nombre>`) |
+| Ver / borrar extensiones | `tcode --list-extensions` · `tcode --remove-extension <proveedor:id\|id>` |
 
 Directorio como argumento arranca con el árbol visible y enfocado; sin
 argumento, sobre el directorio actual.
@@ -168,6 +171,10 @@ argumento, sobre el directorio actual.
   [`docs/config.md`](docs/config.md).
 - **`~/.tcode/theme.json`** — re-mapea colores por rol. Detalles en
   [`docs/editor-theme.md`](docs/editor-theme.md).
+- **`~/.tcode/providers.json`** — las fuentes de extensiones agregadas con
+  `tcode --add-provider` (el proveedor por defecto es built-in y no aparece
+  acá). Listar un proveedor no baja código, solo sus manifests. Detalles en
+  [`docs/extension-system.md`](docs/extension-system.md).
 
 ## Arquitectura
 

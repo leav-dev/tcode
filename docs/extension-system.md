@@ -19,13 +19,23 @@ El árbol esperado por extensión:
 
 ```
 ~/.tcode/extensions/
-  mi-ext/
+  mi-ext/                # instalación heredada (sin proveedor)
     extension.json
+  <proveedor>/           # instalación por proveedor (layout actual)
+    mi-ext/
+      extension.json
 ```
 
-Una carpeta sin `extension.json` se ignora en silencio. Una extensión rota
-(JSON inválido o manifest que no valida) **nunca impide el arranque**: su error
-se avisa una vez en la barra de estado y el resto se carga igual.
+Una carpeta sin `extension.json` se ignora en silencio (salvo que contenga
+extensiones namespadas dentro, que sí se reportan con su proveedor). Una
+extensión rota (JSON inválido o manifest que no valida) **nunca impide el
+arranque**: su error se avisa una vez en la barra de estado y el resto se carga
+igual.
+
+> **Resuelto:** el arranque descubre ambos layouts. `Discover` escanea dos
+> profundidades — `<root>/<id>/extension.json` (plano, raíz de proyecto) y
+> `<root>/<proveedor>/<id>/extension.json` (namespaced, raíz de usuario) — así
+> que una extensión instalada por proveedor se carga al abrir el editor.
 
 ## Backend de scripting (Lua)
 
@@ -95,27 +105,120 @@ fluyen al comando con `fn`.
 
 ## Instalar extensiones
 
-Las extensiones del **autor** (repositorios propios, considerados confiados) se
-instalan desde la línea de comandos, sin abrir el editor:
+Las extensiones se instalan por **id**, resolviendo contra los **proveedores**
+(sección siguiente). Desde la línea de comandos, sin abrir el editor:
 
 | Comando | Efecto |
 | --- | --- |
-| `tcode --install-extension <url-git>` | Clona el repo (`git clone --depth 1`), valida su `extension.json` y lo despliega en `~/.tcode/extensions/<id>/`. Reinstalar reemplaza. |
+| `tcode --add-provider <url-git\|carpeta>` | Valida la fuente, le deriva un nombre y la registra en `~/.tcode/providers.json` **sin aprobar**. |
+| `tcode --install-extension <id>` | Resuelve el id en los proveedores (gana el primero) e instala en `~/.tcode/extensions/<proveedor>/<id>/`. |
+| `tcode --approve-provider <nombre>` | Aprueba un proveedor: a partir de ahí instalar desde él no pregunta. |
+| `tcode --list-extensions` | Lista las instaladas como `proveedor/id (nombre) v<versión>`. |
+| `tcode --remove-extension <proveedor:id\|id>` | Borra una extensión; con id suelto la busca en todos los proveedores. |
+
+Reinstalar la misma extensión reemplaza el árbol anterior (iterar sobre la
+propia extensión es el flujo normal). Un manifest inválido se rechaza sin tocar
+nada. La extensión queda disponible en la **próxima sesión** (no hay recarga
+en caliente).
 
 > El comando clásico sin `script`/`fn` sigue siendo un stub "sin implementación":
 > dale lógica declarándole la función Lua (sección de arriba).
-| `tcode --list-extensions` | Lista las instaladas del usuario (id, nombre, versión). |
-| `tcode --remove-extension <id>` | Borra `~/.tcode/extensions/<id>`. |
 
-El repositorio de la extensión debe tener **`extension.json` en su raíz** (la
-misma estructura de carpeta de arriba). Un manifest inválido se rechaza sin
-tocar nada; el `id` del manifest da nombre a la carpeta instalada. La
-extensión queda disponible en la **próxima sesión** (no hay recarga en
-caliente).
+## Proveedores de extensiones
 
-**Modelo de confianza:** los repositorios del propio autor se consideran
-seguros por definición — no hay marketplace, checksum ni firma; la barrera es
-estructural (el manifest valida).
+Un **proveedor** es una fuente de extensiones: un repositorio git o una carpeta
+local donde **cada subcarpeta con `extension.json`** es una extensión (un
+monorepo). Los ids se resuelven contra todos los proveedores, así que el autor
+puede publicar un catálogo y el usuario instalar lo que le sirva.
+
+### El proveedor por defecto
+
+El editor trae uno built-in, `https://github.com/leav-dev/tcode-extention`, el
+monorepo oficial. Es una **constante en código**: no está en
+`~/.tcode/providers.json`, siempre está **aprobado** y siempre va **primero**
+en la resolución. Solo se **registra** — no instala nada por su cuenta.
+
+| Comando | Efecto |
+| --- | --- |
+| `tcode --install-extension tcode.vimlite` | Instala la extensión `tcode.vimlite` del proveedor por defecto. |
+
+### Agregar proveedores
+
+```
+tcode --add-provider https://github.com/leav-dev/mis-extensiones
+tcode --add-provider /home/tcode/mis-extensiones   # carpeta local, sin git
+```
+
+Agregar **valida** la fuente (debe ofrecer al menos una extensión válida) y la
+guarda en `~/.tcode/providers.json`:
+
+```json
+{
+  "providers": [
+    { "name": "tcode-extention", "source": "https://github.com/…", "approved": true },
+    { "name": "mis-extensiones", "source": "/home/tcode/mis-extensiones", "approved": false }
+  ]
+}
+```
+
+- El **nombre** es la identidad con la que se namespacan las instalaciones
+  (`~/.tcode/extensions/<nombre>/…`): sale del último componente de la URL git
+  (`tcode-extention`) o del nombre de la carpeta local. **Riesgo conocido:**
+  dos proveedores con el mismo nombre colisionan y en la resolución gana el
+  primero; por eso agregar un nombre ya usado se rechaza.
+- El **orden** del archivo es el **orden de resolución** (después del
+  proveedor por defecto). Ante una colisión de ids gana el primero.
+- Una carpeta local se persiste como **ruta absoluta**, así el config sigue
+  valiendo desde cualquier directorio de trabajo.
+- Un proveedor guardado con el nombre del proveedor por defecto se descarta:
+  el built-in gana.
+
+### Confianza: aprobación explícita por proveedor
+
+Agregar un proveedor **no** es confiar en él: queda con `approved: false`, y la
+primera instalación desde ahí pregunta:
+
+```
+El proveedor "mis-extensiones" no está aprobado.
+fuente: https://github.com/leav-dev/mis-extensiones
+¿Confías en este proveedor? [s/N]:
+```
+
+Responder que no cancela sin instalar nada; `tcode --approve-provider <nombre>`
+deja de preguntar. Sin terminal (uso no interactivo) la instalación se rechaza
+con un error que dice qué aprobar.
+
+**Modelo de confianza:** no hay marketplace, checksum ni firma. La barrera es
+estructural (el manifest valida) más la aprobación explícita de la fuente: el
+código se copia, no se ejecuta, y solo baja cuando la extensión elegida se
+instala.
+
+### Listado liviano (no baja código)
+
+Buscar o listar las extensiones de un proveedor **no descarga ningún `.lua`**.
+Para un proveedor git se hace un **clone parcial** que trae el árbol de commits
+sin ningún blob y materializa solo los manifests:
+
+```
+git clone --depth 1 --filter=blob:none --no-checkout <url> <tmp>
+git -C <tmp> sparse-checkout init --no-cone
+git -C <tmp> sparse-checkout set '*/extension.json'
+git -C <tmp> checkout
+```
+
+Un proveedor local se escanea directo, sin git. Los `.lua` solo bajan al
+**instalar** la extensión elegida, y solo los de esa extensión (un segundo
+clone acotado a su subcarpeta): es el único momento en que el código va a
+ejecutarse.
+
+Optimización futura (no implementada): la API de GitHub (árbol + contents) que
+listaría sin clonar nada. Es específica de GitHub y tiene rate limit, así que
+hoy el camino único es git.
+
+> Nota: `git --filter` no aplica a transportes locales (`file://`, rutas
+> locales), que avisan `filtering not recognized by server`; el sparse
+> checkout sigue acotando el materializado, así que el comportamiento observable
+> (no bajar los `.lua`) se mantiene igual.
 
 ## El manifest (`extension.json`)
 
