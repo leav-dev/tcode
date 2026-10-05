@@ -46,8 +46,8 @@ Estado de la config hoy: `view.indentUnit` (string, var), `view.wordWrapEnabled`
   redirigido a TempDir; Ctrl+, abre/cierra (y con workspace vacío); mutar un
   ajuste persiste el JSON; loadConfig al arranque aplica valores; cleanup de
   vars globales a defaults <!-- id: 6 -->
-- [x] Verificación (gofmt/vet/go test, paquete view y controller) y commit de
-  unidad del trabajo del writer <!-- id: 7 -->
+- [x] Verificación (gofmt/vet/go test, paquete view y controller) y commit de unidad
+  del trabajo del writer: `e410608` <!-- id: 7 -->
 
 ## Design decisions
 - **La config vive en `view` (vars más setters/getters exportados); el
