@@ -27,26 +27,35 @@ type Diagnostic struct {
 	Severity Severity
 }
 
-// SetDiagnostics reemplaza las anotaciones del buffer. El proveedor es el
-// backend de scripting: un analizador deposita acá el diagnóstico de cada
-// línea y el editor lo pinta en el próximo redibujo (el draw consulta siempre
-// el buffer activo, así que el reemplazo es inmediato).
-// Diagnostics devuelve la lista de anotaciones actuales del editor (la misma
-// del último SetDiagnostics). Es el acceso de lectura de la integración: el
-// backend de scripting escribe con SetDiagnostics y este getter le permite al
-// controlador (y a sus tests) verificar lo depositado.
+// Diagnostics devuelve la lista de anotaciones actuales del editor (la
+// mergeada de todos los proveedores). Es el acceso de lectura de la
+// integración: el backend de scripting escribe por proveedor con
+// SetDiagnostics(source, ...) y este getter le permite al controlador (y a
+// sus tests) verificar lo depositado.
 func (v *EditorView) Diagnostics() []Diagnostic {
 	return v.diagnostics
 }
 
-// SetDiagnostics reemplaza las anotaciones del buffer y las normaliza: se
-// ordenan por severidad (Error > Warning > Info, con orden de llegada dentro
-// del mismo nivel) para que el marcador del gutter y el mensaje del cursor
-// usen SIEMPRE el más grave de la línea y la barra pueda listar el resto.
-// Los mensajes son meramente informativos: nunca forman parte del archivo.
-func (v *EditorView) SetDiagnostics(d []Diagnostic) {
-	sort.SliceStable(d, func(i, j int) bool { return d[i].Severity > d[j].Severity })
-	v.diagnostics = d
+// SetDiagnostics reemplaza las anotaciones de UN proveedor (source: el key
+// del script — e.Dir::script — del host Lua) y remergea con las de los
+// demás: así varias extensiones anotan el mismo buffer sin pisarse. Un
+// proveedor se limpia llamándolo con una lista vacía o nil (clear por
+// proveedor). La lista mergeada se normaliza: orden por severidad
+// (Error > Warning > Info, con orden de llegada dentro del mismo nivel)
+// para que el marcador del gutter, el subrayado y el mensaje inline usen
+// SIEMPRE el más grave de la línea. Los mensajes son meramente
+// informativos: nunca forman parte del archivo.
+func (v *EditorView) SetDiagnostics(source string, d []Diagnostic) {
+	if v.diagBySource == nil {
+		v.diagBySource = make(map[string][]Diagnostic)
+	}
+	v.diagBySource[source] = d
+	var merged []Diagnostic
+	for _, ds := range v.diagBySource {
+		merged = append(merged, ds...)
+	}
+	sort.SliceStable(merged, func(i, j int) bool { return merged[i].Severity > merged[j].Severity })
+	v.diagnostics = merged
 }
 
 // diagAt devuelve el diagnóstico MÁS GRAVE de la línea (el primero de la lista,

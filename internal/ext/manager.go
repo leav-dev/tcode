@@ -143,7 +143,7 @@ func (m *Manager) runScriptCommand(e Extension, cmd Command) error {
 		if err != nil {
 			return fmt.Errorf("%s: script: %w", cmd.ID, err)
 		}
-		h, err = NewScriptHost(string(code), m.editor)
+		h, err = NewScriptHost(string(code), m.editor, key)
 		if err != nil {
 			return fmt.Errorf("%s: %w", cmd.ID, err)
 		}

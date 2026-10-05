@@ -46,7 +46,7 @@ func TestGutterShowsLineNumbers(t *testing.T) {
 func TestUnderlineAndGutterMarkDiagnostics(t *testing.T) {
 	s := newTestScreen(t, 20, 3)
 	v := newTestView(t, "uno\ndos\ntres", 20, 3)
-	v.SetDiagnostics([]Diagnostic{{Line: 1, Message: "x", Severity: SeverityError}})
+	v.SetDiagnostics("", []Diagnostic{{Line: 1, Message: "x", Severity: SeverityError}})
 	draw(v, s)
 
 	if got := cellRuneAt(s, 1, 1); got != '!' {
@@ -102,7 +102,7 @@ func TestGutterContinuationRowsBlank(t *testing.T) {
 // la barra de estado.
 func TestMultipleDiagnosticsPerLineOrdered(t *testing.T) {
 	v := newTestView(t, "uno\ndos", 20, 2)
-	v.SetDiagnostics([]Diagnostic{
+	v.SetDiagnostics("", []Diagnostic{
 		{Line: 1, Message: "aviso", Severity: SeverityInfo},
 		{Line: 1, Message: "ojo", Severity: SeverityWarning},
 		{Line: 1, Message: "mal", Severity: SeverityError},
@@ -122,7 +122,7 @@ func TestMultipleDiagnosticsPerLineOrdered(t *testing.T) {
 
 func TestDiagSeverityMappingAndPriority(t *testing.T) {
 	v := newTestView(t, "uno\ndos", 20, 2)
-	v.SetDiagnostics([]Diagnostic{
+	v.SetDiagnostics("", []Diagnostic{
 		{Line: 0, Message: "bajo", Severity: SeverityInfo},
 		{Line: 0, Message: "medio", Severity: SeverityWarning},
 		{Line: 0, Message: "alto", Severity: SeverityError},
@@ -191,7 +191,7 @@ func TestGutterResizeKeepsTextAreaWide(t *testing.T) {
 func TestDrawInlineDiagnosticAfterText(t *testing.T) {
 	s := newTestScreen(t, 40, 3)
 	v := newTestView(t, "uno\ndos\ntres", 40, 3)
-	v.SetDiagnostics([]Diagnostic{{Line: 1, Message: "'(' never closed", Severity: SeverityError}})
+	v.SetDiagnostics("", []Diagnostic{{Line: 1, Message: "'(' never closed", Severity: SeverityError}})
 	draw(v, s)
 
 	got := screenLines(s)
@@ -210,7 +210,7 @@ func TestDrawInlineDiagnosticAfterText(t *testing.T) {
 func TestDrawInlineDiagnosticTruncates(t *testing.T) {
 	s := newTestScreen(t, 12, 2)
 	v := newTestView(t, "a\nb", 12, 2)
-	v.SetDiagnostics([]Diagnostic{{Line: 0, Message: "'(' never closed (long message here)", Severity: SeverityError}})
+	v.SetDiagnostics("", []Diagnostic{{Line: 0, Message: "'(' never closed (long message here)", Severity: SeverityError}})
 	draw(v, s)
 
 	got := screenLines(s)[0]
@@ -227,7 +227,7 @@ func TestDrawInlineDiagnosticTruncates(t *testing.T) {
 func TestDrawInlineDiagnosticSkipsWhenNoRoom(t *testing.T) {
 	s := newTestScreen(t, 8, 2)
 	v := newTestView(t, "abcdef\nb", 8, 2)
-	v.SetDiagnostics([]Diagnostic{{Line: 0, Message: "error", Severity: SeverityError}})
+	v.SetDiagnostics("", []Diagnostic{{Line: 0, Message: "error", Severity: SeverityError}})
 	draw(v, s)
 
 	// El marcador '!' del gutter sigue (la línea está anotada); el mensaje
@@ -247,7 +247,7 @@ func TestDrawInlineDiagnosticWithWrapLastRow(t *testing.T) {
 
 	s := newTestScreen(t, 14, 4)
 	v := newTestView(t, "hola mundo ancho", 14, 4)
-	v.SetDiagnostics([]Diagnostic{{Line: 0, Message: "x", Severity: SeverityError}})
+	v.SetDiagnostics("", []Diagnostic{{Line: 0, Message: "x", Severity: SeverityError}})
 	draw(v, s)
 
 	got := screenLines(s)

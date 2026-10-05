@@ -25,6 +25,8 @@ type fakeAPI struct {
 	lineCalls      []int
 	diags          [][]view.Diagnostic
 	diagErr        error
+	files          []HostFile
+	filesErr       error
 }
 
 func (f *fakeAPI) RunCommand(id string) error {
@@ -59,10 +61,12 @@ func (f *fakeAPI) Line(n int) (string, bool) {
 	return f.lines[n], true
 }
 
-func (f *fakeAPI) SetDiagnostics(d []view.Diagnostic) error {
+func (f *fakeAPI) SetDiagnostics(source string, d []view.Diagnostic) error {
 	f.diags = append(f.diags, append([]view.Diagnostic(nil), d...))
 	return f.diagErr
 }
+
+func (f *fakeAPI) DirFiles() ([]HostFile, error) { return f.files, f.filesErr }
 
 // TestScriptHostCallsFunction: la función global llama a la API tcode.* y el
 // host la enruta al editor. tcode.message y tcode.buffer (con ok=false: sin
@@ -76,7 +80,7 @@ func TestScriptHostCallsFunction(t *testing.T) {
 			local path, content = tcode.buffer()
 			tcode.command("tcode.otro")
 		end
-	`, api)
+	`, api, "src")
 	if err != nil {
 		t.Fatalf("NewScriptHost falló: %v", err)
 	}
@@ -100,7 +104,7 @@ func TestScriptHostCallsFunction(t *testing.T) {
 // TestScriptHostReportsMissingFunction: llamar una función global que el
 // script no definió es un error claro que nombra la función.
 func TestScriptHostReportsMissingFunction(t *testing.T) {
-	h, err := NewScriptHost(`function main() end`, &fakeAPI{})
+	h, err := NewScriptHost(`function main() end`, &fakeAPI{}, "src")
 	if err != nil {
 		t.Fatalf("NewScriptHost falló: %v", err)
 	}
@@ -115,7 +119,7 @@ func TestScriptHostReportsMissingFunction(t *testing.T) {
 // TestScriptHostReportsSyntaxErrors: código Lua roto no crea un host: el
 // error de carga es claro y no queda un estado a medio configurar.
 func TestScriptHostReportsSyntaxErrors(t *testing.T) {
-	_, err := NewScriptHost(`function main(`, &fakeAPI{})
+	_, err := NewScriptHost(`function main(`, &fakeAPI{}, "src")
 	if err == nil {
 		t.Fatal("NewScriptHost aceptó código con error de sintaxis")
 	}
@@ -134,7 +138,7 @@ func TestScriptHostNoHostLibraries(t *testing.T) {
 	}
 	for _, code := range cases {
 		t.Run(code, func(t *testing.T) {
-			h, err := NewScriptHost(code, &fakeAPI{})
+			h, err := NewScriptHost(code, &fakeAPI{}, "src")
 			if err != nil {
 				t.Fatalf("NewScriptHost falló: %v", err)
 			}
@@ -154,7 +158,7 @@ func TestScriptHostInsert(t *testing.T) {
 		function main()
 			tcode.insert("texto insertado")
 		end
-	`, api)
+	`, api, "src")
 	if err != nil {
 		t.Fatalf("NewScriptHost falló: %v", err)
 	}
@@ -175,7 +179,7 @@ func TestScriptHostErrorFunction(t *testing.T) {
 		function main()
 			tcode.error("fallo propio del script")
 		end
-	`, &fakeAPI{})
+	`, &fakeAPI{}, "src")
 	if err != nil {
 		t.Fatalf("NewScriptHost falló: %v", err)
 	}
@@ -198,7 +202,7 @@ func TestScriptHostLineAndCount(t *testing.T) {
 			local l = tcode.line(1)
 			tcode.message(l .. "/" .. n)
 		end
-	`, api)
+	`, api, "src")
 	if err != nil {
 		t.Fatalf("NewScriptHost falló: %v", err)
 	}
@@ -232,7 +236,7 @@ func TestScriptHostDiagnosticsSet(t *testing.T) {
 				{ line = 3 },
 			})
 		end
-	`, api)
+	`, api, "src")
 	if err != nil {
 		t.Fatalf("NewScriptHost falló: %v", err)
 	}
@@ -269,7 +273,7 @@ func TestScriptHostDiagnosticsClear(t *testing.T) {
 		function f()
 			tcode.diagnostics.clear()
 		end
-	`, api)
+	`, api, "src")
 	if err != nil {
 		t.Fatalf("NewScriptHost falló: %v", err)
 	}
@@ -294,7 +298,7 @@ func TestScriptHostDiagnosticsBadItem(t *testing.T) {
 	for _, item := range cases {
 		t.Run(item, func(t *testing.T) {
 			api := &fakeAPI{}
-			h, err := NewScriptHost("function f() tcode.diagnostics.set({"+item+"}) end", api)
+			h, err := NewScriptHost("function f() tcode.diagnostics.set({"+item+"}) end", api, "src")
 			if err != nil {
 				t.Fatalf("NewScriptHost falló: %v", err)
 			}
@@ -322,7 +326,7 @@ func TestScriptHostLineOutOfRange(t *testing.T) {
 	for _, code := range cases {
 		t.Run(code, func(t *testing.T) {
 			api := &fakeAPI{bufOK: true, lineCount: 3, lines: []string{"a", "b", "c"}}
-			h, err := NewScriptHost(code, api)
+			h, err := NewScriptHost(code, api, "src")
 			if err != nil {
 				t.Fatalf("NewScriptHost falló: %v", err)
 			}

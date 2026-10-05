@@ -54,9 +54,15 @@ type EditorView struct {
 	theme Theme
 
 	// diagnostics anota las líneas del buffer (el proveedor es el backend de
-	// scripting): el draw pinta el marcador de severidad en el gutter y el
-	// subrayado de la línea anotada.
+	// scripting): el draw pinta el marcador de severidad en el gutter, el
+	// subrayado de la línea anotada y el mensaje inline a la derecha.
 	diagnostics []Diagnostic
+
+	// diagBySource separa las anotaciones por proveedor (cada script de
+	// extensión es un proveedor): SetDiagnostics(source, ...) reemplaza solo
+	// lo propio, sin pisar a los demás; la lista mergeada se recomputa en
+	// cada set y es la que renderiza el draw.
+	diagBySource map[string][]Diagnostic
 
 	// visCache es la última (línea lógica, fila visual global) computada por
 	// visualRowOfLine: el movimiento secuencial del cursor evita re-sumar las

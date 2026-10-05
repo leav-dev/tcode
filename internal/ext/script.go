@@ -29,10 +29,24 @@ type ScriptAPI interface {
 	// Line devuelve el texto de la línea n (0-indexada) del buffer activo; ok
 	// es false cuando no hay buffer abierto o n está fuera de rango.
 	Line(n int) (text string, ok bool)
-	// SetDiagnostics reemplaza las anotaciones del buffer activo del editor:
-	// el backend de scripting es el proveedor de diagnostics y deposita acá
-	// las anotaciones que la vista renderiza.
-	SetDiagnostics(d []view.Diagnostic) error
+	// SetDiagnostics reemplaza las anotaciones del buffer activo de UN
+	// proveedor (source: el key del script del host): el editor mergea las de
+	// todos los proveedores. El backend de scripting deposita acá las
+	// anotaciones que la vista renderiza.
+	SetDiagnostics(source string, d []view.Diagnostic) error
+	// DirFiles devuelve los archivos Go del MISMO directorio que el buffer
+	// activo (el contexto multi-archivo del paquete). El host Lua no tiene
+	// io/os: el editor es el proveedor de archivos y la extensión la
+	// analizadora. Cotas del proveedor: solo *.go, máx 64 archivos y 2 MiB
+	// totales; el buffer activo no se repite. Error legible si no hay buffer.
+	DirFiles() ([]HostFile, error)
+}
+
+// HostFile es un archivo hermano del buffer activo (mismo directorio,
+// contexto de paquete) expuesto a los scripts: ruta absoluta y contenido.
+type HostFile struct {
+	Path    string
+	Content string
 }
 
 // ScriptHost posee un estado Lua aislado con el código de un script de
@@ -43,7 +57,9 @@ type ScriptHost struct {
 	L *lua.LState
 }
 
-// NewScriptHost crea un host con el código dado. Abre SOLO las librerías
+// NewScriptHost crea un host con el código dado y su identidad de proveedor
+// (source, p. ej. e.Dir::script): tcode.diagnostics.set/clear actúan sobre
+// ESA fuente y el editor mergea con las de otras. Abre SOLO las librerías
 // base, tablas, strings y math, y nunca OpenLibs/OpenIo/OpenOs: el host no es
 // un intérprete para la persona usuaria, es una caja para extensiones, y
 // ninguna extensión necesita tocar el sistema de archivos o el entorno del
@@ -59,7 +75,7 @@ type ScriptHost struct {
 // El código se carga con DoString (parsea y ejecuta el top-level); un error
 // de sintaxis cierra el estado y devuelve un error claro, sin dejar un host
 // medio armado.
-func NewScriptHost(code string, api ScriptAPI) (*ScriptHost, error) {
+func NewScriptHost(code string, api ScriptAPI, source string) (*ScriptHost, error) {
 	// SkipOpenLibs: NewState sin opciones abriría TODAS las librerías (os e
 	// io incluidas); acá el estado nace vacío y se abre solo el set mínimo.
 	L := lua.NewState(lua.Options{SkipOpenLibs: true})
@@ -198,18 +214,38 @@ func NewScriptHost(code string, api ScriptAPI) (*ScriptHost, error) {
 			}
 			ds = append(ds, view.Diagnostic{Line: line - 1, Message: msg, Severity: sev})
 		}
-		if err := api.SetDiagnostics(ds); err != nil {
+		if err := api.SetDiagnostics(source, ds); err != nil {
 			L.RaiseError("%v", err)
 		}
 		return 0
 	}))
 	L.SetField(diagnostics, "clear", L.NewFunction(func(L *lua.LState) int {
-		if err := api.SetDiagnostics([]view.Diagnostic{}); err != nil {
+		if err := api.SetDiagnostics(source, []view.Diagnostic{}); err != nil {
 			L.RaiseError("%v", err)
 		}
 		return 0
 	}))
 	L.SetField(tcode, "diagnostics", diagnostics)
+	// tcode.dir_files(): los archivos Go del mismo directorio que el buffer
+	// activo (el paquete abarca varios archivos). Devuelve una tabla de
+	// {path, content} o nil cuando no hay buffer, el proveedor falla o no hay
+	// hermanos: el script degrada al buffer único. El editor pone las cotas
+	// de memoria.
+	L.SetField(tcode, "dir_files", L.NewFunction(func(L *lua.LState) int {
+		files, err := api.DirFiles()
+		if err != nil || len(files) == 0 {
+			return 0
+		}
+		t := L.NewTable()
+		for i, f := range files {
+			it := L.NewTable()
+			it.RawSetString("path", lua.LString(f.Path))
+			it.RawSetString("content", lua.LString(f.Content))
+			t.RawSetInt(i+1, it)
+		}
+		L.Push(t)
+		return 1
+	}))
 	L.SetGlobal("tcode", tcode)
 
 	if err := L.DoString(code); err != nil {

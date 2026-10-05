@@ -312,7 +312,8 @@ func (a *forwardAPI) InsertAtCursor(text string) error         { return nil }
 func (a *forwardAPI) StatusMessage(msg string)                 {}
 func (a *forwardAPI) LineCount() (int, bool)                   { return 0, false }
 func (a *forwardAPI) Line(n int) (string, bool)                { return "", false }
-func (a *forwardAPI) SetDiagnostics(d []view.Diagnostic) error { return nil }
+func (a *forwardAPI) SetDiagnostics(source string, d []view.Diagnostic) error { return nil }
+func (a *forwardAPI) DirFiles() ([]HostFile, error)              { return nil, nil }
 
 // TestManagerScriptReentryGuard: un script que invoca tcode.command sobre su
 // propio comando (o cualquier comando con script) no puede re-entrar en

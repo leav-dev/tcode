@@ -672,12 +672,12 @@ func (a *App) Line(n int) (string, bool) {
 // HITO A renderiza. Sin buffer activo, error legible como el resto de la API.
 // Límite del hito: un hook de onDidSaveBuffer corre "en el contexto del
 // activo", así que el buffer anotado es el activo al momento del set.
-func (a *App) SetDiagnostics(d []view.Diagnostic) error {
+func (a *App) SetDiagnostics(source string, d []view.Diagnostic) error {
 	ed := a.activeEditor()
 	if ed == nil {
 		return errors.New("sin buffer activo")
 	}
-	ed.SetDiagnostics(d)
+	ed.SetDiagnostics(source, d)
 	return nil
 }
 

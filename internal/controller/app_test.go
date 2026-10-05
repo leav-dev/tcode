@@ -2769,7 +2769,7 @@ func TestSaveAsPromptOwnsTheMouse(t *testing.T) {
 func TestDiagMessageStaysOffStatusBar(t *testing.T) {
 	app, _ := newTestApp(t, "uno\ndos\ntres")
 	ed := app.activeEditor()
-	ed.SetDiagnostics([]view.Diagnostic{
+	ed.SetDiagnostics("", []view.Diagnostic{
 		{Line: 0, Message: "mal", Severity: view.SeverityError},
 		{Line: 0, Message: "aviso", Severity: view.SeverityWarning},
 	})
