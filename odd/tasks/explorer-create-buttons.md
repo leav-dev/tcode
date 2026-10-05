@@ -43,3 +43,6 @@ corrige con el chequeo de rango, cubierto por
 - Tests: 5 nuevos de la vista (pie dibujado, clics, vacío, sin alto) + 3 del
   controlador (botón de archivo, de carpeta, clic fuera); 4 tests existentes
   actualizados a la geometría nueva (el pie ocupa una fila).
+
+## Commit
+`117d1b3` (rama `feat/explorer-create-buttons`).
