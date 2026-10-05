@@ -19,25 +19,25 @@ Comandos nuevos de línea de comandos (headless, antes de abrir la UI):
   descubre); no hay recarga en caliente.
 
 ## Tasks
-- [ ] `internal/ext/install.go`: `InstallFromGit(url, userRoot, cloner)`,
+- [x] `internal/ext/install.go`: `InstallFromGit(url, userRoot, cloner)`,
   `Remove(userRoot, id)`, `List(userRoot) ([]Info, []error)`; `Info{ID, Name,
   Version}`; `var clone` inyectable (tortuoso para tests sin git);
   sanitización de ids y mensajes claros de error (sin git, URL inválida,
   repo sin extension.json, manifest inválido) <!-- id: 0 -->
-- [ ] `main.go`: parseo de los tres flags antes del path; mode headless que
+- [x] `main.go`: parseo de los tres flags antes del path; mode headless que
   ejecuta la operación, imprime resultado en consola y `os.Exit(0|1)`; la raíz
   de usuario se resuelve con un helper del controller <!-- id: 1 -->
-- [ ] Tests (`internal/ext/install_test.go`): cloner fake (copia un árbol
+- [x] Tests (`internal/ext/install_test.go`): cloner fake (copia un árbol
   local) → instala con id correcto, excluye `.git`, manifest inválido no toca
   destino, sin manifest → error, reemplazo sobre id existente, id con ".."
   rechazado; `List` ignora carpetas rotas; `Remove` acotado; test de
   integración con git real en `file://` con `t.Skip` si git no está
   <!-- id: 2 -->
-- [ ] Docs: sección "Instalar extensiones" en `docs/extension-system.md` (los
+- [x] Docs: sección "Instalar extensiones" en `docs/extension-system.md` (los
   tres comandos, estructura esperada del repo: `extension.json` en la raíz,
   nota de confianza del autor, disponible en la próxima sesión) y README
   <!-- id: 3 -->
-- [ ] Verificación y commit <!-- id: 4 -->
+- [x] Verificación y commit: `ad116df` <!-- id: 4 -->
 
 ## Design decisions
 - **Repos del autor = confiados por definición**: sin checksums ni firmas; la
