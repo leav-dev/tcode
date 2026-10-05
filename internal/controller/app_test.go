@@ -106,11 +106,70 @@ func TestCtrlSSavesTheDocument(t *testing.T) {
 	}
 }
 
-func TestEscapeOnUnmodifiedDocumentQuits(t *testing.T) {
+func TestSingleEscapeDoesNotQuit(t *testing.T) {
 	app, _ := newTestApp(t, "uno")
 
+	// La ÚNICA salida es la doble presión rápida de Escape: un solo Escape
+	// (con o sin cambios) nunca cierra.
+	if quit := press(app, tcell.KeyEscape); quit {
+		t.Fatal("un solo Escape no debe cerrar el editor: se necesita doble rápido")
+	}
 	if quit := press(app, tcell.KeyEscape); !quit {
-		t.Fatal("Escape sin cambios debe cerrar el editor")
+		t.Fatal("el segundo Escape rápido debe cerrar el editor")
+	}
+}
+
+// TestDoubleEscapeMustBeQuick: la doble presión de Escape solo cierra dentro de
+// la ventana (quitEscapeWindow). Con el reloj inyectado: un segundo Escape
+// dentro de la ventana cierra; pasado el umbral no cierra y el conteo se
+// reinicia (el siguiente rápido sí cierra). Sin cambios sin guardar también.
+func TestDoubleEscapeMustBeQuick(t *testing.T) {
+	oldClock := clockNow
+	oldWin := quitEscapeWindow
+	quitEscapeWindow = 500 * time.Millisecond
+	now := time.Unix(0, 0).Add(time.Hour)
+	clockNow = func() time.Time { return now }
+	defer func() { clockNow, quitEscapeWindow = oldClock, oldWin }()
+
+	app, _ := newTestApp(t, "uno")
+
+	// Primer Escape en t, segundo a t+400ms: cierra.
+	press(app, tcell.KeyEscape)
+	now = now.Add(400 * time.Millisecond)
+	clockNow = func() time.Time { return now }
+	if quit := press(app, tcell.KeyEscape); !quit {
+		t.Fatal("el segundo Escape dentro de la ventana debe cerrar")
+	}
+
+	// Reinicio: primer Escape en t2, segundo a t2+600ms (> ventana): NO cierra
+	// y el tercero a t2+700ms (rápido respecto del segundo) sí.
+	now = now.Add(time.Second)
+	clockNow = func() time.Time { return now }
+	press(app, tcell.KeyEscape) // primer press
+	now = now.Add(600 * time.Millisecond)
+	clockNow = func() time.Time { return now }
+	if quit := press(app, tcell.KeyEscape); quit {
+		t.Fatal("un segundo Escape fuera de la ventana no debe cerrar")
+	}
+	now = now.Add(50 * time.Millisecond)
+	clockNow = func() time.Time { return now }
+	if quit := press(app, tcell.KeyEscape); !quit {
+		t.Fatal("el Escape siguiente, rápido, debe cerrar (el conteo se reinició)")
+	}
+}
+
+// TestCtrlCNoLongerQuits: la única salida es el doble Escape; Ctrl+C ya no
+// cierra el editor (la tecla cae al flujo normal) y no toca el documento.
+func TestCtrlCNoLongerQuits(t *testing.T) {
+	app, _ := newTestApp(t, "uno")
+	if quit := press(app, tcell.KeyCtrlC); quit {
+		t.Fatal("Ctrl+C no debe cerrar el editor")
+	}
+	if quit := press(app, tcell.KeyCtrlC); quit {
+		t.Fatal("ni dos veces seguidas: la única salida es el doble Escape")
+	}
+	if got := app.ws.Active().GetContent(); got != "uno" {
+		t.Fatalf("el documento no debe haberse tocado: %q", got)
 	}
 }
 
@@ -175,8 +234,11 @@ func TestCtrlSSavesAndThenEscapeQuits(t *testing.T) {
 	typeRune(app, 'X')
 	press(app, tcell.KeyCtrlS)
 
+	if quit := press(app, tcell.KeyEscape); quit {
+		t.Fatal("tras guardar, un solo Escape no cierra: doble rápido")
+	}
 	if quit := press(app, tcell.KeyEscape); !quit {
-		t.Fatal("tras guardar, Escape debe cerrar sin preguntar")
+		t.Fatal("tras guardar, el segundo Escape rápido debe cerrar sin preguntar")
 	}
 	if got := readFile(t, path); got != "Xuno" {
 		t.Fatalf("archivo en disco = %q, se esperaba %q", got, "Xuno")
@@ -330,8 +392,11 @@ func TestUndoThenEscapeQuitsWithoutAsking(t *testing.T) {
 	press(app, tcell.KeyCtrlZ)
 
 	// El documento volvió al estado inicial, así que ya no hay nada que perder.
+	if quit := press(app, tcell.KeyEscape); quit {
+		t.Fatal("tras deshacer todo, un solo Escape no cierra: doble rápido")
+	}
 	if quit := press(app, tcell.KeyEscape); !quit {
-		t.Fatal("tras deshacer todo, Escape debe cerrar sin pedir confirmación")
+		t.Fatal("tras deshacer todo, el segundo Escape rápido debe cerrar sin pedir confirmación")
 	}
 }
 
@@ -895,8 +960,11 @@ func TestEmptyWorkspaceDoesNotPanic(t *testing.T) {
 	if quit := press(app, tcell.KeyDown); quit {
 		t.Fatal("una tecla común no debe cerrar el editor")
 	}
+	if quit := press(app, tcell.KeyEscape); quit {
+		t.Fatal("un solo Escape sobre el workspace vacío no cierra: doble rápido")
+	}
 	if quit := press(app, tcell.KeyEscape); !quit {
-		t.Fatal("Escape sobre un workspace vacío debe cerrar el editor")
+		t.Fatal("el segundo Escape rápido sobre el workspace vacío debe cerrar el editor")
 	}
 	app.redraw()
 }
@@ -1163,8 +1231,11 @@ func TestClosingTheLastTabLeavesAnEmptyWorkspace(t *testing.T) {
 		t.Fatalf("workspace vacío: Active()=%v ActiveIndex()=%d", app.ws.Active(), app.ws.ActiveIndex())
 	}
 
+	if quit := press(app, tcell.KeyEscape); quit {
+		t.Fatal("un solo Escape sobre el workspace vacío no cierra: doble rápido")
+	}
 	if quit := press(app, tcell.KeyEscape); !quit {
-		t.Fatal("Escape sobre el workspace vacío debe cerrar el editor")
+		t.Fatal("el segundo Escape rápido sobre el workspace vacío debe cerrar el editor")
 	}
 }
 
@@ -2430,6 +2501,7 @@ func TestRunSavesTheSession(t *testing.T) {
 	press(app, tcell.KeyEnter) // abre doc.txt desde el explorador
 
 	app.screen.(tcell.SimulationScreen).InjectKey(tcell.KeyEscape, 0, tcell.ModNone)
+	app.screen.(tcell.SimulationScreen).InjectKey(tcell.KeyEscape, 0, tcell.ModNone)
 	if err := app.Run(); err != nil {
 		t.Fatalf("Run falló: %v", err)
 	}
@@ -2583,6 +2655,7 @@ func TestQuitRemovesTheSessionFileWhenNoTabs(t *testing.T) {
 		t.Fatalf("Close falló: %v", err)
 	}
 
+	app.screen.(tcell.SimulationScreen).InjectKey(tcell.KeyEscape, 0, tcell.ModNone)
 	app.screen.(tcell.SimulationScreen).InjectKey(tcell.KeyEscape, 0, tcell.ModNone)
 	if err := app.Run(); err != nil {
 		t.Fatalf("Run falló: %v", err)

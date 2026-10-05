@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"strings"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
 	"tcode/internal/ext"
@@ -63,6 +64,7 @@ type App struct {
 	// PieceTable ya desmapeado.
 	editors map[*model.PieceTable]*view.EditorView
 
+	lastEscape time.Time // marca del último Escape (doble presión para salir)
 	confirmQuit  bool
 	confirmClose bool
 	// confirmReload arma la confirmación no modal de Ctrl+R sobre un buffer
@@ -371,6 +373,15 @@ func (a *App) applyTheme() {
 		ed.SetTheme(a.theme)
 	}
 }
+
+// quitEscapeWindow es la ventana de la doble presión de Escape: dos Escape
+// dentro de este lapso cierran el editor; un segundo tardío reinicia el
+// conteo. Variable para que los tests la ajusten.
+var quitEscapeWindow = 500 * time.Millisecond
+
+// clockNow es el reloj de la doble presión, inyectable para los tests: la
+// ventana se mide con tiempo simulado en lugar de calcular sobre el real.
+var clockNow = time.Now
 
 // configFilePath resuelve el archivo de configuración del usuario; es variable
 // para que los tests lo apunten a un directorio temporal.
@@ -822,7 +833,9 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 				// Navegar el panel es "seguir trabajando": desarma las
 				// confirmaciones pendientes y el permiso de pisar, como
 				// cualquier otra tecla del documento —si no, un Escape armado
-				// por error seguiría activo tras navegar el árbol—.
+				// por error seguiría activo tras navegar el árbol—. También
+				// invalida el primer Escape de la doble presión.
+				a.lastEscape = time.Time{}
 				a.confirmQuit = false
 				a.confirmClose = false
 				a.clearForceSave()
@@ -899,7 +912,12 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		// sigue funcionando, y sin buffers no hay nada que perder.
 		buf := a.activeBuffer()
 		if buf == nil {
-			return ev.Key() == tcell.KeyEscape || ev.Key() == tcell.KeyCtrlC
+			// Workspace vacío: tampoco se sale con un Escape solo (la única
+			// salida es la doble presión); Ctrl+C ya no es la forma de cerrar.
+			if ev.Key() == tcell.KeyEscape {
+				return a.quitEscape()
+			}
+			return false
 		}
 
 		switch {
@@ -965,17 +983,8 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 			a.redraw()
 			return false
 
-		case ev.Key() == tcell.KeyEscape || ev.Key() == tcell.KeyCtrlC:
-			// Salir con cambios sin guardar en CUALQUIER buffer pide
-			// confirmación: la primera vez solo se avisa, así una tecla de más
-			// no tira el trabajo de ninguna pestaña.
-			if !a.ws.AnyModified() || a.confirmQuit {
-				return true
-			}
-			a.confirmQuit = true
-			a.statusBar.SetMessage("Cambios sin guardar: Ctrl+S guarda, Escape de nuevo sale igual")
-			a.redraw()
-			return false
+		case ev.Key() == tcell.KeyEscape:
+			return a.quitEscape()
 		}
 
 		// Las extensiones resuelven después de los atajos del núcleo —que ganan
@@ -989,7 +998,10 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 
 		// Cualquier otra tecla cancela las confirmaciones pendientes —la de
 		// salida, la de cierre de pestaña y la de recarga— y el permiso de
-		// pisar que se haya dado con un Ctrl+S previo.
+		// pisar que se haya dado con un Ctrl+S previo. También invalida el
+		// primer Escape de la doble presión: dos Escape con una tecla en
+		// medio no son una "doble presión limpia" y no cierran.
+		a.lastEscape = time.Time{}
 		a.confirmQuit = false
 		a.confirmClose = false
 		a.confirmReload = false
@@ -1213,6 +1225,28 @@ func (a *App) handlePromptKey(ev *tcell.EventKey) {
 
 	a.refreshPrompt()
 	a.redraw()
+}
+
+// quitEscape cierra el editor SOLO con la doble presión de Escape: dos Escape
+// dentro de quitEscapeWindow. Un solo Escape nunca cierra —con cambios sin
+// guardar avisa y arma la confirmación, sin ellos da el feedback de "de nuevo
+// rápido"—; un segundo Escape tardío reinicia el conteo. Ctrl+C dejó de ser
+// una forma de cerrar: esta es la única salida.
+func (a *App) quitEscape() bool {
+	now := clockNow()
+	if now.Sub(a.lastEscape) <= quitEscapeWindow {
+		a.lastEscape = time.Time{}
+		return true
+	}
+	a.lastEscape = now
+	if a.ws.AnyModified() && !a.confirmQuit {
+		a.confirmQuit = true
+		a.statusBar.SetMessage("Cambios sin guardar: Ctrl+S guarda, Escape dos veces rápido sale")
+	} else {
+		a.statusBar.SetMessage("Escape de nuevo rápido para salir")
+	}
+	a.redraw()
+	return false
 }
 
 // saveAs guarda el buffer capturado al abrir el pedido en la ruta elegida y pasa
