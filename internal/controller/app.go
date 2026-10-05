@@ -18,7 +18,7 @@ import (
 // statusHeight es la cantidad de filas que ocupa la barra de estado.
 // tabBarHeight es la que ocupa la fila de pestañas. El ancho máximo del panel
 // lateral del explorador vive en la configuración de view (ExplorerWidth, la
-// ventana Ctrl+, la expone y el archivo de config la persiste): el editor
+// ventana (Ctrl+P) la expone y el archivo de config la persiste): el editor
 // conserva el resto.
 const (
 	statusHeight = 1
@@ -89,7 +89,7 @@ type App struct {
 	menu       *view.TabMenu
 	menuActive bool
 
-	// configMenu es la ventana flotante de configuración (Ctrl+,) y
+	// configMenu es la ventana flotante de configuración (Ctrl+P) y
 	// configActive dice si está abierta. Como el menú de pestañas, mientras
 	// está activa posee el teclado y el mouse: las teclas que la ventana no
 	// maneja (Escape incluido) la cierran descartando, Left/Right mutan la fila
@@ -838,11 +838,13 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 			return false
 		}
 
-		// Ctrl+, abre la ventana flotante de configuración —también con el
-		// workspace vacío: la configuración existe sin buffers—. Ctrl+Shift+,
-		// queda fuera a propósito: tcell la entrega con el mismo KeyRune y
-		// distinguirla solo recompone una notación que nadie pide.
-		if ev.Key() == tcell.KeyRune && ev.Modifiers()&tcell.ModCtrl != 0 && ev.Modifiers()&tcell.ModShift == 0 && ev.Rune() == ',' {
+		// Ctrl+P abre la ventana flotante de configuración —también con el
+		// workspace vacío: la configuración existe sin buffers—. Arrancó como
+		// Ctrl+, pero el terminal del usuario interceptaba la coma: Ctrl+P
+		// (el byte 0x10, KeyCtrlP) pasa limpio en Windows Terminal y en casi
+		// todo terminal estándar. Ctrl+Shift+P queda fuera a propósito: la
+		// Shift del par no pide nadie.
+		if ev.Key() == tcell.KeyCtrlP && ev.Modifiers()&tcell.ModShift == 0 {
 			a.toggleConfig()
 			return false
 		}

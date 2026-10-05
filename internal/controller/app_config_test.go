@@ -37,18 +37,19 @@ func tmpConfigFile(t *testing.T) string {
 	return filepath.Join(dir, "config.json")
 }
 
-// TestCtrlCommaTogglesTheConfigWindow: Ctrl+, abre la ventana flotante de
+// TestCtrlPTogglesTheConfigWindow: Ctrl+P abre la ventana flotante de
 // configuración (también con el workspace vacío, como el explorador), una
 // tecla ajena la cierra descartando, y ninguna de las dos cierra el editor.
-func TestCtrlCommaTogglesTheConfigWindow(t *testing.T) {
+// La tecla original era Ctrl+, pero el terminal del usuario la intercepta.
+func TestCtrlPTogglesTheConfigWindow(t *testing.T) {
 	resetConfigVars(t)
 	app, _ := newTestApp(t, "uno")
 
-	if quit := app.handleEvent(tcell.NewEventKey(tcell.KeyRune, ',', tcell.ModCtrl)); quit {
-		t.Fatal("Ctrl+, no debe cerrar el editor")
+	if quit := app.handleEvent(tcell.NewEventKey(tcell.KeyCtrlP, 0, tcell.ModNone)); quit {
+		t.Fatal("Ctrl+P no debe cerrar el editor")
 	}
 	if !app.configActive {
-		t.Fatal("Ctrl+, debe abrir la ventana de configuración")
+		t.Fatal("Ctrl+P debe abrir la ventana de configuración")
 	}
 
 	// Una tecla ajena la cierra descartando, sin cerrar el editor.
@@ -59,12 +60,12 @@ func TestCtrlCommaTogglesTheConfigWindow(t *testing.T) {
 		t.Fatal("una tecla ajena debe cerrar la ventana de configuración")
 	}
 
-	// Ctrl+, de nuevo la abre y Escape la cierra.
-	if quit := app.handleEvent(tcell.NewEventKey(tcell.KeyRune, ',', tcell.ModCtrl)); quit {
-		t.Fatal("Ctrl+, no debe cerrar el editor")
+	// Ctrl+P de nuevo la abre y Escape la cierra.
+	if quit := app.handleEvent(tcell.NewEventKey(tcell.KeyCtrlP, 0, tcell.ModNone)); quit {
+		t.Fatal("Ctrl+P no debe cerrar el editor")
 	}
 	if !app.configActive {
-		t.Fatal("Ctrl+, debe volver a abrir la ventana de configuración")
+		t.Fatal("Ctrl+P debe volver a abrir la ventana de configuración")
 	}
 	pressed := app.handleEvent(tcell.NewEventKey(tcell.KeyEscape, 0, tcell.ModNone))
 	if app.configActive {
@@ -77,11 +78,11 @@ func TestCtrlCommaTogglesTheConfigWindow(t *testing.T) {
 	// Con el workspace vacío (modo explorador) también abre: la configuración
 	// existe sin buffers.
 	app2 := newExplorerApp(t, t.TempDir())
-	if quit := app2.handleEvent(tcell.NewEventKey(tcell.KeyRune, ',', tcell.ModCtrl)); quit {
-		t.Fatal("Ctrl+, sin buffers no debe cerrar el editor")
+	if quit := app2.handleEvent(tcell.NewEventKey(tcell.KeyCtrlP, 0, tcell.ModNone)); quit {
+		t.Fatal("Ctrl+P sin buffers no debe cerrar el editor")
 	}
 	if !app2.configActive {
-		t.Fatal("Ctrl+, debe abrir la configuración también con el workspace vacío")
+		t.Fatal("Ctrl+P debe abrir la configuración también con el workspace vacío")
 	}
 }
 
@@ -94,9 +95,9 @@ func TestConfigChangePersists(t *testing.T) {
 	app, _ := newTestApp(t, "uno")
 
 	// Abrir y mover: Right en "Tab size" → indent 5.
-	app.handleEvent(tcell.NewEventKey(tcell.KeyRune, ',', tcell.ModCtrl))
+	app.handleEvent(tcell.NewEventKey(tcell.KeyCtrlP, 0, tcell.ModNone))
 	if !app.configActive {
-		t.Fatal("Ctrl+, debe abrir la ventana de configuración")
+		t.Fatal("Ctrl+P debe abrir la ventana de configuración")
 	}
 	if quit := app.handleEvent(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone)); quit {
 		t.Fatal("Right dentro de la ventana no debe cerrar el editor")

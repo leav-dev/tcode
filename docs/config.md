@@ -2,7 +2,7 @@
 
 tcode maneja sus **configuraciones básicas** desde una **ventana flotante**
 (overlay sobre el editor, como el menú de pestañas): se abre y cierra con
-**`Ctrl+,`** y los cambios se aplican **en vivo** y se persisten.
+**`Ctrl+P`** y los cambios se aplican **en vivo** y se persisten.
 
 ## La ventana flotante
 
@@ -42,9 +42,9 @@ vez que cambiás un ajuste.
 
 ## Notas de terminal
 
-- `Ctrl+,` funciona en Windows Terminal. En algunos terminales Unix la
-  combinación con signos puede no llegar a la aplicación (como el form feed de
-  `Ctrl+L`).
+- `Ctrl+P` (el byte 0x10) pasa limpio en Windows Terminal y en casi todo
+  terminal estándar. Arrancó como `Ctrl+,`, pero el terminal del usuario
+  interceptaba la coma; `Ctrl+Shift+P` queda fuera a propósito.
 - Los tests del controlador aíslan el archivo redirigiendo `configFilePath` a
   un directorio temporal (patrón de `themeFilePath`).
 
