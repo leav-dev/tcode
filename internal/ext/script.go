@@ -40,6 +40,14 @@ type ScriptAPI interface {
 	// analizadora. Cotas del proveedor: solo *.go, máx 64 archivos y 2 MiB
 	// totales; el buffer activo no se repite. Error legible si no hay buffer.
 	DirFiles() ([]HostFile, error)
+	// GitStatus devuelve información de git del directorio del buffer activo:
+	// archivos con cambios (staged, unstaged, untracked) y conteo de líneas
+	// agregadas/borradas. El host Lua no tiene io/os: el editor ejecuta git.
+	// Error legible si no hay buffer, no es repo git, o git no está disponible.
+	GitStatus() (GitInfo, error)
+	// GetFileDiff obtiene el diff de un archivo específico con formato unificado
+	// para marcar líneas individuales. staged=true para cambios en staging area.
+	GetFileDiff(path string, staged bool) ([]FileDiffLine, error)
 }
 
 // HostFile es un archivo hermano del buffer activo (mismo directorio,
@@ -246,6 +254,57 @@ func NewScriptHost(code string, api ScriptAPI, source string) (*ScriptHost, erro
 		L.Push(t)
 		return 1
 	}))
+	// tcode.git.status(): información de git del directorio del buffer activo.
+	// Devuelve {staged={}, unstaged={}, untracked={}, added=N, deleted=N} o nil
+	// cuando no hay buffer, no es repo git, o git no está disponible.
+	git := L.NewTable()
+	L.SetField(git, "status", L.NewFunction(func(L *lua.LState) int {
+		info, err := api.GitStatus()
+		if err != nil {
+			return 0
+		}
+		t := L.NewTable()
+		staged := L.NewTable()
+		for i, f := range info.StagedFiles {
+			staged.RawSetInt(i+1, lua.LString(f))
+		}
+		t.RawSetString("staged", staged)
+		unstaged := L.NewTable()
+		for i, f := range info.UnstagedFiles {
+			unstaged.RawSetInt(i+1, lua.LString(f))
+		}
+		t.RawSetString("unstaged", unstaged)
+		untracked := L.NewTable()
+		for i, f := range info.UntrackedFiles {
+			untracked.RawSetInt(i+1, lua.LString(f))
+		}
+		t.RawSetString("untracked", untracked)
+		t.RawSetString("added", lua.LNumber(info.AddedLines))
+		t.RawSetString("deleted", lua.LNumber(info.DeletedLines))
+		L.Push(t)
+		return 1
+	}))
+	// tcode.git.file_diff(path, staged): diff de un archivo específico con
+	// formato unificado. Devuelve {{line=N, type="added"|"deleted"}, ...}
+	// o nil cuando no hay diff. staged=true para cambios en staging area.
+	L.SetField(git, "file_diff", L.NewFunction(func(L *lua.LState) int {
+		path := L.CheckString(1)
+		staged := L.CheckBool(2)
+		lines, err := api.GetFileDiff(path, staged)
+		if err != nil || len(lines) == 0 {
+			return 0
+		}
+		t := L.NewTable()
+		for i, l := range lines {
+			it := L.NewTable()
+			it.RawSetString("line", lua.LNumber(l.Line))
+			it.RawSetString("type", lua.LString(l.Type))
+			t.RawSetInt(i+1, it)
+		}
+		L.Push(t)
+		return 1
+	}))
+	L.SetField(tcode, "git", git)
 	L.SetGlobal("tcode", tcode)
 
 	if err := L.DoString(code); err != nil {

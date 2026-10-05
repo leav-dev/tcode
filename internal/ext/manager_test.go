@@ -314,6 +314,8 @@ func (a *forwardAPI) LineCount() (int, bool)                   { return 0, false
 func (a *forwardAPI) Line(n int) (string, bool)                { return "", false }
 func (a *forwardAPI) SetDiagnostics(source string, d []view.Diagnostic) error { return nil }
 func (a *forwardAPI) DirFiles() ([]HostFile, error)              { return nil, nil }
+func (a *forwardAPI) GitStatus() (GitInfo, error)               { return GitInfo{}, nil }
+func (a *forwardAPI) GetFileDiff(path string, staged bool) ([]FileDiffLine, error) { return nil, nil }
 
 // TestManagerScriptReentryGuard: un script que invoca tcode.command sobre su
 // propio comando (o cualquier comando con script) no puede re-entrar en

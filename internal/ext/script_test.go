@@ -11,22 +11,26 @@ import (
 // fakeAPI implementa ScriptAPI registrando las llamadas, para que los tests
 // comprueben el puente script → editor sin tocar un controlador real.
 type fakeAPI struct {
-	cmds           []string
-	msgs           []string
-	inserted       []string
-	path           string
-	content        string
-	bufOK          bool
-	insertErr      error
-	runErr         error
-	lineCount      int
-	lineCountCalls int
-	lines          []string
-	lineCalls      []int
-	diags          [][]view.Diagnostic
-	diagErr        error
-	files          []HostFile
-	filesErr       error
+	cmds            []string
+	msgs            []string
+	inserted        []string
+	path            string
+	content         string
+	bufOK           bool
+	insertErr       error
+	runErr          error
+	lineCount       int
+	lineCountCalls  int
+	lines           []string
+	lineCalls       []int
+	diags           [][]view.Diagnostic
+	diagErr         error
+	files           []HostFile
+	filesErr        error
+	gitInfo         GitInfo
+	gitErr          error
+	fileDiffLines   []FileDiffLine
+	fileDiffErr     error
 }
 
 func (f *fakeAPI) RunCommand(id string) error {
@@ -67,6 +71,12 @@ func (f *fakeAPI) SetDiagnostics(source string, d []view.Diagnostic) error {
 }
 
 func (f *fakeAPI) DirFiles() ([]HostFile, error) { return f.files, f.filesErr }
+
+func (f *fakeAPI) GitStatus() (GitInfo, error) { return f.gitInfo, f.gitErr }
+
+func (f *fakeAPI) GetFileDiff(path string, staged bool) ([]FileDiffLine, error) {
+	return f.fileDiffLines, f.fileDiffErr
+}
 
 // TestScriptHostCallsFunction: la función global llama a la API tcode.* y el
 // host la enruta al editor. tcode.message y tcode.buffer (con ok=false: sin
