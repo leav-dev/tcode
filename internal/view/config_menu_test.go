@@ -349,3 +349,78 @@ func TestConfigMenuThemeCustomClearsTheID(t *testing.T) {
 		t.Fatalf("Enter debe dejar el tema intacto: ActiveThemeID() = %q, se esperaba \"dracula\"", got)
 	}
 }
+
+// TestConfigMenuActionRowTriggers: la última fila (Extensiones) no muta un valor:
+// Left/Right no hacen nada y Enter DISPARA la acción. Como HandleEvent solo
+// devuelve (handled, changed), la acción queda en un campo interno y el
+// controlador la lee con Activated(), que la devuelve y la limpia (se dispara
+// una vez por pulsación).
+func TestConfigMenuActionRowTriggers(t *testing.T) {
+	resetConfigDefaults(t)
+	m := NewConfigMenu()
+	m.Resize(34, ConfigMenuHeight())
+
+	// Bajar hasta la fila de acción (la última).
+	items := configItems()
+	for range len(items) - 1 {
+		if handled, changed := m.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone)); !handled || changed {
+			t.Fatalf("Down devolvió (handled=%v, changed=%v), se esperaba (true, false)", handled, changed)
+		}
+	}
+
+	// Left/Right en la fila de acción: la ventana las consume pero no mutan
+	// nada, así que no hay acción pendiente.
+	if handled, changed := m.HandleEvent(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone)); !handled || changed {
+		t.Fatalf("Right en la fila de acción devolvió (handled=%v, changed=%v), se esperaba (true, false)", handled, changed)
+	}
+	if got := m.Activated(); got != "" {
+		t.Fatalf("Activated() = %q antes de Enter, se esperaba \"\"", got)
+	}
+
+	// Enter dispara la acción y devuelve (true, false): la ventana NO se cierra
+	// (cayó en el controlador), solo queda la acción pendiente.
+	if handled, changed := m.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone)); !handled || changed {
+		t.Fatalf("Enter en la fila de acción devolvió (handled=%v, changed=%v), se esperaba (true, false)", handled, changed)
+	}
+	if got := m.Activated(); got != "extensions" {
+		t.Fatalf("Activated() = %q tras Enter, se esperaba \"extensions\"", got)
+	}
+	// La acción se limpia al leerla: un Enter no arrastra la apertura.
+	if got := m.Activated(); got != "" {
+		t.Fatalf("Activated() = %q en la segunda lectura, se esperaba \"\" (se limpia)", got)
+	}
+
+	// En las filas de valor, Enter NO dispara ninguna acción.
+	m.HandleEvent(tcell.NewEventKey(tcell.KeyHome, 0, tcell.ModNone))
+	m.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	if got := m.Activated(); got != "" {
+		t.Fatalf("Enter en una fila de valor dispara %q, no debería disparar nada", got)
+	}
+}
+
+// TestConfigMenuHasTheExtensionsRow: la ventana expone la fila Extensiones al
+// final (con su altura contada) y la dibuja con la etiqueta y el valor de la
+// acción.
+func TestConfigMenuHasTheExtensionsRow(t *testing.T) {
+	resetConfigDefaults(t)
+	items := configItems()
+	last := items[len(items)-1]
+	if last.kind != ConfigAction {
+		t.Fatalf("la última fila es de tipo %v, se esperaba ConfigAction", last.kind)
+	}
+	if last.label != "Extensiones" {
+		t.Fatalf("la última fila es %q, se esperaba \"Extensiones\"", last.label)
+	}
+	if got := ConfigMenuHeight(); got != len(items)+2 {
+		t.Fatalf("ConfigMenuHeight() = %d, se esperaba %d (marco + filas)", got, len(items)+2)
+	}
+
+	m := NewConfigMenu()
+	m.Resize(34, ConfigMenuHeight())
+	s := newTestScreen(t, 34, ConfigMenuHeight())
+	drawConfigMenu(m, s)
+	// La fila se dibuja en su línea: la última del interior.
+	if line := screenLines(s)[ConfigMenuHeight()-2]; !strings.Contains(line, "Extensiones") {
+		t.Fatalf("la última fila = %q, debe contener la etiqueta %q", line, "Extensiones")
+	}
+}

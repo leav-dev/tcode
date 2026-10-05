@@ -3691,3 +3691,367 @@ func TestDeleteFileCommandIsRegistered(t *testing.T) {
 		t.Fatalf("el archivo sigue en disco (err=%v), se esperaba borrado", err)
 	}
 }
+
+// pinExtSources apunta la resolución de extensiones (proveedores + raíz del
+// usuario) a un proveedor en disco y a una raíz temporal, y deja el lector
+// inyectado contra ese proveedor. El chequeo de ARRANQUE queda en el no-op de
+// TestMain, así que abrir el editor no abre el prompt de actualizaciones: lo que
+// se prueba acá es la ventana, no el arranque.
+func pinExtSources(t *testing.T, providers []ext.Provider, userRoot string) {
+	t.Helper()
+	oldSources, oldFetch := extensionUserSources, startupExtFetch
+	extensionUserSources = func() ([]ext.Provider, string, error) { return providers, userRoot, nil }
+	if len(providers) > 0 {
+		startupExtFetch = extFetchFake(providers[0].Source)
+	}
+	t.Cleanup(func() { extensionUserSources, startupExtFetch = oldSources, oldFetch })
+}
+
+// extWindowFixture arma el escenario común de la ventana de extensiones: un
+// proveedor en disco con dos extensiones —una instalada en la versión vieja
+// (que da la actualización) y otra sin instalar (la novedad)—, una raíz de
+// extensiones del usuario temporal y el editor arrancado sobre un archivo.
+func extWindowFixture(t *testing.T, approved bool) (*App, string, ext.Provider) {
+	t.Helper()
+	src := startupProviderFixture(t, map[string][3]string{
+		"linter": {"tcode.linter", "Linter", "1.0.0"},
+		"tema":   {"tcode.tema", "Tema", "2.0.0"},
+	})
+	userRoot := t.TempDir()
+	p := ext.Provider{Name: "remoto", Source: src, Approved: approved}
+	// El fixture instala con una confirmación que aprueba: lo que el test
+	// ejercita es cómo la VENTANA trata a un proveedor sin aprobar, no la
+	// guarda de instalación de InstallByID (que se cubre aparte). Sin esto, el
+	// caso approved=false no llegaría nunca a tener la extensión instalada.
+	approve := func(ext.Provider) bool { return true }
+	if _, err := ext.InstallByID("tcode.linter", []ext.Provider{p}, userRoot, extFetchFake(src), approve); err != nil {
+		t.Fatalf("InstallByID del linter: %v", err)
+	}
+	// El autor publica una versión nueva del linter: eso es la actualización.
+	writeStartupManifest(t, filepath.Join(src, "linter"), "tcode.linter", "Linter", "1.1.0")
+
+	pinExtSources(t, []ext.Provider{p}, userRoot)
+	app, _ := newTestApp(t, "uno")
+	return app, userRoot, p
+}
+
+// extTabItems abre la ventana y devuelve las filas de la pestaña pedida.
+func extTabItems(t *testing.T, app *App, tab view.ExtTab) []view.ExtItem {
+	t.Helper()
+	app.openExtManager()
+	for range tab {
+		app.handleEvent(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone))
+	}
+	if got := app.extManager.Tab(); got != tab {
+		t.Fatalf("la ventana quedó en la pestaña %v, se esperaba %v", got, tab)
+	}
+	return app.extManager.Items(tab)
+}
+
+// answerPrompt escribe answer y confirma con Enter, como lo haría el teclado.
+func answerPrompt(app *App, answer string) {
+	for _, r := range answer {
+		app.handleEvent(tcell.NewEventKey(tcell.KeyRune, r, tcell.ModNone))
+	}
+	app.handleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+}
+
+// TestExtensionWindowOpensFromTheConfigRow: la fila Extensiones de la ventana
+// de configuración dispara la acción (Enter) y el controlador abre la ventana
+// de extensiones — cerrando la de configuración — con los datos ya cargados: la
+// pestaña de instaladas trae la extensión del fixture.
+func TestExtensionWindowOpensFromTheConfigRow(t *testing.T) {
+	resetConfigVars(t)
+	app, _, _ := extWindowFixture(t, true)
+
+	app.handleEvent(tcell.NewEventKey(tcell.KeyCtrlP, 0, tcell.ModNone))
+	if !app.configActive {
+		t.Fatal("Ctrl+P debe abrir la ventana de configuración")
+	}
+	// Bajar hasta la última fila (Extensiones): el alto de la ventana menos el
+	// marco son sus filas.
+	for range view.ConfigMenuHeight() - 3 {
+		app.handleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
+	}
+	if quit := app.handleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone)); quit {
+		t.Fatal("Enter en la fila de acción no debe cerrar el editor")
+	}
+
+	if app.configActive {
+		t.Fatal("abrir la ventana de extensiones debe cerrar la de configuración")
+	}
+	if !app.extActive {
+		t.Fatal("Enter en la fila Extensiones debe abrir la ventana de extensiones")
+	}
+	if got := app.extManager.Tab(); got != view.ExtTabInstalled {
+		t.Fatalf("la ventana abre en la pestaña %v, se esperaba la de instaladas", got)
+	}
+	items := app.extManager.Items(view.ExtTabInstalled)
+	if len(items) != 1 || items[0].Ref != "remoto/tcode.linter" {
+		t.Fatalf("las instaladas = %+v, se esperaba el linter del fixture", items)
+	}
+	if items[0].Kind != view.ExtItemRemove {
+		t.Fatalf("la fila instalada es de tipo %v, se esperaba ExtItemRemove", items[0].Kind)
+	}
+}
+
+// TestExtensionWindowTabsCarryTheirData: cada pestaña trae lo que le toca: la
+// actualización con su salto de versión, la novedad con la marca del
+// proveedor, y los proveedores con la de agregar al final.
+func TestExtensionWindowTabsCarryTheirData(t *testing.T) {
+	resetConfigVars(t)
+	app, _, _ := extWindowFixture(t, false)
+
+	updates := extTabItems(t, app, view.ExtTabUpdatable)
+	if len(updates) != 1 || updates[0].Right != "1.0.0 → 1.1.0" {
+		t.Fatalf("las actualizables = %+v, se esperaba el salto 1.0.0 → 1.1.0", updates)
+	}
+	if updates[0].Kind != view.ExtItemUpdate {
+		t.Fatalf("la fila actualizable es de tipo %v, se esperaba ExtItemUpdate", updates[0].Kind)
+	}
+
+	available := extTabItems(t, app, view.ExtTabAvailable)
+	if len(available) != 1 || available[0].ID != "tcode.tema" {
+		t.Fatalf("las disponibles = %+v, se esperaba la novedad tcode.tema", available)
+	}
+	if !strings.Contains(available[0].Right, "sin aprobar") {
+		t.Fatalf("la novedad de un proveedor sin aprobar no está marcada: %q", available[0].Right)
+	}
+
+	providers := extTabItems(t, app, view.ExtTabProviders)
+	if len(providers) != 2 {
+		t.Fatalf("la pestaña de proveedores tiene %d filas, se esperaban 2 (el proveedor y la de agregar)", len(providers))
+	}
+	if providers[0].Label != "remoto" || providers[0].Kind != view.ExtItemInfo {
+		t.Fatalf("la primera fila de proveedores = %+v, se esperaba el proveedor informativo", providers[0])
+	}
+	last := providers[len(providers)-1]
+	if last.Kind != view.ExtItemAddProvider {
+		t.Fatalf("la última fila de proveedores es de tipo %v, se esperaba ExtItemAddProvider", last.Kind)
+	}
+}
+
+// TestExtensionWindowInstallsAfterConfirmation: Enter sobre una novedad abre el
+// pedido de confirmación; solo con un "s" explícito se instala. La ventana sigue
+// abierta con los datos recargados y la extensión nueva queda en disco.
+func TestExtensionWindowInstallsAfterConfirmation(t *testing.T) {
+	resetConfigVars(t)
+	app, userRoot, _ := extWindowFixture(t, true)
+	extTabItems(t, app, view.ExtTabAvailable)
+
+	// Enter abre la confirmación: NO instala todavía.
+	app.handleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	if !app.promptActive {
+		t.Fatal("Enter sobre una novedad debe pedir confirmación")
+	}
+	if !strings.Contains(app.promptLabel, "Instalar") || !strings.Contains(app.promptLabel, "remoto/tcode.tema") {
+		t.Fatalf("el rótulo del pedido es %q, debe nombrar la extensión a instalar", app.promptLabel)
+	}
+	if !app.extActive {
+		t.Fatal("la ventana de extensiones sigue abierta detrás del pedido")
+	}
+	if _, err := os.Stat(filepath.Join(userRoot, "remoto", "tcode.tema")); !os.IsNotExist(err) {
+		t.Fatal("no se puede instalar antes de confirmar")
+	}
+
+	// El sí instala.
+	answerPrompt(app, "s")
+	if app.promptActive {
+		t.Fatal("el pedido debe cerrarse al confirmar")
+	}
+	if _, err := os.Stat(filepath.Join(userRoot, "remoto", "tcode.tema", "extension.json")); err != nil {
+		t.Fatalf("la extensión confirmada debe quedar instalada: %v", err)
+	}
+	if !strings.Contains(app.statusBar.Message(), "Instalada") {
+		t.Fatalf("el mensaje es %q, debe confirmar la instalación", app.statusBar.Message())
+	}
+	if !app.extActive {
+		t.Fatal("la ventana debe seguir abierta después de instalar")
+	}
+	// Los datos se recargan: la novedad desapareció y hay dos instaladas.
+	if got := app.extManager.Items(view.ExtTabAvailable); len(got) != 0 {
+		t.Fatalf("las disponibles = %+v, después de instalar no debe quedar la novedad", got)
+	}
+	installed := app.extManager.Items(view.ExtTabInstalled)
+	if len(installed) != 2 {
+		t.Fatalf("las instaladas = %d filas, se esperaban 2 tras instalar", len(installed))
+	}
+}
+
+// TestExtensionWindowCancelsInstallWithoutConfirmation: Enter vacío (el
+// default es NO) cancela: la extensión no se instala y el mensaje lo dice.
+func TestExtensionWindowCancelsInstallWithoutConfirmation(t *testing.T) {
+	resetConfigVars(t)
+	app, userRoot, _ := extWindowFixture(t, true)
+	extTabItems(t, app, view.ExtTabAvailable)
+
+	app.handleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	if !app.promptActive {
+		t.Fatal("Enter sobre una novedad debe pedir confirmación")
+	}
+	answerPrompt(app, "") // Enter a ciegas: NO
+	if _, err := os.Stat(filepath.Join(userRoot, "remoto", "tcode.tema")); !os.IsNotExist(err) {
+		t.Fatal("un Enter vacío no puede instalar (el default es NO)")
+	}
+	if !strings.Contains(app.statusBar.Message(), "Cancelado") {
+		t.Fatalf("el mensaje es %q, debe decir que se canceló", app.statusBar.Message())
+	}
+	if !app.extActive {
+		t.Fatal("cancelar debe dejar la ventana abierta")
+	}
+}
+
+// TestExtensionWindowRefusesUnapprovedProvider: instalar desde un proveedor sin
+// aprobar no se ofrece: Enter avisa cómo aprobarlo y NO abre ni el pedido ni la
+// instalación.
+func TestExtensionWindowRefusesUnapprovedProvider(t *testing.T) {
+	resetConfigVars(t)
+	app, userRoot, _ := extWindowFixture(t, false)
+	extTabItems(t, app, view.ExtTabAvailable)
+
+	app.handleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	if app.promptActive {
+		t.Fatal("una novedad sin aprobar no debe abrir el pedido de instalación")
+	}
+	if !strings.Contains(app.statusBar.Message(), "approve-provider") {
+		t.Fatalf("el mensaje es %q, debe explicar cómo aprobar el proveedor", app.statusBar.Message())
+	}
+	if _, err := os.Stat(filepath.Join(userRoot, "remoto", "tcode.tema")); !os.IsNotExist(err) {
+		t.Fatal("una novedad de un proveedor sin aprobar no puede quedar instalada")
+	}
+}
+
+// TestExtensionWindowUpdatesAfterConfirmation: Enter sobre una actualización
+// pide confirmación y el sí la aplica: la versión nueva queda en disco y la
+// pestaña de actualizables queda vacía tras la recarga.
+func TestExtensionWindowUpdatesAfterConfirmation(t *testing.T) {
+	resetConfigVars(t)
+	app, userRoot, _ := extWindowFixture(t, true)
+	extTabItems(t, app, view.ExtTabUpdatable)
+
+	app.handleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	if !app.promptActive || !strings.Contains(app.promptLabel, "Actualizar") {
+		t.Fatalf("Enter sobre una actualización debe pedir confirmación; rótulo %q, activo=%v", app.promptLabel, app.promptActive)
+	}
+	answerPrompt(app, "s")
+
+	data, err := os.ReadFile(filepath.Join(userRoot, "remoto", "tcode.linter", "extension.json"))
+	if err != nil {
+		t.Fatalf("no se pudo leer el manifest instalado: %v", err)
+	}
+	if !strings.Contains(string(data), "1.1.0") {
+		t.Fatalf("la extensión actualizada sigue con la versión vieja: %s", data)
+	}
+	if got := app.extManager.Items(view.ExtTabUpdatable); len(got) != 0 {
+		t.Fatalf("las actualizables = %+v, después de actualizar no debe quedar ninguna", got)
+	}
+}
+
+// TestExtensionWindowRemovesAfterConfirmation: Enter sobre una instalada pide
+// confirmación y el sí la borra del disco; sin confirmación no se borra nada.
+func TestExtensionWindowRemovesAfterConfirmation(t *testing.T) {
+	resetConfigVars(t)
+	app, userRoot, _ := extWindowFixture(t, true)
+	extTabItems(t, app, view.ExtTabInstalled)
+
+	app.handleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	if !app.promptActive || !strings.Contains(app.promptLabel, "Eliminar") {
+		t.Fatalf("Enter sobre una instalada debe pedir confirmación; rótulo %q, activo=%v", app.promptLabel, app.promptActive)
+	}
+	if _, err := os.Stat(filepath.Join(userRoot, "remoto", "tcode.linter")); err != nil {
+		t.Fatalf("no se puede borrar antes de confirmar: %v", err)
+	}
+	answerPrompt(app, "s")
+
+	if _, err := os.Stat(filepath.Join(userRoot, "remoto", "tcode.linter")); !os.IsNotExist(err) {
+		t.Fatal("la extensión confirmada debe quedar borrada del disco")
+	}
+	if got := app.extManager.Items(view.ExtTabInstalled); len(got) != 0 {
+		t.Fatalf("las instaladas = %+v, después de borrar no debe quedar ninguna", got)
+	}
+}
+
+// TestExtensionWindowAddsProviderFromThePrompt: la última fila de la pestaña de
+// proveedores abre el pedido de texto; la fuente escrita se registra SIN
+// aprobar y aparece en la lista con la ventana todavía abierta.
+func TestExtensionWindowAddsProviderFromThePrompt(t *testing.T) {
+	resetConfigVars(t)
+	app, userRoot, remoto := extWindowFixture(t, true)
+
+	// El archivo de proveedores del HOME del test, aislado como el config. El
+	// loader de la ventana se re-pinnea para LEER ESE ARCHIVO (más el proveedor
+	// del fixture): el camino real resuelve el mismo archivo que escribe
+	// addProviderSource, así que pinnear una lista fija haría que el agregado se
+	// guarde pero la lista no lo vea, y el test no probaría lo que dice probar.
+	dir := t.TempDir()
+	providersFile := filepath.Join(dir, "providers.json")
+	oldPath, oldSources := providersConfigPath, extensionUserSources
+	providersConfigPath = func() (string, error) { return providersFile, nil }
+	extensionUserSources = func() ([]ext.Provider, string, error) {
+		stored, err := ext.LoadProviders(providersFile)
+		if err != nil {
+			return nil, "", err
+		}
+		return append([]ext.Provider{remoto}, stored...), userRoot, nil
+	}
+	t.Cleanup(func() { providersConfigPath, extensionUserSources = oldPath, oldSources })
+
+	extTabItems(t, app, view.ExtTabProviders)
+	// Ir a la última fila (la de agregar) con End.
+	app.handleEvent(tcell.NewEventKey(tcell.KeyEnd, 0, tcell.ModNone))
+	app.handleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	if !app.promptActive || !strings.Contains(app.promptLabel, "Agregar proveedor") {
+		t.Fatalf("la fila de agregar debe abrir su pedido; rótulo %q, activo=%v", app.promptLabel, app.promptActive)
+	}
+
+	nuevo := startupProviderFixture(t, map[string][3]string{"otro": {"tcode.otro", "Otro", "1.0.0"}})
+	answerPrompt(app, nuevo)
+
+	stored, err := ext.LoadProviders(providersFile)
+	if err != nil {
+		t.Fatalf("no se pudo leer providers.json: %v", err)
+	}
+	if len(stored) != 1 || stored[0].Source != filepath.Clean(nuevo) {
+		t.Fatalf("los proveedores guardados = %+v, se esperaba la carpeta %q", stored, nuevo)
+	}
+	if stored[0].Name != filepath.Base(nuevo) {
+		t.Fatalf("el nombre guardado es %q, se esperaba el derivado %q", stored[0].Name, filepath.Base(nuevo))
+	}
+	if stored[0].Approved {
+		t.Fatal("un proveedor agregado queda SIN aprobar: agregar no es confiar")
+	}
+	if !app.extActive {
+		t.Fatal("agregar un proveedor deja la ventana abierta")
+	}
+	// Aparece en la lista, marcada como sin aprobar.
+	providers := app.extManager.Items(view.ExtTabProviders)
+	found := false
+	for _, p := range providers {
+		if p.Label == stored[0].Name {
+			found = true
+			if !strings.Contains(p.Right, "sin aprobar") {
+				t.Fatalf("el proveedor nuevo no está marcado como sin aprobar: %+v", p)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("el proveedor agregado no aparece en la lista: %+v", providers)
+	}
+}
+
+// TestExtensionWindowClosesOnForeignKeys: Escape y cualquier tecla ajena cierran
+// la ventana descartando, como las demás overlays, sin cerrar el editor.
+func TestExtensionWindowClosesOnForeignKeys(t *testing.T) {
+	resetConfigVars(t)
+	app, _, _ := extWindowFixture(t, true)
+	app.openExtManager()
+	if !app.extActive {
+		t.Fatal("openExtManager debe abrir la ventana")
+	}
+	if quit := app.handleEvent(tcell.NewEventKey(tcell.KeyEscape, 0, tcell.ModNone)); quit {
+		t.Fatal("Escape consumido por la ventana no debe cerrar el editor")
+	}
+	if app.extActive {
+		t.Fatal("Escape debe cerrar la ventana de extensiones")
+	}
+}

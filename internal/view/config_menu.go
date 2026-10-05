@@ -7,15 +7,19 @@ import (
 	"github.com/gdamore/tcell/v2"
 )
 
-// ConfigKind distingue los tres tipos de ajuste de la ventana de
-// configuración: un entero con rango y paso (Tab size, Panel width), un
-// booleano (Word wrap) o un enum de opciones con nombre (Theme).
+// ConfigKind distingue los tipos de fila de la ventana de configuración: un
+// entero con rango y paso (Tab size, Panel width), un booleano (Word wrap), un
+// enum de opciones con nombre (Theme) o una fila que no muta un valor sino que
+// DISPARA algo (Extensiones, que abre la ventana de gestión de extensiones).
 type ConfigKind int
 
 const (
 	ConfigBool ConfigKind = iota
 	ConfigInt
 	ConfigEnum
+	// ConfigAction es una fila que no guarda ningún valor: Left/Right no hacen
+	// nada y Enter dispara la acción nombrada en configItem.action.
+	ConfigAction
 )
 
 // configItem es una fila de la ventana de configuración: la etiqueta, el tipo
@@ -25,20 +29,24 @@ const (
 // aplica. Las filas se construyen SIEMPRE con closures sobre las vars
 // globales de view: la ventana edita la configuración viva del editor.
 type configItem struct {
-	label string
-	kind  ConfigKind
-	min   int
-	max   int
-	step  int
-	names []string // opciones del enum, en orden (Theme: registry + "Custom")
-	get   func() int
-	set   func(int)
+	label  string
+	kind   ConfigKind
+	min    int
+	max    int
+	step   int
+	names  []string // opciones del enum, en orden (Theme: registry + "Custom")
+	action string   // nombre de la acción de la fila ConfigAction
+	get    func() int
+	set    func(int)
 }
 
-// configItems construye las cuatro filas fijas de la ventana de configuración,
+// configItems construye las filas fijas de la ventana de configuración,
 // con sus rangos: Tab size de 1 a 8, Word wrap sin rango (booleano), Panel
 // width de 16 a 48 en pasos de 2 y Theme con las paletas del registry más
-// "Custom" al final (el tema del usuario o el default, id activo "").
+// "Custom" al final (el tema del usuario o el default, id activo "") y, al
+// final de todas, la fila de acción "Extensiones" —que abre la ventana flotante
+// de gestión de extensiones—. Va última a propósito: es la puerta a otra
+// ventana, no un ajuste de edición.
 func configItems() []configItem {
 	return []configItem{
 		{label: "Tab size", kind: ConfigInt, min: 1, max: 8, step: 1, get: IndentSize, set: SetIndentSize},
@@ -76,12 +84,14 @@ func configItems() []configItem {
 				SetActiveThemeID(ThemeIDs()[i])
 			},
 		},
+		{label: "Extensiones", kind: ConfigAction, action: "extensions"},
 	}
 }
 
 // ConfigMenuHeight es el alto que la ventana necesita para mostrar TODAS sus
-// filas: el marco de arriba y el de abajo más las cuatro filas. El controlador
-// lo usa para dimensionar la región flotante (configRegion).
+// filas: el marco de arriba y el de abajo más las filas. El controlador lo usa
+// para dimensionar la región flotante (configRegion): cada fila nueva la
+// agranda sola.
 func ConfigMenuHeight() int { return len(configItems()) + 2 }
 
 // ConfigMenu es la ventana flotante de configuración (Ctrl+P): una lista de
@@ -99,6 +109,13 @@ type ConfigMenu struct {
 	width  int // ancho de la ventana (Resize)
 	height int // alto de la ventana (Resize)
 	theme  Theme
+
+	// pending es la acción disparada por la última fila de acción que todavía
+	// no leyó el controlador. HandleEvent devuelve (handled, changed), que no
+	// alcanzan para decir "abrí la ventana de extensiones": el par está lleno
+	// con la semántica de la ventana (tecla suya, fila mutada). Activated
+	// devuelve y limpia el valor, así que una acción se lee una sola vez.
+	pending string
 }
 
 func NewConfigMenu() *ConfigMenu {
@@ -202,6 +219,12 @@ func (m *ConfigMenu) Resize(width, height int) {
 // desde "light" vuelve a "Custom"), con el ciclo reversible.
 func (m *ConfigMenu) mutate(delta int) bool {
 	it := configItems()[m.cursor]
+	if it.kind == ConfigAction {
+		// Una fila de acción no muta nada con Left/Right: solo Enter la
+		// dispara (HandleEvent). Que la tecla sea de la ventana no depende de
+		// que haya hecho algo.
+		return false
+	}
 	var nuevo int
 	if it.kind == ConfigBool {
 		nuevo = 1 - it.get()
@@ -273,16 +296,35 @@ func (m *ConfigMenu) HandleEvent(ev tcell.Event) (handled, changed bool) {
 			return true, m.mutate(1)
 		case tcell.KeyEnter, tcell.KeyLF:
 			// Enter en un entero y en el enum no hace nada (delta 0); en un
-			// booleano alterna. Siempre es de la ventana.
+			// booleano alterna; en una fila de acción dispara la acción. Siempre
+			// es de la ventana: la ventana NO se cierra y changed queda false,
+			// porque una acción no es una mutación de la configuración.
+			if it := configItems()[m.cursor]; it.kind == ConfigAction {
+				m.pending = it.action
+				return true, false
+			}
 			return true, m.mutate(0)
 		}
 	}
 	return false, false
 }
 
+// Activated devuelve y limpia la acción disparada por la fila de acción desde
+// el último Enter: "" si no hay ninguna. El controlador la lee después de
+// HandleEvent y abre lo que corresponda (hoy, la ventana de extensiones).
+func (m *ConfigMenu) Activated() string {
+	action := m.pending
+	m.pending = ""
+	return action
+}
+
 // configValueText es el valor de la fila como texto: el entero con sus dígitos,
-// "off"/"on" para el booleano o el NOMBRE de la opción para el enum.
+// "off"/"on" para el booleano, el NOMBRE de la opción para el enum o la
+// palabra que anuncia la acción en una fila sin valor.
 func configValueText(it configItem) string {
+	if it.kind == ConfigAction {
+		return "abrir"
+	}
 	if it.kind == ConfigBool {
 		if it.get() == 1 {
 			return "on"

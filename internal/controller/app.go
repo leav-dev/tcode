@@ -106,6 +106,24 @@ type App struct {
 	configMenu   *view.ConfigMenu
 	configActive bool
 
+	// extManager es la ventana flotante de gestión de extensiones (la fila
+	// "Extensiones" de la de configuración) y extActive dice si está abierta.
+	// Como las demás overlays posee el teclado mientras está activa: Enter
+	// devuelve la INTENCIÓN de la fila del cursor y el controlador la ejecuta
+	// con su confirmación (openPrompt) y sus datos.
+	extManager *view.ExtManager
+	extActive  bool
+
+	// Los datos de la ventana se cargan AL ABRIRLA y se recargan después de
+	// cada acción: userRoot es la raíz de extensiones del usuario sobre la que
+	//-Corren las acciones- y las tres listas son las que llenan las pestañas.
+	// La vista no lee el disco: recibe filas (view.ExtItem) ya resueltas.
+	extUserRoot  string
+	extInstalled []ext.Info
+	extUpdates   []ext.UpdateResult
+	extAvailable []ext.AvailableExt
+	extProviders []ext.Provider
+
 	// sessionEnabled marca los modos con sesión persistida (directorio o sin
 	// argumentos): el modo archivo explícito no guarda ni restaura. Se define
 	// en el arranque y cubre tanto el guardado como la restauración.
@@ -177,6 +195,7 @@ func NewAppWithScreen(s tcell.Screen, path string) (*App, error) {
 		explorer:   view.NewFileBrowser(),
 		menu:       view.NewTabMenu(),
 		configMenu: view.NewConfigMenu(),
+		extManager: view.NewExtManager(),
 		ext:        ext.NewManager(),
 
 		// La sesión es el estado de los modos explorador; el modo archivo la
@@ -403,6 +422,7 @@ func (a *App) applyTheme() {
 	a.explorer.SetTheme(a.theme)
 	a.menu.SetTheme(a.theme)
 	a.configMenu.SetTheme(a.theme)
+	a.extManager.SetTheme(a.theme)
 	for _, ed := range a.editors {
 		ed.SetTheme(a.theme)
 	}
@@ -527,8 +547,21 @@ var extensionUserSources = func() ([]ext.Provider, string, error) {
 
 // startupExtFetch es el lector de los proveedores en el chequeo de arranque:
 // nil usa el lector real (git). Variable por la misma razón que
-// extensionUserSources: los tests corren sin git ni red.
+// extensionUserSources: los tests corren sin git ni red. La ventana de
+// extensiones lo reutiliza: listar proveedores e instalar usan el mismo lector.
 var startupExtFetch ext.FetchFunc
+
+// providersConfigPath resuelve el archivo de proveedores del usuario
+// (~/.tcode/providers.json): lo usa la ventana de extensiones para AGREGAR una
+// fuente. Es variable por la misma razón que extensionUserSources —los tests la
+// apuntan a un temporal para no tocar el HOME real—.
+var providersConfigPath = func() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return ext.ProvidersFilePath(home), nil
+}
 
 // appStartupCheck es la INYECCIÓN del chequeo de arranque: devuelve las
 // actualizaciones disponibles y las novedades, sin tocar el disco. Vive en una
@@ -1101,15 +1134,37 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 			return false
 		}
 
+		// La ventana de extensiones abierta posee el teclado, como las demás
+		// overlays. El pedido va ANTES (arriba) porque la confirmación de una
+		// acción —instalar, actualizar, borrar— se superpone a la ventana: el
+		// prompt tiene el teclado mientras está escribiendo. La intención de la
+		// fila la ejecuta el controlador; (false, _) —Escape, Ctrl+C y
+		// CUALQUIER otra tecla ajena— cierra la ventana descartando.
+		if a.extActive {
+			handled, intent := a.extManager.HandleEvent(ev)
+			if !handled {
+				a.extActive = false // cualquier tecla ajena —Escape incluido— cierra y descarta
+			} else {
+				a.handleExtIntent(intent)
+			}
+			a.redraw()
+			return false
+		}
+
 		// La ventana de configuración abierta posee el teclado: (true, changed)
 		// es una tecla suya (y changed dice si una fila se mutó, para persistir
 		// y reencuadrar), y (false, false) —Escape, Ctrl+C y CUALQUIER otra
 		// tecla ajena— la cierra descartando, sin dejar que la tecla caiga al
-		// documento ni a los atajos.
+		// documento ni a los atajos. Una fila de acción (Extensiones) no muta
+		// nada: dispara su acción, que se lee con Activated() y abre la
+		// ventana de extensiones cerrando esta.
 		if a.configActive {
 			handled, changed := a.configMenu.HandleEvent(ev)
 			if !handled {
 				a.configActive = false // cualquier tecla ajena —Escape incluido— cierra y descarta
+			} else if a.configMenu.Activated() != "" {
+				a.configActive = false
+				a.openExtManager()
 			} else if changed {
 				a.configChanged()
 			}
@@ -1348,7 +1403,7 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		// no traduce nada ni redibuja— y el clic no puede cambiar de pestaña,
 		// seleccionar un archivo ni raspar el documento por debajo de lo que el
 		// usuario está escribiendo.
-		if a.menuActive || a.promptActive || a.configActive {
+		if a.menuActive || a.promptActive || a.configActive || a.extActive {
 			return false
 		}
 		a.checkExternalReloads()
@@ -1773,6 +1828,16 @@ func (a *App) redraw() {
 		x, y, w, h := a.configRegion()
 		a.editorSurf.SetRegion(x, y, w, h)
 		a.configMenu.Draw(a.editorSurf)
+	}
+
+	// La ventana de extensiones flota sobre el editor como la de configuración,
+	// encima de ella si alguna vez coincidieran: se compone DESPUÉS con la
+	// misma superficie recortada a su región (extRegion). El prompt de
+	// confirmación no se dibuja acá —vive en la barra de estado—.
+	if a.extActive {
+		x, y, w, h := a.extRegion()
+		a.editorSurf.SetRegion(x, y, w, h)
+		a.extManager.Draw(a.editorSurf)
 	}
 
 	a.statusBar.Draw(a.screen, height-statusHeight, width)
@@ -2221,6 +2286,341 @@ func (a *App) configChanged() {
 	width, height := a.screen.Size()
 	a.explorer.Resize(panelWidth(width), editorHeight(height))
 	a.tabBar.EnsureActive(a.ws, a.tabBarWidth())
+}
+
+// extManagerWidth es el ancho con el que se dimensiona la ventana de
+// extensiones: es más ancha que la de configuración porque las filas llevan
+// referencia, versión y salto de versión. La región (extRegion) la recorta al
+// ancho real del editor si la terminal es chica.
+const extManagerWidth = 64
+
+// extRegion devuelve la región de la ventana de extensiones: 64x(ExtManagerHeight)
+// centrada en el área del editor (columna según el panel, fila tras la de
+// pestañas), recortada si la terminal es chica. Comparte la geometría entre
+// openExtManager (que solo usa el tamaño para el Resize) y redraw (que reencuadra
+// la superficie con la posición), como configRegion con la de configuración.
+func (a *App) extRegion() (x, y, w, h int) {
+	width, height := a.screen.Size()
+	editorW := width - a.explorerColumn()
+	winW := min(extManagerWidth, editorW)
+	winH := min(view.ExtManagerHeight(), editorHeight(height))
+	return a.explorerColumn() + (editorW-winW)/2, tabBarHeight + (editorHeight(height)-winH)/2, winW, winH
+}
+
+// openExtManager abre la ventana de extensiones: la dimensiona a la región del
+// editor (extRegion) y CARGA los datos recién abiertos —instaladas, actualizables,
+// disponibles y proveedores—, porque leer los proveedores es una E/S con git que
+// no puede correr en cada tecla. Sin espacio para el editor no abre. El caller
+// redibuja (la ventana de configuración que la abre, o quien la invoque).
+func (a *App) openExtManager() {
+	width, _ := a.screen.Size()
+	if width-a.explorerColumn() <= 0 {
+		return
+	}
+	a.extActive = true
+	// La ventana nace en su estado inicial: la pestaña donde quedó la sesión
+	// anterior no debe decidir dónde empieza la próxima.
+	a.extManager.Reset()
+	_, _, w, h := a.extRegion()
+	a.extManager.Resize(w, h)
+	a.loadExtManagerData()
+}
+
+// loadExtManagerData relee las tres listas de la ventana con la misma maquinaria
+// de la CLI (ext.List, ext.CheckUpdates, ext.AvailableExtensions, ext.AllProviders
+// a través de extensionUserSources) y las traduce a filas de la vista. Los
+// errores son TOLERANTES igual que en el arranque —un proveedor caído no impide
+// ver el resto— y el último se avisa en la barra: la ventana nunca queda rota
+// por una fuente caída.
+//
+// Los datos se releen al abrir y después de cada acción, no en cada tecla.
+func (a *App) loadExtManagerData() {
+	providers, userRoot, err := extensionUserSources()
+	if err != nil {
+		a.statusBar.SetMessage("Aviso de extensiones: " + err.Error())
+		return
+	}
+	a.extProviders, a.extUserRoot = providers, userRoot
+
+	var listErrs, updateErrs, availErrs []error
+	a.extInstalled, listErrs = ext.List(userRoot)
+	a.extUpdates, updateErrs = ext.CheckUpdates(providers, userRoot, startupExtFetch)
+	// El diff de novedades va DESPUÉS de la detección de actualizaciones, como
+	// en el arranque: comparar contra el conjunto ya refrescado evita ofrecer
+	// como novedad algo que el proveedor acaba de actualizar.
+	a.extAvailable, availErrs = ext.AvailableExtensions(providers, userRoot, startupExtFetch)
+
+	var errs []error
+	errs = append(errs, listErrs...)
+	errs = append(errs, updateErrs...)
+	errs = append(errs, availErrs...)
+	if len(errs) > 0 {
+		a.statusBar.SetMessage("Aviso de extensiones: " + errs[len(errs)-1].Error())
+	}
+	a.buildExtItems()
+}
+
+// buildExtItems traduce las listas cargadas a las filas de las cuatro pestañas.
+// Los datos de la derecha son los que hacen legible la lista sin abrir nada: la
+// versión de lo instalado, el salto "vieja → nueva" de lo actualizable y la
+// marca de "(sin aprobar)" tanto en las novedades como en los proveedores —el
+// modelo de confianza hecho visible en la fila—.
+func (a *App) buildExtItems() {
+	var installed, updatable, available, providers []view.ExtItem
+
+	for _, i := range a.extInstalled {
+		label := i.Name
+		if label == "" {
+			label = i.ID
+		}
+		installed = append(installed, view.ExtItem{
+			Kind: view.ExtItemRemove, Label: label, Right: versionText(i.Version),
+			ID: i.ID, Provider: i.Provider, Ref: i.Ref(),
+		})
+	}
+	for _, u := range a.extUpdates {
+		right := u.OldVer + " → " + u.NewVer
+		if u.OldVer == "" {
+			right = "→ " + u.NewVer
+		}
+		updatable = append(updatable, view.ExtItem{
+			Kind: view.ExtItemUpdate, Label: u.Ref, Right: right, Ref: u.Ref,
+		})
+	}
+	for _, av := range a.extAvailable {
+		label := av.Name
+		if label == "" {
+			label = av.ID
+		}
+		right := versionText(av.Version)
+		if !av.Approved() {
+			right = strings.TrimSpace(right + " (sin aprobar)")
+		}
+		available = append(available, view.ExtItem{
+			Kind: view.ExtItemInstall, Label: label, Right: right,
+			ID: av.ID, Provider: av.Provider.Name, Ref: av.Ref(),
+		})
+	}
+	for _, p := range a.extProviders {
+		right := ""
+		if !p.Approved {
+			right = "(sin aprobar)"
+		}
+		providers = append(providers, view.ExtItem{Kind: view.ExtItemInfo, Label: p.Name, Right: right})
+	}
+	// Agregar proveedor es la ÚLTIMA fila de la pestaña, siempre presente: la
+	// ventana tiene que poder sumar una fuente sin salir a la terminal.
+	providers = append(providers, view.ExtItem{Kind: view.ExtItemAddProvider, Label: "+ Agregar proveedor"})
+
+	a.extManager.SetItems(view.ExtTabInstalled, installed)
+	a.extManager.SetItems(view.ExtTabUpdatable, updatable)
+	a.extManager.SetItems(view.ExtTabAvailable, available)
+	a.extManager.SetItems(view.ExtTabProviders, providers)
+}
+
+// versionText rotula una versión en las filas; una extensión sin versión en el
+// manifest no inventa un "v" suelto.
+func versionText(version string) string {
+	if version == "" {
+		return ""
+	}
+	return "v" + version
+}
+
+// handleExtIntent ejecuta la intención de la ventana: agregar proveedor o la
+// acción de la fila del cursor, con la confirmación que corresponda. La ventana
+// NO se cierra: la acción recarga los datos y la vista queda donde estaba. El
+// caller redibuja (o el pedido que se abre ya redibuja).
+func (a *App) handleExtIntent(intent view.ExtIntent) {
+	switch intent.Kind {
+	case view.ExtIntentAddProvider:
+		a.promptAddProvider()
+	case view.ExtIntentAction:
+		switch intent.Tab {
+		case view.ExtTabAvailable:
+			a.promptInstallExtension(intent.Item)
+		case view.ExtTabUpdatable:
+			a.promptUpdateExtension(intent.Item)
+		case view.ExtTabInstalled:
+			a.promptRemoveExtension(intent.Item)
+		}
+	}
+}
+
+// promptInstallExtension pide confirmación antes de instalar la novedad de la
+// fila. Un proveedor SIN aprobar no llega al pedido: instalar desde ahí es una
+// decisión de confianza que la ventana no toma —el aviso dice cómo hacerlo por la
+// CLI—, igual que el arranque no auto-instala novedades sin aprobar.
+//
+// La confirmación es el pedido Generalized (openPrompt) con el default NO, como
+// el borrado de archivos del explorador. El id se captura ACÁ: lo que alguien
+// escribe pertenece a la fila que estaba mirando.
+func (a *App) promptInstallExtension(item view.ExtItem) {
+	if !a.providerApproved(item.Provider) {
+		a.statusBar.SetMessage("El proveedor " + item.Provider + " no está aprobado: tcode --approve-provider " + item.Provider)
+		return
+	}
+	a.openPrompt("¿Instalar "+item.Ref+"? [s/N] ", "", func(answer string) error {
+		if !isYesAnswer(answer) {
+			a.statusBar.SetMessage("Cancelado")
+			return nil
+		}
+		return a.installExtension(item)
+	})
+}
+
+// installExtension instala la extensión por id con la MISMA ruta que la CLI
+// (ext.InstallByID, no una reinvención): resolución por orden de proveedores y
+// validación del manifest antes de tocar el destino. Los datos de la ventana se
+// recargan pase lo que pase —instalar agrega o quita filas— y el error, si lo
+// hay, lo muestra el pedido.
+//
+// Como en la CLI, la extensión recién instalada entra en la sesión SIGUIENTE:
+// recargar las extensiones en caliente no es idempotente.
+func (a *App) installExtension(item view.ExtItem) error {
+	providers, userRoot, err := extensionUserSources()
+	if err != nil {
+		return err
+	}
+	res, err := ext.InstallByID(item.ID, providers, userRoot, startupExtFetch, nil)
+	a.loadExtManagerData()
+	if err != nil {
+		return err
+	}
+	a.statusBar.SetMessage("Instalada: " + res.Ref() + " — disponible en la próxima sesión")
+	return nil
+}
+
+// promptUpdateExtension pide confirmación antes de actualizar. La aplicación
+// reusa ext.UpdateAll, que es el camino de la CLI: actualiza las extensiones
+// cuyas versiones difieren, que —con los datos recién cargados— son exactamente
+// las de la pestaña. Actualizar no vuelve a pedir confianza en el proveedor: la
+// extensión instalada salió de ahí, continuarla no es agregar una fuente.
+func (a *App) promptUpdateExtension(item view.ExtItem) {
+	a.openPrompt("¿Actualizar "+item.Ref+"? [s/N] ", "", func(answer string) error {
+		if !isYesAnswer(answer) {
+			a.statusBar.SetMessage("Cancelado")
+			return nil
+		}
+		providers, userRoot, err := extensionUserSources()
+		if err != nil {
+			return err
+		}
+		applied, errs := ext.UpdateAll(providers, userRoot, startupExtFetch)
+		a.loadExtManagerData()
+		msg := plural(len(applied), "actualización aplicada", "actualizaciones aplicadas")
+		if len(applied) == 0 {
+			msg = item.Ref + " ya estaba al día"
+		}
+		if len(errs) > 0 {
+			msg += " — con errores: " + errs[len(errs)-1].Error()
+		}
+		a.statusBar.SetMessage(msg)
+		return nil
+	})
+}
+
+// promptRemoveExtension pide confirmación antes de borrar la extensión
+// instalada de la fila. El borrado usa el camino de la CLI: RemoveNamespaced para
+// lo namespaced (proveedor + id, que es como se instaló) y Remove para la
+// instalación plana heredada, que no tiene proveedor.
+func (a *App) promptRemoveExtension(item view.ExtItem) {
+	a.openPrompt("¿Eliminar "+item.Ref+"? [s/N] ", "", func(answer string) error {
+		if !isYesAnswer(answer) {
+			a.statusBar.SetMessage("Cancelado")
+			return nil
+		}
+		var err error
+		if item.Provider != "" {
+			err = ext.RemoveNamespaced(a.extUserRoot, item.Provider, item.ID)
+		} else {
+			err = ext.Remove(a.extUserRoot, item.ID)
+		}
+		a.loadExtManagerData()
+		if err != nil {
+			return err
+		}
+		a.statusBar.SetMessage("Eliminada: " + item.Ref)
+		return nil
+	})
+}
+
+// providerApproved dice si el proveedor de la fila es de confianza. Con el
+// nombre vacío no hay de dónde instalar: la instalación plana heredada no se
+// reinstala desde un proveedor, así que la fila no ofrece instalar.
+func (a *App) providerApproved(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, p := range a.extProviders {
+		if p.Name == name {
+			return p.Approved
+		}
+	}
+	return false
+}
+
+// promptAddProvider abre el pedido de texto para agregar una fuente (URL de git
+// o ruta de carpeta), con el mismo openPrompt que el resto de los pedidos.
+func (a *App) promptAddProvider() {
+	a.openPrompt("Agregar proveedor (URL o carpeta): ", "", func(source string) error {
+		return a.addProviderSource(source)
+	})
+}
+
+// addProviderSource registra la fuente escrita en el pedido. Es el mismo camino
+// que --add-provider de la CLI, con sus mismas reglas: tiene que ser una URL o
+// una carpeta existente (si no, es un error de tipeo y se dice), el nombre se
+// deriva de la fuente y no puede duplicar uno ya registrado (el nombre es la
+// identidad del namespacing), y se guarda SIN aprobar: agregar una fuente no es
+// confiar en ella. La validación de la forma del proveedor es la misma de la CLI
+// (ValidateProviderSource, solo manifests), así que agregar no valida una ilusión
+// que después no se sostiene.
+func (a *App) addProviderSource(source string) error {
+	source = strings.TrimSpace(source)
+	if source == "" {
+		return errors.New("la fuente del proveedor no puede estar vacía")
+	}
+	if !ext.IsLocalSource(source) && !ext.IsRemoteSource(source) {
+		return fmt.Errorf("%q no es una URL de git ni una carpeta existente", source)
+	}
+	path, err := providersConfigPath()
+	if err != nil {
+		return err
+	}
+	name, err := ext.DeriveName(source)
+	if err != nil {
+		return err
+	}
+	canonical, err := ext.CanonicalSource(source)
+	if err != nil {
+		return err
+	}
+	p := ext.Provider{Name: name, Source: canonical, Approved: false}
+
+	stored, err := ext.LoadProviders(path)
+	if err != nil {
+		return err
+	}
+	for _, s := range stored {
+		if s.Name == name {
+			return fmt.Errorf("ya está registrado el proveedor %q", name)
+		}
+	}
+	if p.Name == ext.DefaultProvider().Name {
+		return fmt.Errorf("%q ya es el proveedor por defecto", name)
+	}
+	if _, err := ext.ValidateProviderSource(p, startupExtFetch); err != nil {
+		return err
+	}
+	if err := ext.SaveProviders(path, append(stored, p)); err != nil {
+		return err
+	}
+	// La ventana se recarga para que el proveedor nuevo aparezca en su lista,
+	// marcado como sin aprobar.
+	a.loadExtManagerData()
+	a.statusBar.SetMessage("Proveedor agregado (sin aprobar): " + name)
+	return nil
 }
 
 // toggleMenu abre o cierra el menú de pestañas. Abrir lo dimensiona a la

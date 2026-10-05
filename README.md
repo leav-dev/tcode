@@ -156,6 +156,7 @@ Los binarios de otro SO **no** se pueden ejecutar ni testear en el anfitrión:
 | Cambiar pestaña | `Ctrl+PageDown` / `Ctrl+PageUp` · `Ctrl+K` (siguiente) / `Ctrl+L` (anterior) |
 | Menú de pestañas | `Ctrl+T` |
 | Configuración | `Ctrl+P` |
+| Gestionar extensiones | `Ctrl+P` → fila **Extensiones**: ventana flotante con pestañas (instaladas, actualizables, disponibles, proveedores). `Left`/`Right` cambia de pestaña, `Enter` instala / actualiza / borra la fila del cursor —con confirmación— y desde la pestaña de proveedores se agrega una fuente |
 | Salto de palabra | `Ctrl+Shift+W` |
 | Deshacer / rehacer | `Ctrl+Z` / `Ctrl+Y` o `Ctrl+Shift+Z` |
 | Instalar una extensión por id | `tcode --install-extension tcode.vimlite` |

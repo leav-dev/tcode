@@ -255,6 +255,39 @@ hoy el camino único es git.
 > checkout sigue acotando el materializado, así que el comportamiento observable
 > (no bajar los `.lua`) se mantiene igual.
 
+## Gestión desde el editor (ventana de extensiones)
+
+Todo lo que la CLI hace se puede hacer sin salir del editor: `Ctrl+P` abre la
+ventana de configuración, y su última fila —**Extensiones**— abre una **ventana
+flotante** de gestión. Es una ventana de **pestañas**, una por sección, y sus datos se
+leen **al abrir** (y después de cada acción), nunca en cada tecla: listar un proveedor
+es E/S con git.
+
+| Pestaña | Qué muestra |
+| --- | --- |
+| **Instaladas** | Las extensiones instaladas, con su versión y su proveedor |
+| **Actualizables** | Las instaladas cuyo proveedor ofrece otra versión, con el salto `vieja → nueva` |
+| **Disponibles** | Las que los proveedores ofrecen y no están instaladas |
+| **Proveedores** | Las fuentes registradas, con la fila `+ Agregar proveedor` al final |
+
+| Tecla | Qué hace |
+| --- | --- |
+| `Left` / `Right` | Cambia de pestaña (con wrap) |
+| `Up` / `Down`, `PgUp` / `PgDn`, `Home` / `End` | Mueve el cursor en la pestaña |
+| `Enter` | Actúa **según la fila**: Disponible → instala; Actualizable → actualiza; Instalada → borra; `+ Agregar proveedor` → pide la URL o la carpeta |
+| `Escape` (o cualquier tecla ajena) | Cierra la ventana descartando |
+
+Los tres actos que traen o borran código —**instalar, actualizar y borrar**— piden
+**confirmación sí/no** antes de tocar el disco (solo `s` confirma; el default es NO).
+Las novedades de un proveedor **sin aprobar** se listan marcadas: instalarlas sigue
+exigiendo la aprobación del modelo de confianza, así que la ventana no es una puerta
+trasera a lo que `--install-extension` pide confirmar.
+
+La ventana **no reimplementa nada**: llama a las mismas funciones que la CLI
+(`InstallByID`, `CheckUpdates`/`UpdateAll`, `RemoveNamespaced`, `CanonicalSource` +
+`DeriveName` + `SaveProviders`). Una acción que falla se reporta en la barra de estado
+y la ventana queda abierta con los datos recargados.
+
 ## El manifest (`extension.json`)
 
 ```json
