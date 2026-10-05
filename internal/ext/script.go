@@ -27,6 +27,11 @@ type ScriptAPI interface {
 	// con desaparición automática): kind es "success" (default) o "error";
 	// un kind desconocido es un error.
 	Notify(msg string, kind string) error
+	// SetSection escribe una sección de la barra de estado con el id de la
+	// extensión (p. ej. su manifest id): cada extensión tiene su propia
+	// sección y no pisa a las demás. Texto vacío remueve la sección; id
+	// vacío es un error.
+	SetSection(id string, text string) error
 	// LineCount devuelve el número de líneas del buffer activo; ok es false
 	// cuando no hay buffer abierto.
 	LineCount() (n int, ok bool)
@@ -154,6 +159,22 @@ func NewScriptHost(code string, api ScriptAPI, source string) (*ScriptHost, erro
 		}
 		return 0
 	}))
+	// tcode.statusBar.setSection(id, text): escribe la sección de la extensión
+	// en la barra de estado, sin pisar las de las demás. Texto vacío remueve
+	// la sección; id vacío es un error de Lua.
+	statusBar := L.NewTable()
+	L.SetField(statusBar, "setSection", L.NewFunction(func(L *lua.LState) int {
+		id := L.CheckString(1)
+		text := L.CheckString(2)
+		if id == "" {
+			L.RaiseError("tcode.statusBar.setSection: el id no puede estar vacío")
+		}
+		if err := api.SetSection(id, text); err != nil {
+			L.RaiseError("%v", err)
+		}
+		return 0
+	}))
+	L.SetField(tcode, "statusBar", statusBar)
 	// tcode.error(msg): fallo declarado del propio script; Call lo devuelve
 	// envuelto para que el controlador lo muestre como causa.
 	L.SetField(tcode, "error", L.NewFunction(func(L *lua.LState) int {

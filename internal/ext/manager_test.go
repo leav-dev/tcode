@@ -311,6 +311,7 @@ func (a *forwardAPI) ActiveBuffer() (string, string, bool)                      
 func (a *forwardAPI) InsertAtCursor(text string) error                             { return nil }
 func (a *forwardAPI) StatusMessage(msg string)                                     {}
 func (a *forwardAPI) Notify(msg, kind string) error                              { return nil }
+func (a *forwardAPI) SetSection(id, text string) error                            { return nil }
 func (a *forwardAPI) LineCount() (int, bool)                                       { return 0, false }
 func (a *forwardAPI) Line(n int) (string, bool)                                    { return "", false }
 func (a *forwardAPI) SetDiagnostics(source string, d []view.Diagnostic) error      { return nil }

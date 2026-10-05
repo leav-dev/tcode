@@ -122,6 +122,94 @@ func TestStatusBarClearMessage(t *testing.T) {
 	}
 }
 
+func TestStatusBarDrawsSectionsBetweenLabelAndMessage(t *testing.T) {
+	s := newStatusScreen(t, 60)
+	bar := NewStatusBar()
+	bar.SetFile("main.go", false)
+	bar.SetMessage("Recargado")
+	bar.SetSections(map[string]string{"tcode.gitchanges": "Git: 3 files"})
+	bar.Draw(s, 0, 60)
+
+	got := statusRow(t, s)
+	if !strings.Contains(got, "main.go") {
+		t.Fatalf("barra = %q, se esperaba el archivo a la izquierda", got)
+	}
+	if !strings.Contains(got, "Git: 3 files") {
+		t.Fatalf("barra = %q, se esperaba la sección de la extensión", got)
+	}
+	if !strings.HasSuffix(got, "Recargado") {
+		t.Fatalf("barra = %q, se esperaba el mensaje a la derecha", got)
+	}
+}
+
+func TestStatusBarDrawsSectionsSortedByID(t *testing.T) {
+	// El orden de id es el orden de la barra: no puede cambiar entre
+	// redibujos.
+	s := newStatusScreen(t, 60)
+	bar := NewStatusBar()
+	bar.SetFile("main.go", false)
+	bar.SetSections(map[string]string{
+		"tcode.zzz": "tercera",
+		"tcode.aaa": "primera",
+		"tcode.mmm": "segunda",
+	})
+	bar.Draw(s, 0, 60)
+
+	got := statusRow(t, s)
+	if !strings.Contains(got, "primera  segunda  tercera") {
+		t.Fatalf("barra = %q, se esperaba las secciones en orden de id", got)
+	}
+}
+
+func TestStatusBarDrawsSectionsWithoutMessage(t *testing.T) {
+	s := newStatusScreen(t, 60)
+	bar := NewStatusBar()
+	bar.SetFile("main.go", false)
+	bar.SetSections(map[string]string{"tcode.gitchanges": "Git: 3 files"})
+	bar.Draw(s, 0, 60)
+
+	got := statusRow(t, s)
+	if !strings.Contains(got, "main.go") || !strings.Contains(got, "Git: 3 files") {
+		t.Fatalf("barra = %q, se esperaba etiqueta y sección sin mensaje", got)
+	}
+}
+
+func TestStatusBarSectionsTruncateBeforeTheLabel(t *testing.T) {
+	// Con mensaje y ancho choco: el mensaje gana, la etiqueta conserva
+	// su lugar y las secciones se recortan primero.
+	s := newStatusScreen(t, 30)
+	bar := NewStatusBar()
+	bar.SetFile("main.go", false)
+	bar.SetMessage("Recargado")
+	bar.SetSections(map[string]string{"ext": "una sección larguísima"})
+	bar.Draw(s, 0, 30)
+
+	got := statusRow(t, s)
+	if !strings.Contains(got, "main.go") {
+		t.Fatalf("barra = %q, la etiqueta gana sobre las secciones", got)
+	}
+	if !strings.HasSuffix(got, "Recargado") {
+		t.Fatalf("barra = %q, el mensaje tiene prioridad", got)
+	}
+	if w := displayWidth(got); w > 30 {
+		t.Fatalf("barra = %q (%d columnas), se esperaba recortada a 30", got, w)
+	}
+}
+
+func TestStatusBarEmptySectionsLeaveTheBarAsBefore(t *testing.T) {
+	s := newStatusScreen(t, 40)
+	bar := NewStatusBar()
+	bar.SetFile("main.go", false)
+	bar.SetMessage("Guardado")
+	bar.SetSections(map[string]string{})
+	bar.Draw(s, 0, 40)
+
+	got := statusRow(t, s)
+	if !strings.HasPrefix(got, "main.go") || !strings.HasSuffix(got, "Guardado") {
+		t.Fatalf("barra = %q, se esperaba el comportamiento de siempre sin secciones", got)
+	}
+}
+
 func TestStatusBarWithWideCharactersStaysAligned(t *testing.T) {
 	s := newStatusScreen(t, 40)
 	bar := NewStatusBar()

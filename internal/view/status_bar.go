@@ -2,19 +2,22 @@ package view
 
 import (
 	"path/filepath"
+	"sort"
+	"strings"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/uniseg"
 )
 
 // StatusBar es la Screen inferior: muestra el archivo abierto, si hay cambios sin
-// guardar y el último mensaje.
+// guardar, las secciones de las extensiones y el último mensaje.
 type StatusBar struct {
 	path     string
 	modified bool
 	message  string
 	prompt   string
 	theme    Theme
+	sections map[string]string
 }
 
 func NewStatusBar() *StatusBar { return &StatusBar{} }
@@ -37,6 +40,16 @@ func (s *StatusBar) ClearMessage() { s.message = "" }
 // SetPrompt muestra un pedido de texto en la barra, en lugar de la etiqueta del
 // archivo. Se usa para Save As.
 func (s *StatusBar) SetPrompt(text string) { s.prompt = text }
+
+// SetSections reemplaza las secciones de las extensiones (id → texto) del
+// buffer activo. El controlador las empuja en syncStatus; la vista solo dibuja.
+// Se copia el mapa: la vista es dueña de su snapshot.
+func (s *StatusBar) SetSections(sections map[string]string) {
+	s.sections = make(map[string]string, len(sections))
+	for id, text := range sections {
+		s.sections[id] = text
+	}
+}
 
 // label es el texto de la izquierda: el pedido activo o el nombre del archivo con
 // su marca de modificación.
@@ -64,6 +77,29 @@ func (s *StatusBar) Label() string { return s.label() }
 // Message expone el mensaje transitorio actual. Pensado para tests.
 func (s *StatusBar) Message() string { return s.message }
 
+// Sections expone las secciones del buffer activo (id → texto). Pensado para
+// tests.
+func (s *StatusBar) Sections() map[string]string { return s.sections }
+
+// sectionsText devuelve las secciones del buffer activo en orden de id,
+// separadas por dos espacios. Orden estable: la barra no puede cambiar entre
+// redibujos.
+func (s *StatusBar) sectionsText() string {
+	if len(s.sections) == 0 {
+		return ""
+	}
+	ids := make([]string, 0, len(s.sections))
+	for id := range s.sections {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	parts := make([]string, 0, len(ids))
+	for _, id := range ids {
+		parts = append(parts, s.sections[id])
+	}
+	return strings.Join(parts, "  ")
+}
+
 // Draw pinta la barra completa en la fila y.
 func (s *StatusBar) Draw(sc tcell.Screen, y, width int) {
 	if width <= 0 {
@@ -73,6 +109,7 @@ func (s *StatusBar) Draw(sc tcell.Screen, y, width int) {
 	th := themeOr(s.theme)
 	status := th.Status
 	message := th.Message
+	section := th.Section
 
 	// Fondo de la barra: se limpia la fila con su estilo.
 	for x := 0; x < width; x++ {
@@ -80,8 +117,14 @@ func (s *StatusBar) Draw(sc tcell.Screen, y, width int) {
 	}
 
 	label := s.label()
+	sections := s.sectionsText()
+
 	if s.message == "" {
-		writeString(sc, 0, y, label, status, width)
+		// Sin mensaje: la etiqueta y las secciones ocupan la barra.
+		col := writeString(sc, 0, y, label, status, width)
+		if sections != "" && col < width {
+			writeString(sc, col, y, "  "+sections, section, width-col)
+		}
 		return
 	}
 
@@ -97,8 +140,14 @@ func (s *StatusBar) Draw(sc tcell.Screen, y, width int) {
 	}
 
 	start := width - msgWidth
-	// La etiqueta cede: como mucho ocupa hasta la celda anterior al mensaje.
-	writeString(sc, 0, y, label, status, start-1)
+	// La etiqueta y las secciones ceden: como mucho ocupan hasta la celda
+	// anterior al mensaje. Entre ellas, la etiqueta gana: las secciones se
+	// recortan antes que el nombre del archivo.
+	left := start - 1
+	col := writeString(sc, 0, y, label, status, left)
+	if sections != "" && col < left {
+		writeString(sc, col, y, "  "+sections, section, left-col)
+	}
 	writeString(sc, start, y, s.message, message, msgWidth)
 }
 

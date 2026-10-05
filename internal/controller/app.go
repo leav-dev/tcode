@@ -48,6 +48,12 @@ type App struct {
 	// trae un seq menor y el manejador lo ignora.
 	toastSeq int
 
+	// sections guarda las secciones de la barra de estado por buffer: cada
+	// extensión escribe la suya (tcode.statusBar.setSection) sin pisar a las
+	// demás. La clave es el puntero del buffer: al cerrarlo, sus secciones se
+	// borran; al cambiar de buffer, syncStatus empuja las del activo.
+	sections map[*model.PieceTable]map[string]string
+
 	// editorSurf es la superficie recortada con la que se componen los dos
 	// panes del redibujo: el explorador y el editor activo. Se reusa entre
 	// redibujos: el controlador la reencuadra con SetRegion (primero para el
@@ -201,6 +207,7 @@ func NewAppWithScreen(s tcell.Screen, path string) (*App, error) {
 		ws:         ws,
 		editors:    make(map[*model.PieceTable]*view.EditorView),
 		forceSave:  make(map[*model.PieceTable]bool),
+		sections:   make(map[*model.PieceTable]map[string]string),
 		statusBar:  view.NewStatusBar(),
 		tabBar:     view.NewTabBar(),
 		toast:      view.NewToast(),
@@ -897,6 +904,30 @@ func (a *App) Notify(msg string, kind string) error {
 	return nil
 }
 
+// SetSection escribe la sección de una extensión en la barra de estado
+// (ScriptAPI): cada extensión tiene su propia sección, identificada, y no pisa
+// a las demás. Texto vacío remueve la sección; id vacío o sin buffer activo
+// son errores legibles.
+func (a *App) SetSection(id string, text string) error {
+	if id == "" {
+		return errors.New("tcode.statusBar.setSection: el id no puede estar vacío")
+	}
+	buf := a.activeBuffer()
+	if buf == nil {
+		return errors.New("sin buffer activo")
+	}
+	if a.sections[buf] == nil {
+		a.sections[buf] = map[string]string{}
+	}
+	if text == "" {
+		delete(a.sections[buf], id)
+	} else {
+		a.sections[buf][id] = text
+	}
+	a.statusBar.SetSections(a.sections[buf])
+	return nil
+}
+
 // LineCount devuelve la cantidad de líneas del buffer activo (ScriptAPI);
 // sin buffer activo, ok=false, como ActiveBuffer.
 func (a *App) LineCount() (int, bool) {
@@ -996,9 +1027,13 @@ func (a *App) syncStatus() {
 	buf := a.activeBuffer()
 	if buf == nil {
 		a.statusBar.SetFile("", false)
+		a.statusBar.SetSections(nil)
 		return
 	}
 	a.statusBar.SetFile(buf.Path(), buf.Modified())
+	// Las secciones son del buffer activo: al cambiar de pestaña la barra
+	// muestra las del buffer nuevo, sin datos stale.
+	a.statusBar.SetSections(a.sections[buf])
 }
 
 // Los diagnósticos se muestran inline, a la derecha de cada línea anotada
@@ -2091,6 +2126,7 @@ func (a *App) closeBuffersUnder(keys []string) {
 		}
 		delete(a.editors, buf)
 		delete(a.forceSave, buf)
+		delete(a.sections, buf)
 		a.emitEvent(ext.EventDidCloseBuffer)
 	}
 }
@@ -2832,11 +2868,12 @@ func (a *App) closeTab() {
 		return
 	}
 
-	// El buffer cerró: su vista y su permiso de pisar dejan de existir. La
-	// entrada vieja del mapa apuntaría a un PieceTable ya desmapeado, y el
-	// permiso autorizó a un archivo que ya no está abierto.
+	// El buffer cerró: su vista, su permiso de pisar y sus secciones dejan de
+	// existir. La entrada vieja del mapa apuntaría a un PieceTable ya
+	// desmapeado, y el permiso autorizó a un archivo que ya no está abierto.
 	delete(a.editors, buf)
 	delete(a.forceSave, buf)
+	delete(a.sections, buf)
 	a.emitEvent(ext.EventDidCloseBuffer)
 	a.confirmClose = false
 	a.statusBar.ClearMessage()

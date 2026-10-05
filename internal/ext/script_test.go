@@ -20,6 +20,7 @@ type fakeAPI struct {
 	cmds            []string
 	msgs            []string
 	notifs          []notif
+	sections        map[string]string
 	inserted        []string
 	path            string
 	content         string
@@ -58,6 +59,18 @@ func (f *fakeAPI) StatusMessage(msg string) { f.msgs = append(f.msgs, msg) }
 
 func (f *fakeAPI) Notify(msg, kind string) error {
 	f.notifs = append(f.notifs, notif{msg: msg, kind: kind})
+	return nil
+}
+
+func (f *fakeAPI) SetSection(id, text string) error {
+	if f.sections == nil {
+		f.sections = map[string]string{}
+	}
+	if text == "" {
+		delete(f.sections, id)
+	} else {
+		f.sections[id] = text
+	}
 	return nil
 }
 
@@ -169,6 +182,56 @@ func TestScriptHostNotifyRejectsNonStringKind(t *testing.T) {
 	err = h.Call("main")
 	if err == nil || !strings.Contains(err.Error(), "kind") {
 		t.Fatalf("Call = %v, esperaba error nombrando el kind", err)
+	}
+}
+
+// TestScriptHostSetSection: tcode.statusBar.setSection enruta al editor con
+// el id y el texto pedidos; el texto vacío remueve la sección y el id vacío
+// es un error de Lua.
+func TestScriptHostSetSection(t *testing.T) {
+	api := &fakeAPI{}
+	h, err := NewScriptHost(`
+		function main()
+			tcode.statusBar.setSection("tcode.gitchanges", "Git: 3 files")
+			tcode.statusBar.setSection("tcode.gitchanges", "")
+			tcode.statusBar.setSection("tcode.linter", "2 issues")
+		end
+	`, api, "src")
+	if err != nil {
+		t.Fatalf("NewScriptHost falló: %v", err)
+	}
+	defer h.Close()
+
+	if err := h.Call("main"); err != nil {
+		t.Fatalf("Call falló: %v", err)
+	}
+	want := map[string]string{"tcode.linter": "2 issues"}
+	if len(api.sections) != len(want) {
+		t.Fatalf("secciones = %v, esperaba %v", api.sections, want)
+	}
+	for id, text := range want {
+		if api.sections[id] != text {
+			t.Errorf("sección %q = %q, se esperaba %q", id, api.sections[id], text)
+		}
+	}
+}
+
+// TestScriptHostSetSectionRejectsEmptyID: el id vacío es un error de Lua
+// claro, igual que los demás errores de la API tcode.*.
+func TestScriptHostSetSectionRejectsEmptyID(t *testing.T) {
+	h, err := NewScriptHost(`
+		function main()
+			tcode.statusBar.setSection("", "texto")
+		end
+	`, &fakeAPI{}, "src")
+	if err != nil {
+		t.Fatalf("NewScriptHost falló: %v", err)
+	}
+	defer h.Close()
+
+	err = h.Call("main")
+	if err == nil || !strings.Contains(err.Error(), "id") {
+		t.Fatalf("Call = %v, esperaba error nombrando el id", err)
 	}
 }
 
