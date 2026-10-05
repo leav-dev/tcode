@@ -19,15 +19,15 @@ Comportamiento nuevo en `ensureCursorVisible` (solo la parte vertical):
 - El ÁRBOL (FileBrowser) mantiene su scroll mínimo: el cambio es del editor.
 
 ## Tasks
-- [ ] `EditorView.ensureCursorVisible`: centrado vertical por línea lógica con
+- [x] `EditorView.ensureCursorVisible`: centrado vertical por línea lógica con
   clamp; red de seguridad de filas visuales; horizontal intacto <!-- id: 0 -->
-- [ ] Ajustar los tests del editor que esperan scroll mínimo (los del
+- [x] Ajustar los tests del editor que esperan scroll mínimo (los del
   viewport/top de cursor_test.go, wrap_render_test.go y editor_view_test.go)
   a la nueva semántica, sin cambiar el resto de la aserción <!-- id: 1 -->
-- [ ] Tests nuevos: cursor en el medio → top = línea - mitad; en la 1ª línea
+- [x] Tests nuevos: cursor en el medio → top = línea - mitad; en la 1ª línea
   de un doc largo → top 0 (borde); en la última → top = LineCount - Height
   (borde abajo); doc más corto que el viewport → top 0 <!-- id: 2 -->
-- [ ] Verificación y commit <!-- id: 3 -->
+- [x] Verificación y commit: `5b79a72` <!-- id: 3 -->
 
 ## Design decisions
 - **Por línea lógica (no por fila visual):** coherente con el modelo de scroll
