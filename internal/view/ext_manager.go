@@ -404,21 +404,21 @@ func (m *ExtManager) Draw(s Surface) {
 	}
 
 	// Filas visibles de la pestaña activa: interior desde la fila 1, una fila
-	// por item a partir de su top. La del cursor se pinta entera con la barra de
-	// selección (TreeCursor) sobre el ancho interior; las demás solo escriben su
-	// texto.
+	// por item a partir de su top. TODA fila se pinta entera ANTES de su texto
+	// —la del cursor con la barra de selección, las demás con el estilo base—:
+	// sin eso, una fila sin item deja ver el documento de atrás y la ventana
+	// flotante parece transparente, que es justo lo que confunde.
 	items := m.items[m.tab]
 	top := m.tops[m.tab]
 	for row := range m.visibleRows() {
 		idx := top + row
 		y := row + 1
 		style := th.Text
-		cursorRow := idx == m.cursors[m.tab] && idx < len(items)
-		if cursorRow {
+		if idx == m.cursors[m.tab] && idx < len(items) {
 			style = th.TreeCursor
-			for col := 1; col < m.width-1; col++ {
-				s.SetContent(col, y, ' ', nil, style)
-			}
+		}
+		for col := 1; col < m.width-1; col++ {
+			s.SetContent(col, y, ' ', nil, style)
 		}
 
 		var label, right string

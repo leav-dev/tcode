@@ -133,6 +133,68 @@ func TestUIRendersTheCreatePrompt(t *testing.T) {
 	}
 }
 
+// TestUIRendersTheExtensionWindowInteriorOpaque: las filas del interior que no
+// tienen item se pintan igual. Sin eso, el documento de atrás se lee a través de
+// la ventana y la ventana flotante parece transparente — el reporte del usuario
+// fue exactamente eso: "cuando no tiene que renderizar líneas no rellena el
+// fondo, esto puede llevar a confusiones".
+//
+// El alto de la ventana es FIJO (ExtManagerHeight), así que sobrar filas no es un
+// caso raro: es lo normal con pocos items.
+func TestUIRendersTheExtensionWindowInteriorOpaque(t *testing.T) {
+	resetConfigVars(t)
+	// Un marcador que no debe poder leerse DENTRO del marco. Va en MUCHAS
+	// líneas a propósito: la ventana tapa filas muy por debajo de la primera, y
+	// con una sola línea el fondo de atrás quedaría vacío y el test no probaría
+	// nada.
+	app, _ := newTestApp(t, strings.Repeat(strings.Repeat("Z", 200)+"\n", 40))
+	resizeApp(app, 80, 25)
+
+	app.handleEvent(tcell.NewEventKey(tcell.KeyCtrlP, 0, tcell.ModNone))
+	app.handleEvent(tcell.NewEventKey(tcell.KeyEnd, 0, tcell.ModNone))
+	app.handleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	if !app.extActive {
+		t.Fatalf("la ventana de extensiones debe abrirse:%s", screenDump(app))
+	}
+
+	for y, row := range screenRows(app) {
+		left := strings.Index(row, "│")
+		right := strings.LastIndex(row, "│")
+		if left < 0 || right <= left {
+			continue // no es una fila interior de la ventana
+		}
+		if inner := row[left+1 : right]; strings.Contains(inner, "Z") {
+			t.Fatalf("fila %d: el documento se lee a través de la ventana; el interior no se rellenó:%s", y, screenDump(app))
+		}
+	}
+}
+
+// TestUIRendersTheConfigMenuInteriorOpaque cubre el mismo defecto en la ventana
+// de configuración. Hoy su alto es exactamente el de sus filas, así que no sobran
+// —pero el bug era el mismo (solo la fila del cursor pintaba su fondo), y una
+// fila de más lo haría visible.
+func TestUIRendersTheConfigMenuInteriorOpaque(t *testing.T) {
+	resetConfigVars(t)
+	app, _ := newTestApp(t, strings.Repeat(strings.Repeat("Z", 200)+"\n", 40))
+	resizeApp(app, 80, 25)
+
+	app.handleEvent(tcell.NewEventKey(tcell.KeyCtrlP, 0, tcell.ModNone))
+	if !app.configActive {
+		t.Fatal("Ctrl+P debe abrir la configuración")
+	}
+
+	for y, row := range screenRows(app) {
+		left := strings.Index(row, "│")
+		right := strings.LastIndex(row, "│")
+		if left < 0 || right <= left {
+			continue
+		}
+		if inner := row[left+1 : right]; strings.Contains(inner, "Z") {
+			t.Fatalf("fila %d: el documento se lee a través de la configuración:%s", y, screenDump(app))
+		}
+	}
+}
+
 // TestUIRendersTheDeletePrompt: Delete sobre el nodo del cursor dibuja el pedido
 // sí/no con el nombre del archivo.
 func TestUIRendersTheDeletePrompt(t *testing.T) {

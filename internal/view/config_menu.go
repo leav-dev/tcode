@@ -377,23 +377,24 @@ func (m *ConfigMenu) Draw(s Surface) {
 		writeString(s, 0, 0, title, th.Text, m.width)
 	}
 
-	// Filas visibles: interior desde la fila 1, una fila por item a partir de
-	// top. La del cursor se pinta entera con la barra de selección (TreeCursor)
-	// sobre el ancho interior; las demás solo escriben su texto.
+	// Toda fila del interior se pinta entera ANTES de escribir su texto. Sin
+	// esto, una fila sin item —o el resto de una fila cuyo texto no llega al
+	// ancho— deja ver el documento de atrás, y la ventana flotante parece
+	// transparente: se lee el archivo a través de ella y confunde.
 	for row := 0; row < m.height-2; row++ {
+		y := row + 1
 		idx := m.top + row
+		style := th.Text
+		if idx == m.cursor && idx < len(items) {
+			style = th.TreeCursor
+		}
+		for x := 1; x < m.width-1; x++ {
+			s.SetContent(x, y, ' ', nil, style)
+		}
 		if idx >= len(items) {
-			break
+			continue
 		}
 		it := items[idx]
-		y := row + 1
-		style := th.Text
-		if idx == m.cursor {
-			style = th.TreeCursor
-			for x := 1; x < m.width-1; x++ {
-				s.SetContent(x, y, ' ', nil, style)
-			}
-		}
 		text := it.label
 		if gap := m.width - 2 - displayWidth(text) - displayWidth(configValueText(it)); gap > 0 {
 			text += strings.Repeat(" ", gap)
