@@ -1,0 +1,172 @@
+package controller
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/gdamore/tcell/v2"
+	"tcode/internal/view"
+)
+
+// resetConfigVars fija las vars globales de configuración de view a sus
+// defaults al inicio de cada test y las restaura al final (t.Cleanup): las
+// vars son GLOBALES y un test que las mute contagiaria al siguiente.
+func resetConfigVars(t *testing.T) {
+	t.Helper()
+	view.SetIndentSize(4)
+	view.SetWordWrapEnabled(true)
+	view.SetExplorerWidth(24)
+	t.Cleanup(func() {
+		view.SetIndentSize(4)
+		view.SetWordWrapEnabled(true)
+		view.SetExplorerWidth(24)
+	})
+}
+
+// tmpConfigFile remapea configFilePath a un archivo del TempDir del test y lo
+// restaura al final, con el mismo patrón que themeFilePath en theme_test.go.
+// Devuelve la ruta del archivo de configuración.
+func tmpConfigFile(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	old := configFilePath
+	configFilePath = func() string { return filepath.Join(dir, "config.json") }
+	t.Cleanup(func() { configFilePath = old })
+	return filepath.Join(dir, "config.json")
+}
+
+// TestCtrlCommaTogglesTheConfigWindow: Ctrl+, abre la ventana flotante de
+// configuración (también con el workspace vacío, como el explorador), una
+// tecla ajena la cierra descartando, y ninguna de las dos cierra el editor.
+func TestCtrlCommaTogglesTheConfigWindow(t *testing.T) {
+	resetConfigVars(t)
+	app, _ := newTestApp(t, "uno")
+
+	if quit := app.handleEvent(tcell.NewEventKey(tcell.KeyRune, ',', tcell.ModCtrl)); quit {
+		t.Fatal("Ctrl+, no debe cerrar el editor")
+	}
+	if !app.configActive {
+		t.Fatal("Ctrl+, debe abrir la ventana de configuración")
+	}
+
+	// Una tecla ajena la cierra descartando, sin cerrar el editor.
+	if quit := app.handleEvent(tcell.NewEventKey(tcell.KeyRune, 'x', tcell.ModNone)); quit {
+		t.Fatal("la tecla ajena con la ventana abierta no debe cerrar el editor")
+	}
+	if app.configActive {
+		t.Fatal("una tecla ajena debe cerrar la ventana de configuración")
+	}
+
+	// Ctrl+, de nuevo la abre y Escape la cierra.
+	if quit := app.handleEvent(tcell.NewEventKey(tcell.KeyRune, ',', tcell.ModCtrl)); quit {
+		t.Fatal("Ctrl+, no debe cerrar el editor")
+	}
+	if !app.configActive {
+		t.Fatal("Ctrl+, debe volver a abrir la ventana de configuración")
+	}
+	pressed := app.handleEvent(tcell.NewEventKey(tcell.KeyEscape, 0, tcell.ModNone))
+	if app.configActive {
+		t.Fatal("Escape debe cerrar la ventana de configuración")
+	}
+	if pressed {
+		t.Fatal("Escape consumido por la ventana no debe cerrar el editor")
+	}
+
+	// Con el workspace vacío (modo explorador) también abre: la configuración
+	// existe sin buffers.
+	app2 := newExplorerApp(t, t.TempDir())
+	if quit := app2.handleEvent(tcell.NewEventKey(tcell.KeyRune, ',', tcell.ModCtrl)); quit {
+		t.Fatal("Ctrl+, sin buffers no debe cerrar el editor")
+	}
+	if !app2.configActive {
+		t.Fatal("Ctrl+, debe abrir la configuración también con el workspace vacío")
+	}
+}
+
+// TestConfigChangePersists: mutar una fila de la ventana aplica el ajuste a la
+// config viva del editor y escribe config.json en ~/.tcode; los demás ajustes
+// quedan intactos.
+func TestConfigChangePersists(t *testing.T) {
+	resetConfigVars(t)
+	path := tmpConfigFile(t)
+	app, _ := newTestApp(t, "uno")
+
+	// Abrir y mover: Right en "Tab size" → indent 5.
+	app.handleEvent(tcell.NewEventKey(tcell.KeyRune, ',', tcell.ModCtrl))
+	if !app.configActive {
+		t.Fatal("Ctrl+, debe abrir la ventana de configuración")
+	}
+	if quit := app.handleEvent(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone)); quit {
+		t.Fatal("Right dentro de la ventana no debe cerrar el editor")
+	}
+	if got := view.IndentSize(); got != 5 {
+		t.Fatalf("IndentSize() = %d tras Right, se esperaba 5", got)
+	}
+	if !app.configActive {
+		t.Fatal("mutar una fila no debe cerrar la ventana de configuración")
+	}
+	if !view.WordWrapEnabled() || view.ExplorerWidth() != 24 {
+		t.Fatal("mutar Tab size no debe tocar los demás ajustes")
+	}
+
+	// El cambio se persiste en config.json.
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("config.json debe escribirse al mutar: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("no se pudo leer config.json: %v", err)
+	}
+	var cfg configFile
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("config.json no parsea: %v", err)
+	}
+	if cfg.IndentUnit != 5 {
+		t.Fatalf("IndentUnit en disco = %d, se esperaba 5", cfg.IndentUnit)
+	}
+	if cfg.WordWrap == nil || *cfg.WordWrap != true {
+		t.Fatal("WordWrap debe persistir como true (el valor actual)")
+	}
+	if cfg.ExplorerWidth != 24 {
+		t.Fatalf("ExplorerWidth en disco = %d, se esperaba 24", cfg.ExplorerWidth)
+	}
+}
+
+// TestLoadConfigAppliesAtStartup: un config.json existente se aplica al
+// arrancar (antes de que se use cualquier vista); un JSON roto no rompe el
+// arranque y todo queda en los defaults.
+func TestLoadConfigAppliesAtStartup(t *testing.T) {
+	resetConfigVars(t)
+	path := tmpConfigFile(t)
+
+	if err := os.WriteFile(path, []byte(`{"IndentUnit": 8, "WordWrap": false, "ExplorerWidth": 32}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	app, _ := newTestApp(t, "uno")
+	if got := view.IndentSize(); got != 8 {
+		t.Fatalf("IndentSize() = %d al arrancar con config, se esperaba 8", got)
+	}
+	if view.WordWrapEnabled() {
+		t.Fatal("WordWrap debe arrancar en false (config aplicada)")
+	}
+	if got := view.ExplorerWidth(); got != 32 {
+		t.Fatalf("ExplorerWidth() = %d al arrancar con config, se esperaba 32", got)
+	}
+	_ = app
+
+	// JSON roto: el arranque sigue y quedan los defaults (los globals se
+	// restauran a mano porque el JSON corrupto no los toca).
+	if err := os.WriteFile(path, []byte("{ roto"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	view.SetIndentSize(4)
+	view.SetWordWrapEnabled(true)
+	view.SetExplorerWidth(24)
+	app2, _ := newTestApp(t, "uno")
+	if view.IndentSize() != 4 || !view.WordWrapEnabled() || view.ExplorerWidth() != 24 {
+		t.Fatal("JSON roto: el arranque debe quedar con los defaults")
+	}
+	_ = app2
+}

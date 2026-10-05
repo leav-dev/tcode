@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -15,20 +16,21 @@ import (
 )
 
 // statusHeight es la cantidad de filas que ocupa la barra de estado.
-// tabBarHeight es la que ocupa la fila de pestañas. explorerWidth es el ancho
-// máximo del panel lateral del explorador: el editor conserva el resto.
+// tabBarHeight es la que ocupa la fila de pestañas. El ancho máximo del panel
+// lateral del explorador vive en la configuración de view (ExplorerWidth, la
+// ventana Ctrl+, la expone y el archivo de config la persiste): el editor
+// conserva el resto.
 const (
-	statusHeight  = 1
-	tabBarHeight  = 1
-	explorerWidth = 24
+	statusHeight = 1
+	tabBarHeight = 1
 )
 
 // panelWidth es el ancho del panel lateral para una pantalla de ancho
-// columnas, con la fórmula literal min(explorerWidth, max(1, ancho-16)): el
+// columnas, con la fórmula literal min(ExplorerWidth(), max(1, ancho-16)): el
 // editor conserva al menos 16 columnas, el panel nunca desaparece (mínimo 1) y
 // el valor es determinista para los tests (80 → 24, 30 → 14, 20 → 4).
 func panelWidth(ancho int) int {
-	return min(explorerWidth, max(1, ancho-16))
+	return min(view.ExplorerWidth(), max(1, ancho-16))
 }
 
 type App struct {
@@ -87,6 +89,14 @@ type App struct {
 	menu       *view.TabMenu
 	menuActive bool
 
+	// configMenu es la ventana flotante de configuración (Ctrl+,) y
+	// configActive dice si está abierta. Como el menú de pestañas, mientras
+	// está activa posee el teclado y el mouse: las teclas que la ventana no
+	// maneja (Escape incluido) la cierran descartando, Left/Right mutan la fila
+	// del cursor y Enter alterna el booleano.
+	configMenu   *view.ConfigMenu
+	configActive bool
+
 	// sessionEnabled marca los modos con sesión persistida (directorio o sin
 	// argumentos): el modo archivo explícito no guarda ni restaura. Se define
 	// en el arranque y cubre tanto el guardado como la restauración.
@@ -134,15 +144,16 @@ func NewAppWithScreen(s tcell.Screen, path string) (*App, error) {
 
 	ws := model.NewWorkspace()
 	app := &App{
-		screen:    s,
-		ws:        ws,
-		editors:   make(map[*model.PieceTable]*view.EditorView),
-		forceSave: make(map[*model.PieceTable]bool),
-		statusBar: view.NewStatusBar(),
-		tabBar:    view.NewTabBar(),
-		explorer:  view.NewFileBrowser(),
-		menu:      view.NewTabMenu(),
-		ext:       ext.NewManager(),
+		screen:     s,
+		ws:         ws,
+		editors:    make(map[*model.PieceTable]*view.EditorView),
+		forceSave:  make(map[*model.PieceTable]bool),
+		statusBar:  view.NewStatusBar(),
+		tabBar:     view.NewTabBar(),
+		explorer:   view.NewFileBrowser(),
+		menu:       view.NewTabMenu(),
+		configMenu: view.NewConfigMenu(),
+		ext:        ext.NewManager(),
 
 		// La sesión es el estado de los modos explorador; el modo archivo la
 		// apaga abajo.
@@ -210,6 +221,11 @@ func NewAppWithScreen(s tcell.Screen, path string) (*App, error) {
 	// El tema se aplica a todas las vistas en el arranque; los editores que se
 	// creen bajo demanda lo reciben en activeEditor.
 	app.loadTheme()
+
+	// La configuración persistida (~/.tcode/config.json) se aplica sobre las
+	// vars del paquete view ANTES de que se use cualquier geometría: panelWidth,
+	// el indent y el wrap ya quedan con lo del usuario al primer redibujo.
+	app.loadConfig()
 
 	// Los built-ins tcode.* se registran después de armar el App completo: los
 	// handlers cierran sobre el App ya construido.
@@ -322,6 +338,72 @@ func (a *App) loadTheme() {
 	a.tabBar.SetTheme(a.theme)
 	a.explorer.SetTheme(a.theme)
 	a.menu.SetTheme(a.theme)
+	a.configMenu.SetTheme(a.theme)
+}
+
+// configFilePath resuelve el archivo de configuración del usuario; es variable
+// para que los tests lo apunten a un directorio temporal.
+var configFilePath = func() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".tcode", "config.json")
+}
+
+// configFile es el esquema persistido de la configuración: el tamaño de la
+// tabulación, el salto de palabra (puntero: ausencia = default) y el ancho
+// máximo del panel lateral del explorador.
+type configFile struct {
+	IndentUnit    int
+	WordWrap      *bool
+	ExplorerWidth int
+}
+
+// loadConfig lee ~/.tcode/config.json al arranque y aplica la configuración a
+// las vars del paquete view. Si el archivo falta o el JSON está roto, no hace
+// nada y quedan los defaults: la configuración del usuario jamás rompe el
+// editor, como el tema.
+func (a *App) loadConfig() {
+	if path := configFilePath(); path != "" {
+		if data, err := os.ReadFile(path); err == nil {
+			var cfg configFile
+			if err := json.Unmarshal(data, &cfg); err != nil {
+				return
+			}
+			if cfg.IndentUnit > 0 {
+				view.SetIndentSize(cfg.IndentUnit)
+			}
+			if cfg.WordWrap != nil {
+				view.SetWordWrapEnabled(*cfg.WordWrap)
+			}
+			if cfg.ExplorerWidth > 0 {
+				view.SetExplorerWidth(cfg.ExplorerWidth)
+			}
+		}
+	}
+}
+
+// saveConfig persiste la configuración actual de las vars del paquete view en
+// ~/.tcode/config.json. Un fallo de escritura no rompe la edición: se avisa en
+// la barra de estado.
+func (a *App) saveConfig() {
+	wrap := view.WordWrapEnabled()
+	cfg := configFile{
+		IndentUnit:    view.IndentSize(),
+		WordWrap:      &wrap,
+		ExplorerWidth: view.ExplorerWidth(),
+	}
+	data, err := json.MarshalIndent(&cfg, "", "  ")
+	if err != nil {
+		a.statusBar.SetMessage("No se pudo guardar la config: " + err.Error())
+		return
+	}
+	if path := configFilePath(); path != "" {
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			a.statusBar.SetMessage("No se pudo guardar la config: " + err.Error())
+		}
+	}
 }
 
 // defaultExtensionRoots devuelve los directorios de extensiones por defecto:
@@ -650,6 +732,22 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 			return false
 		}
 
+		// La ventana de configuración abierta posee el teclado: (true, changed)
+		// es una tecla suya (y changed dice si una fila se mutó, para persistir
+		// y reencuadrar), y (false, false) —Escape, Ctrl+C y CUALQUIER otra
+		// tecla ajena— la cierra descartando, sin dejar que la tecla caiga al
+		// documento ni a los atajos.
+		if a.configActive {
+			handled, changed := a.configMenu.HandleEvent(ev)
+			if !handled {
+				a.configActive = false // cualquier tecla ajena —Escape incluido— cierra y descarta
+			} else if changed {
+				a.configChanged()
+			}
+			a.redraw()
+			return false
+		}
+
 		// El menú de pestañas abierto posee el teclado. (true, true) es Enter:
 		// activar la pestaña del cursor y cerrar. (false, false) —Escape, Ctrl+C
 		// y CUALQUIER otra tecla ajena— cierra el menú descartando, sin dejar
@@ -737,6 +835,15 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		// editor cambia: las vistas se redimensionan en el toggle.
 		if ev.Key() == tcell.KeyCtrlB {
 			a.toggleExplorer()
+			return false
+		}
+
+		// Ctrl+, abre la ventana flotante de configuración —también con el
+		// workspace vacío: la configuración existe sin buffers—. Ctrl+Shift+,
+		// queda fuera a propósito: tcell la entrega con el mismo KeyRune y
+		// distinguirla solo recompone una notación que nadie pide.
+		if ev.Key() == tcell.KeyRune && ev.Modifiers()&tcell.ModCtrl != 0 && ev.Modifiers()&tcell.ModShift == 0 && ev.Rune() == ',' {
+			a.toggleConfig()
 			return false
 		}
 
@@ -845,12 +952,13 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		}
 
 	case *tcell.EventMouse:
-		// Con el menú abierto el mouse es del menú como el teclado, y con un
-		// pedido activo (Save As) el mouse es del pedido: se ignora por completo
-		// —el controlador no traduce nada ni redibuja— y el clic no puede
-		// cambiar de pestaña, seleccionar un archivo ni raspar el documento por
-		// debajo de lo que el usuario está escribiendo.
-		if a.menuActive || a.promptActive {
+		// Con el menú abierto el mouse es del menú como el teclado, con la
+		// ventana de configuración abierta es de la ventana, y con un pedido
+		// activo (Save As) es del pedido: se ignora por completo —el controlador
+		// no traduce nada ni redibuja— y el clic no puede cambiar de pestaña,
+		// seleccionar un archivo ni raspar el documento por debajo de lo que el
+		// usuario está escribiendo.
+		if a.menuActive || a.promptActive || a.configActive {
 			return false
 		}
 		a.checkExternalReloads()
@@ -1202,6 +1310,20 @@ func (a *App) redraw() {
 		a.menu.Draw(a.editorSurf, a.ws, editorW)
 	}
 
+	// La ventana de configuración flota centrada sobre el área del editor,
+	// como el menú de pestañas: se compone DESPUÉS del editor (tapa el
+	// documento, sin tocar pestañas ni barra) con la misma superficie recortada
+	// a su región (configRegion). toggleConfig jamás la abre con un editor de
+	// ancho 0, así que acá siempre hay espacio.
+	if a.configActive {
+		if a.editorSurf == nil {
+			a.editorSurf = view.NewOffsetSurface(a.screen)
+		}
+		x, y, w, h := a.configRegion()
+		a.editorSurf.SetRegion(x, y, w, h)
+		a.configMenu.Draw(a.editorSurf)
+	}
+
 	a.statusBar.Draw(a.screen, height-statusHeight, width)
 	a.screen.Show()
 }
@@ -1344,6 +1466,59 @@ func (a *App) switchTab(move func() *model.PieceTable) {
 	a.syncStatus()
 	a.tabBar.EnsureActive(a.ws, a.tabBarWidth())
 	a.redraw()
+}
+
+// configRegion devuelve la región de la ventana flotante de configuración:
+// 34x5 centrada en el área del editor (columna según el panel, fila tras la de
+// pestañas), recortada si la terminal es chica (nunca más ancha que el editor
+// ni más alta que su área). Comparte la geometría entre toggleConfig (que solo
+// usa el tamaño para Resize) y redraw (que reencuadra la superficie con la
+// posición).
+func (a *App) configRegion() (x, y, w, h int) {
+	width, height := a.screen.Size()
+	editorW := width - a.explorerColumn()
+	menuW := 34
+	if menuW > editorW {
+		menuW = editorW
+	}
+	menuH := 5
+	if menuH > editorHeight(height) {
+		menuH = editorHeight(height)
+	}
+	x = a.explorerColumn() + (editorW-menuW)/2
+	y = tabBarHeight + (editorHeight(height)-menuH)/2
+	w, h = menuW, menuH
+	return
+}
+
+// toggleConfig abre o cierra la ventana flotante de configuración. Abrir la
+// dimensiona a la región del editor (configRegion) y coloca el cursor donde
+// quedó; cerrar solo apaga el flag. Sin espacio para el editor no abre: una
+// ventana de ancho 0 no tendría dónde dibujarse. El caller redibuja al cerrar.
+func (a *App) toggleConfig() {
+	a.configActive = !a.configActive
+	if a.configActive {
+		width, _ := a.screen.Size()
+		if width-a.explorerColumn() <= 0 {
+			a.configActive = false
+			return
+		}
+		_, _, w, h := a.configRegion()
+		a.configMenu.Resize(w, h)
+	}
+	a.redraw()
+}
+
+// configChanged aplica en vivo un cambio de la ventana de configuración: lo
+// persiste y reencuadra la composición —el tamaño del indent y el salto de
+// palabra afectan a todas las vistas, y el ancho del panel cambia el del
+// editor— con el mismo tratamiento que un resize. El caller redibuja.
+func (a *App) configChanged() {
+	a.saveConfig()
+	a.resizeEditors()
+	width, height := a.screen.Size()
+	a.explorer.Resize(panelWidth(width), editorHeight(height))
+	a.tabBar.EnsureActive(a.ws, a.tabBarWidth())
 }
 
 // toggleMenu abre o cierra el menú de pestañas. Abrir lo dimensiona a la
