@@ -27,6 +27,96 @@ Una carpeta sin `extension.json` se ignora en silencio. Una extensión rota
 (JSON inválido o manifest que no valida) **nunca impide el arranque**: su error
 se avisa una vez en la barra de estado y el resto se carga igual.
 
+## Backend de scripting (Lua)
+
+Desde el hito 1, un comando declarado puede delegar su implementación a una
+**función Lua** del script de la extensión (gopher-lua embebido, sin cgo). El
+manifest agrega `script` (ruta relativa al dir de la extensión) y `fn` (función
+global) — los dos juntos:
+
+```json
+"contributes": {
+  "commands": [
+    { "id": "autor.mi-ext.hola", "title": "Hola", "script": "main.lua", "fn": "hola" }
+  ]
+}
+```
+
+```lua
+function hola()
+  tcode.insert("HOLA")
+  tcode.message("hola desde Lua")
+end
+```
+
+El comando se sigue declarando igual (keybindings y hooks lo referencian de
+siempre); solo cambia la implementación. El host expone la tabla global
+`tcode`:
+
+| Función | Qué hace |
+| --- | --- |
+| `tcode.command(id)` | Ejecuta un comando registrado (`tcode.*` u otros). Un script que se llama a sí mismo corta con un guard de recursión (máx 8). |
+| `tcode.buffer()` | Devuelve `{path, content, ok}` del buffer activo (`ok=false` sin buffer). `content` es el documento completo (límite del hito 1). |
+| `tcode.insert(text)` | Inserta `text` en la posición del cursor del buffer activo. |
+| `tcode.lineCount()` / `tcode.line(n)` | Líneas del buffer activo y su contenido por línea (`n` 1-indexado; errores "sin buffer activo"/"línea fuera de rango"). |
+| `tcode.diagnostics.set(lista)` / `tcode.diagnostics.clear()` | Reemplaza las **anotaciones** del buffer activo: lista de `{line, message, severity}` (severidad `error`\|`warning`\|`info`, default `error`; un elemento inválido aborta todo). |
+| `tcode.message(msg)` | Muestra un mensaje en la barra de estado. |
+
+### Ejemplo: un mini-linter con diagnostics
+
+`extension.json` con el comando `linter.marcar` (script+fn), keybinding y hook
+`onDidSaveBuffer` → el script marca las líneas con `TODO`:
+
+```lua
+function marcar()
+  local n = tcode.lineCount()
+  local diags = {}
+  for i = 1, n do
+    if string.find(tcode.line(i), "TODO") then
+      table.insert(diags, { line = i, message = "todo pendiente", severity = "warning" })
+    end
+  end
+  tcode.diagnostics.set(diags)
+end
+```
+
+El editor pinta el diagnóstico en el **gutter** (marcador `!`/`?`/`i` según la
+severidad), subraya la línea anotada y muestra el mensaje en la barra de
+estado cuando el cursor está sobre ella. Límite del hito: las anotaciones van
+al **buffer activo** del momento; el hook `onDidSaveBuffer` anota el activo,
+no necesariamente el guardado.
+
+Errores del script (Lua o del puente) → mensaje en la barra de estado, nunca
+rompen el editor. El runtime solo abre las librerías base/tabla/string/math
+(nada de `os` ni `io` del host): el repositorio del autor es confiado, pero el
+host no se expone más de lo necesario. Sin `onDidChangeText` por diseño
+(deuda de rendimiento ya documentada); los hooks (`onDidSaveBuffer`, …) ya
+fluyen al comando con `fn`.
+
+## Instalar extensiones
+
+Las extensiones del **autor** (repositorios propios, considerados confiados) se
+instalan desde la línea de comandos, sin abrir el editor:
+
+| Comando | Efecto |
+| --- | --- |
+| `tcode --install-extension <url-git>` | Clona el repo (`git clone --depth 1`), valida su `extension.json` y lo despliega en `~/.tcode/extensions/<id>/`. Reinstalar reemplaza. |
+
+> El comando clásico sin `script`/`fn` sigue siendo un stub "sin implementación":
+> dale lógica declarándole la función Lua (sección de arriba).
+| `tcode --list-extensions` | Lista las instaladas del usuario (id, nombre, versión). |
+| `tcode --remove-extension <id>` | Borra `~/.tcode/extensions/<id>`. |
+
+El repositorio de la extensión debe tener **`extension.json` en su raíz** (la
+misma estructura de carpeta de arriba). Un manifest inválido se rechaza sin
+tocar nada; el `id` del manifest da nombre a la carpeta instalada. La
+extensión queda disponible en la **próxima sesión** (no hay recarga en
+caliente).
+
+**Modelo de confianza:** los repositorios del propio autor se consideran
+seguros por definición — no hay marketplace, checksum ni firma; la barrera es
+estructural (el manifest valida).
+
 ## El manifest (`extension.json`)
 
 ```json

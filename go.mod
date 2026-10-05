@@ -6,6 +6,7 @@ require (
 	github.com/edsrzf/mmap-go v1.2.0
 	github.com/gdamore/tcell/v2 v2.13.10
 	github.com/rivo/uniseg v0.4.7
+	github.com/yuin/gopher-lua v1.1.2
 )
 
 require (

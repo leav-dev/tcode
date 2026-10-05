@@ -31,11 +31,11 @@ func TestRunRecoversPanicAndLogsTheCrash(t *testing.T) {
 		"version": "1.0.0",
 		"activation": ["onStartup"],
 		"contributes": {
-			"keybindings": [{"key": "ctrl+k", "command": "test.panic"}]
+			"keybindings": [{"key": "ctrl+m", "command": "test.panic"}]
 		}
 	}`)
 
-	if err := app.screen.PostEvent(tcell.NewEventKey(tcell.KeyCtrlK, 0, tcell.ModNone)); err != nil {
+	if err := app.screen.PostEvent(tcell.NewEventKey(tcell.KeyCtrlM, 0, tcell.ModNone)); err != nil {
 		t.Fatalf("PostEvent falló: %v", err)
 	}
 
@@ -77,10 +77,12 @@ func TestRunNormalPathDoesNotWriteCrashLog(t *testing.T) {
 	defer func() { crashLogPath, setCrashPaper = oldPath, oldPaper }()
 
 	app, _ := newTestApp(t, "uno")
-	// Escape con el buffer limpio cierra el editor: el camino feliz termina sin
-	// tocar el registro de crashes.
-	if err := app.screen.PostEvent(tcell.NewEventKey(tcell.KeyEscape, 0, tcell.ModNone)); err != nil {
-		t.Fatalf("PostEvent falló: %v", err)
+	// Doble Escape con el buffer limpio cierra el editor: el camino feliz
+	// termina sin tocar el registro de crashes.
+	for i := 0; i < 2; i++ {
+		if err := app.screen.PostEvent(tcell.NewEventKey(tcell.KeyEscape, 0, tcell.ModNone)); err != nil {
+			t.Fatalf("PostEvent falló: %v", err)
+		}
 	}
 
 	done := make(chan error, 1)

@@ -1,12 +1,14 @@
 package controller
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime/debug"
 	"strings"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
 	"tcode/internal/ext"
@@ -15,20 +17,21 @@ import (
 )
 
 // statusHeight es la cantidad de filas que ocupa la barra de estado.
-// tabBarHeight es la que ocupa la fila de pestañas. explorerWidth es el ancho
-// máximo del panel lateral del explorador: el editor conserva el resto.
+// tabBarHeight es la que ocupa la fila de pestañas. El ancho máximo del panel
+// lateral del explorador vive en la configuración de view (ExplorerWidth, la
+// ventana (Ctrl+P) la expone y el archivo de config la persiste): el editor
+// conserva el resto.
 const (
-	statusHeight  = 1
-	tabBarHeight  = 1
-	explorerWidth = 24
+	statusHeight = 1
+	tabBarHeight = 1
 )
 
 // panelWidth es el ancho del panel lateral para una pantalla de ancho
-// columnas, con la fórmula literal min(explorerWidth, max(1, ancho-16)): el
+// columnas, con la fórmula literal min(ExplorerWidth(), max(1, ancho-16)): el
 // editor conserva al menos 16 columnas, el panel nunca desaparece (mínimo 1) y
 // el valor es determinista para los tests (80 → 24, 30 → 14, 20 → 4).
 func panelWidth(ancho int) int {
-	return min(explorerWidth, max(1, ancho-16))
+	return min(view.ExplorerWidth(), max(1, ancho-16))
 }
 
 type App struct {
@@ -61,6 +64,7 @@ type App struct {
 	// PieceTable ya desmapeado.
 	editors map[*model.PieceTable]*view.EditorView
 
+	lastEscape time.Time // marca del último Escape (doble presión para salir)
 	confirmQuit  bool
 	confirmClose bool
 	// confirmReload arma la confirmación no modal de Ctrl+R sobre un buffer
@@ -87,6 +91,14 @@ type App struct {
 	menu       *view.TabMenu
 	menuActive bool
 
+	// configMenu es la ventana flotante de configuración (Ctrl+P) y
+	// configActive dice si está abierta. Como el menú de pestañas, mientras
+	// está activa posee el teclado y el mouse: las teclas que la ventana no
+	// maneja (Escape incluido) la cierran descartando, Left/Right mutan la fila
+	// del cursor y Enter alterna el booleano.
+	configMenu   *view.ConfigMenu
+	configActive bool
+
 	// sessionEnabled marca los modos con sesión persistida (directorio o sin
 	// argumentos): el modo archivo explícito no guarda ni restaura. Se define
 	// en el arranque y cubre tanto el guardado como la restauración.
@@ -98,9 +110,16 @@ type App struct {
 	// núcleo; los hooks se emiten desde open/save/close.
 	ext *ext.Manager
 
-	// theme es la paleta por rol del editor, cargada de ~/.tcode/theme.json o
-	// la default; se aplica a las vistas (y a cada editor bajo demanda).
+	// theme es la paleta por rol del editor, resuelta por applyTheme desde el
+	// selector (ActiveThemeID) o el Custom; se aplica a las vistas (y a cada
+	// editor, también a los ya abiertos).
 	theme view.Theme
+
+	// customTheme es el tema del usuario (~/.tcode/theme.json): el fallback del
+	// selector cuando el id activo es "" (Custom). loadTheme lo lee al arranque
+	// y themeFor lo devuelve mientras el selector no elija una paleta del
+	// registry.
+	customTheme view.Theme
 
 	// extensionRoots son los directorios donde se buscan extensiones, en orden
 	// de precedencia: el primero gana en caso de ids duplicados. Por defecto,
@@ -134,15 +153,16 @@ func NewAppWithScreen(s tcell.Screen, path string) (*App, error) {
 
 	ws := model.NewWorkspace()
 	app := &App{
-		screen:    s,
-		ws:        ws,
-		editors:   make(map[*model.PieceTable]*view.EditorView),
-		forceSave: make(map[*model.PieceTable]bool),
-		statusBar: view.NewStatusBar(),
-		tabBar:    view.NewTabBar(),
-		explorer:  view.NewFileBrowser(),
-		menu:      view.NewTabMenu(),
-		ext:       ext.NewManager(),
+		screen:     s,
+		ws:         ws,
+		editors:    make(map[*model.PieceTable]*view.EditorView),
+		forceSave:  make(map[*model.PieceTable]bool),
+		statusBar:  view.NewStatusBar(),
+		tabBar:     view.NewTabBar(),
+		explorer:   view.NewFileBrowser(),
+		menu:       view.NewTabMenu(),
+		configMenu: view.NewConfigMenu(),
+		ext:        ext.NewManager(),
 
 		// La sesión es el estado de los modos explorador; el modo archivo la
 		// apaga abajo.
@@ -206,10 +226,18 @@ func NewAppWithScreen(s tcell.Screen, path string) (*App, error) {
 	// declarados no pueden piser a tcode.*.
 	app.extensionRoots = defaultExtensionRoots(app.ws.Root())
 	app.loadExtensions()
+	// El manager habla con el editor a través del App: los comandos con script
+	// corren Lua con la API tcode.* cableada a App (ScriptAPI).
+	app.ext.SetEditor(app)
 
 	// El tema se aplica a todas las vistas en el arranque; los editores que se
 	// creen bajo demanda lo reciben en activeEditor.
 	app.loadTheme()
+
+	// La configuración persistida (~/.tcode/config.json) se aplica sobre las
+	// vars del paquete view ANTES de que se use cualquier geometría: panelWidth,
+	// el indent y el wrap ya quedan con lo del usuario al primer redibujo.
+	app.loadConfig()
 
 	// Los built-ins tcode.* se registran después de armar el App completo: los
 	// handlers cierran sobre el App ya construido.
@@ -308,20 +336,134 @@ var themeFilePath = func() string {
 	return filepath.Join(home, ".tcode", "theme.json")
 }
 
-// loadTheme lee ~/.tcode/theme.json al arranque y aplica la paleta a todas las
-// vistas. Si el archivo falta o el JSON está roto, se usa la default: el tema
-// del usuario jamás rompe el editor.
+// loadTheme lee ~/.tcode/theme.json al arranque como tema Custom (a.customTheme)
+// y aplica la paleta resultante a todas las vistas. Si el archivo falta o el
+// JSON está roto, el Custom es la default: el tema del usuario jamás rompe el
+// editor.
 func (a *App) loadTheme() {
-	a.theme = view.DefaultTheme()
+	a.customTheme = view.DefaultTheme()
 	if path := themeFilePath(); path != "" {
 		if data, err := os.ReadFile(path); err == nil {
-			a.theme = view.LoadTheme(data)
+			a.customTheme = view.LoadTheme(data)
 		}
 	}
+	a.applyTheme()
+}
+
+// themeFor resuelve el tema a aplicar: la paleta del registry si el selector
+// tiene un id activo, o el Custom (a.customTheme) cuando el id es "".
+func (a *App) themeFor() view.Theme {
+	if id := view.ActiveThemeID(); id != "" {
+		if th, ok := view.ThemeByID(id); ok {
+			return th
+		}
+	}
+	return a.customTheme
+}
+
+// applyTheme aplica el tema activo a TODAS las vistas, incluidos los editores
+// YA abiertos: el selector en vivo (fila Theme de la ventana de configuración)
+// necesita que un cambio de paleta se vea de inmediato, y hoy los editores
+// solo recibían el tema al crearse (activeEditor).
+func (a *App) applyTheme() {
+	a.theme = a.themeFor()
 	a.statusBar.SetTheme(a.theme)
 	a.tabBar.SetTheme(a.theme)
 	a.explorer.SetTheme(a.theme)
 	a.menu.SetTheme(a.theme)
+	a.configMenu.SetTheme(a.theme)
+	for _, ed := range a.editors {
+		ed.SetTheme(a.theme)
+	}
+}
+
+// quitEscapeWindow es la ventana de la doble presión de Escape: dos Escape
+// dentro de este lapso cierran el editor; un segundo tardío reinicia el
+// conteo. Variable para que los tests la ajusten.
+var quitEscapeWindow = 500 * time.Millisecond
+
+// clockNow es el reloj de la doble presión, inyectable para los tests: la
+// ventana se mide con tiempo simulado en lugar de calcular sobre el real.
+var clockNow = time.Now
+
+// configFilePath resuelve el archivo de configuración del usuario; es variable
+// para que los tests lo apunten a un directorio temporal.
+var configFilePath = func() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".tcode", "config.json")
+}
+
+// configFile es el esquema persistido de la configuración: el tamaño de la
+// tabulación, el salto de palabra (puntero: ausencia = default), el ancho
+// máximo del panel lateral del explorador y el id del tema del selector ("" =
+// Custom; un id desconocido se ignora al cargar). El tema de theme.json vive
+// aparte: el config solo decide si el selector elige una paleta del registry.
+type configFile struct {
+	IndentUnit    int
+	WordWrap      *bool
+	ExplorerWidth int
+	Theme         string
+}
+
+// loadConfig lee ~/.tcode/config.json al arranque y aplica la configuración a
+// las vars del paquete view. Si el archivo falta o el JSON está roto, no hace
+// nada y quedan los defaults: la configuración del usuario jamás rompe el
+// editor, como el tema.
+func (a *App) loadConfig() {
+	if path := configFilePath(); path != "" {
+		if data, err := os.ReadFile(path); err == nil {
+			var cfg configFile
+			if err := json.Unmarshal(data, &cfg); err != nil {
+				return
+			}
+			if cfg.IndentUnit > 0 {
+				view.SetIndentSize(cfg.IndentUnit)
+			}
+			if cfg.WordWrap != nil {
+				view.SetWordWrapEnabled(*cfg.WordWrap)
+			}
+			if cfg.ExplorerWidth > 0 {
+				view.SetExplorerWidth(cfg.ExplorerWidth)
+			}
+			// El id del tema persistido gana sobre el Custom de theme.json: el
+			// config decidió que el selector elija una paleta del registry.
+			if cfg.Theme != "" {
+				if _, ok := view.ThemeByID(cfg.Theme); ok {
+					view.SetActiveThemeID(cfg.Theme)
+				}
+			}
+		}
+	}
+	// El tema del config puede diferir del aplicado por loadTheme (que solo
+	// conocía el Custom): re-aplicar acá deja la paleta del id activo.
+	a.applyTheme()
+}
+
+// saveConfig persiste la configuración actual de las vars del paquete view en
+// ~/.tcode/config.json, incluido el id del tema activo del selector ("" =
+// Custom). Un fallo de escritura no rompe la edición: se avisa en la barra de
+// estado.
+func (a *App) saveConfig() {
+	wrap := view.WordWrapEnabled()
+	cfg := configFile{
+		IndentUnit:    view.IndentSize(),
+		WordWrap:      &wrap,
+		ExplorerWidth: view.ExplorerWidth(),
+		Theme:         view.ActiveThemeID(),
+	}
+	data, err := json.MarshalIndent(&cfg, "", "  ")
+	if err != nil {
+		a.statusBar.SetMessage("No se pudo guardar la config: " + err.Error())
+		return
+	}
+	if path := configFilePath(); path != "" {
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			a.statusBar.SetMessage("No se pudo guardar la config: " + err.Error())
+		}
+	}
 }
 
 // defaultExtensionRoots devuelve los directorios de extensiones por defecto:
@@ -471,6 +613,74 @@ func (a *App) runExtensionCommand(cmd string) {
 	a.redraw()
 }
 
+// --- ScriptAPI: el puente que los scripts de extensión usan para tocar el ---
+// --- editor (tcode.*), cableado al Manager con SetEditor en el arranque. ---
+
+// RunCommand ejecuta un comando registrado por id (ScriptAPI). Los scripts la
+// invocan vía tcode.command para llamar built-ins tcode.* u otros comandos.
+func (a *App) RunCommand(id string) error { return a.ext.RunCommand(id) }
+
+// ActiveBuffer devuelve la ruta y el contenido completo del buffer activo
+// (ScriptAPI); sin buffer activo, ok=false. Límite del hito 1: devuelve el
+// documento entero (GetContent); un backend maduro pediría rangos al Model
+// para no copiar archivos grandes al host Lua.
+func (a *App) ActiveBuffer() (path, content string, ok bool) {
+	buf := a.activeBuffer()
+	if buf == nil {
+		return "", "", false
+	}
+	return buf.Path(), buf.GetContent(), true
+}
+
+// InsertAtCursor inserta text en la posición del cursor del editor activo
+// (ScriptAPI). Sin buffer activo no hay cursor: error legible, igual que los
+// comandos del núcleo que requieren buffer.
+func (a *App) InsertAtCursor(text string) error {
+	ed := a.activeEditor()
+	if ed == nil {
+		return errors.New("sin buffer activo")
+	}
+	return a.activeBuffer().Insert(ed.CursorOffset(), text)
+}
+
+// StatusMessage muestra msg en la barra de estado (ScriptAPI).
+func (a *App) StatusMessage(msg string) { a.statusBar.SetMessage(msg) }
+
+// LineCount devuelve la cantidad de líneas del buffer activo (ScriptAPI);
+// sin buffer activo, ok=false, como ActiveBuffer.
+func (a *App) LineCount() (int, bool) {
+	buf := a.activeBuffer()
+	if buf == nil {
+		return 0, false
+	}
+	return buf.LineCount(), true
+}
+
+// Line devuelve el texto de la línea n (0-indexada) del buffer activo
+// (ScriptAPI); sin buffer activo o con n fuera de [0, LineCount), ok=false.
+// El modelo no copia la línea: LineContent la extrae del PieceTable.
+func (a *App) Line(n int) (string, bool) {
+	buf := a.activeBuffer()
+	if buf == nil || n < 0 || n >= buf.LineCount() {
+		return "", false
+	}
+	return string(buf.LineContent(n)), true
+}
+
+// SetDiagnostics reemplaza las anotaciones del buffer activo (ScriptAPI): el
+// backend de scripting es el proveedor de diagnostics y deposita acá lo que el
+// HITO A renderiza. Sin buffer activo, error legible como el resto de la API.
+// Límite del hito: un hook de onDidSaveBuffer corre "en el contexto del
+// activo", así que el buffer anotado es el activo al momento del set.
+func (a *App) SetDiagnostics(source string, d []view.Diagnostic) error {
+	ed := a.activeEditor()
+	if ed == nil {
+		return errors.New("sin buffer activo")
+	}
+	ed.SetDiagnostics(source, d)
+	return nil
+}
+
 // emitEvent despacha un evento de buffer al manager de extensiones y muestra
 // el último error de hook en la barra de estado. Un hook roto nunca rompe el
 // editor: solo avisa.
@@ -539,6 +749,11 @@ func (a *App) syncStatus() {
 	}
 	a.statusBar.SetFile(buf.Path(), buf.Modified())
 }
+
+// Los diagnósticos se muestran inline, a la derecha de cada línea anotada
+// (render del view), no en la barra de estado: así varias líneas con errores
+// se ven a la vez. La barra solo lleva los mensajes transitorios (guardado,
+// resúmenes de extensión, confirmaciones).
 
 // Run ejecuta el loop de eventos hasta que el usuario cierra el editor.
 func (a *App) Run() (err error) {
@@ -650,6 +865,22 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 			return false
 		}
 
+		// La ventana de configuración abierta posee el teclado: (true, changed)
+		// es una tecla suya (y changed dice si una fila se mutó, para persistir
+		// y reencuadrar), y (false, false) —Escape, Ctrl+C y CUALQUIER otra
+		// tecla ajena— la cierra descartando, sin dejar que la tecla caiga al
+		// documento ni a los atajos.
+		if a.configActive {
+			handled, changed := a.configMenu.HandleEvent(ev)
+			if !handled {
+				a.configActive = false // cualquier tecla ajena —Escape incluido— cierra y descarta
+			} else if changed {
+				a.configChanged()
+			}
+			a.redraw()
+			return false
+		}
+
 		// El menú de pestañas abierto posee el teclado. (true, true) es Enter:
 		// activar la pestaña del cursor y cerrar. (false, false) —Escape, Ctrl+C
 		// y CUALQUIER otra tecla ajena— cierra el menú descartando, sin dejar
@@ -678,7 +909,9 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 				// Navegar el panel es "seguir trabajando": desarma las
 				// confirmaciones pendientes y el permiso de pisar, como
 				// cualquier otra tecla del documento —si no, un Escape armado
-				// por error seguiría activo tras navegar el árbol—.
+				// por error seguiría activo tras navegar el árbol—. También
+				// invalida el primer Escape de la doble presión.
+				a.lastEscape = time.Time{}
 				a.confirmQuit = false
 				a.confirmClose = false
 				a.clearForceSave()
@@ -697,15 +930,35 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		// Tab devuelve el foco al editor SOLO cuando el explorador lo tiene:
 		// con el foco en el editor, Tab sigue insertando tabulación en el
 		// documento —la edición no pierde su tecla más básica por tener el
-		// panel a la vista—. Volver al panel desde el editor es con clic en
-		// el panel o re-mostrándolo con Ctrl+B. Va antes del guard porque
-		// mover el foco no toca ningún buffer: con el workspace vacío también
-		// tiene que funcionar.
+		// panel a la vista—. Va antes del guard porque mover el foco no toca
+		// ningún buffer: con el workspace vacío también tiene que funcionar.
 		if ev.Key() == tcell.KeyTab && a.explorerVisible && a.explorerFocused {
 			a.explorerFocused = false
 			a.confirmQuit = false
 			a.confirmClose = false
 			a.clearForceSave()
+			a.redraw()
+			return false
+		}
+
+		// Shift+Tab (KeyBacktab) mueve el foco AL OTRO panel: con el explorador
+		// a la vista, Shift+Tab alterna en los dos sentidos. Desde el EDITOR
+		// entra al selector y REVELA el buffer activo —el árbol expande (con
+		// E/S perezosa) el camino hasta el archivo que se está editando y deja
+		// el cursor sobre él, para que el selector no muestre una selección
+		// vieja—; desde el SELECCIONADO devuelve el foco al editor, igual que
+		// Tab: quien llega al selector con Shift+Tab no queda atrapado, la
+		// misma tecla lo saca. La tecla nunca llega a la edición y la
+		// visibilidad del panel sigue siendo decisión de Ctrl+B. Va antes del
+		// guard por la misma razón que Tab: solo mueve foco.
+		if ev.Key() == tcell.KeyBacktab && a.explorerVisible {
+			a.explorerFocused = !a.explorerFocused
+			a.confirmQuit = false
+			a.confirmClose = false
+			a.clearForceSave()
+			if a.explorerFocused {
+				a.revealActiveInExplorer()
+			}
 			a.redraw()
 			return false
 		}
@@ -720,11 +973,27 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 			return false
 		}
 
+		// Ctrl+P abre la ventana flotante de configuración —también con el
+		// workspace vacío: la configuración existe sin buffers—. Arrancó como
+		// Ctrl+, pero el terminal del usuario interceptaba la coma: Ctrl+P
+		// (el byte 0x10, KeyCtrlP) pasa limpio en Windows Terminal y en casi
+		// todo terminal estándar. Ctrl+Shift+P queda fuera a propósito: la
+		// Shift del par no pide nadie.
+		if ev.Key() == tcell.KeyCtrlP && ev.Modifiers()&tcell.ModShift == 0 {
+			a.toggleConfig()
+			return false
+		}
+
 		// Workspace vacío: no hay nada que editar, guardar ni deshacer. Salir
 		// sigue funcionando, y sin buffers no hay nada que perder.
 		buf := a.activeBuffer()
 		if buf == nil {
-			return ev.Key() == tcell.KeyEscape || ev.Key() == tcell.KeyCtrlC
+			// Workspace vacío: tampoco se sale con un Escape solo (la única
+			// salida es la doble presión); Ctrl+C ya no es la forma de cerrar.
+			if ev.Key() == tcell.KeyEscape {
+				return a.quitEscape()
+			}
+			return false
 		}
 
 		switch {
@@ -765,6 +1034,14 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 			a.switchTab(a.ws.Prev)
 			return false
 
+		case isSwitchTabNextKey(ev):
+			a.switchTab(a.ws.Next)
+			return false
+
+		case isSwitchTabPrevKey(ev):
+			a.switchTab(a.ws.Prev)
+			return false
+
 		case ev.Key() == tcell.KeyCtrlW:
 			a.closeTab()
 			return false
@@ -783,8 +1060,11 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 			return false
 
 		case ev.Key() == tcell.KeyEscape || ev.Key() == tcell.KeyCtrlC:
-			// Ctrl+C con una selección activa COPIA en vez de salir (VSCode-like);
-			// sin selección conserva el comportamiento de salida de siempre.
+			// Ctrl+C con una selección activa COPIA en vez de cerrar
+			// (VSCode-like); sin selección ya no es una forma de salir (la
+			// única salida es la doble presión rápida de Escape) y cae al
+			// final del switch: cancela las confirmaciones pendientes, como
+			// cualquier otra tecla.
 			if ev.Key() == tcell.KeyCtrlC {
 				if ed := a.activeEditor(); ed != nil && ed.SelectionActive() {
 					if err := ed.CopySelection(); err != nil {
@@ -795,17 +1075,9 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 					a.redraw()
 					return false
 				}
+				break
 			}
-			// Salir con cambios sin guardar en CUALQUIER buffer pide
-			// confirmación: la primera vez solo se avisa, así una tecla de más
-			// no tira el trabajo de ninguna pestaña.
-			if !a.ws.AnyModified() || a.confirmQuit {
-				return true
-			}
-			a.confirmQuit = true
-			a.statusBar.SetMessage("Cambios sin guardar: Ctrl+S guarda, Escape de nuevo sale igual")
-			a.redraw()
-			return false
+			return a.quitEscape()
 		}
 
 		// Las extensiones resuelven después de los atajos del núcleo —que ganan
@@ -819,7 +1091,10 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 
 		// Cualquier otra tecla cancela las confirmaciones pendientes —la de
 		// salida, la de cierre de pestaña y la de recarga— y el permiso de
-		// pisar que se haya dado con un Ctrl+S previo.
+		// pisar que se haya dado con un Ctrl+S previo. También invalida el
+		// primer Escape de la doble presión: dos Escape con una tecla en
+		// medio no son una "doble presión limpia" y no cierran.
+		a.lastEscape = time.Time{}
 		a.confirmQuit = false
 		a.confirmClose = false
 		a.confirmReload = false
@@ -830,12 +1105,13 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		}
 
 	case *tcell.EventMouse:
-		// Con el menú abierto el mouse es del menú como el teclado, y con un
-		// pedido activo (Save As) el mouse es del pedido: se ignora por completo
-		// —el controlador no traduce nada ni redibuja— y el clic no puede
-		// cambiar de pestaña, seleccionar un archivo ni raspar el documento por
-		// debajo de lo que el usuario está escribiendo.
-		if a.menuActive || a.promptActive {
+		// Con el menú abierto el mouse es del menú como el teclado, con la
+		// ventana de configuración abierta es de la ventana, y con un pedido
+		// activo (Save As) es del pedido: se ignora por completo —el controlador
+		// no traduce nada ni redibuja— y el clic no puede cambiar de pestaña,
+		// seleccionar un archivo ni raspar el documento por debajo de lo que el
+		// usuario está escribiendo.
+		if a.menuActive || a.promptActive || a.configActive {
 			return false
 		}
 		a.checkExternalReloads()
@@ -899,6 +1175,22 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		a.redraw()
 	}
 	return false
+}
+
+// isSwitchTabNextKey reconoce Ctrl+K sin Shift: pestaña siguiente. Ctrl+J no
+// existe como par: en la terminal es el byte LF —el Enter que tcode ya trata
+// como activar/insertar salto de línea—, así que el atajo quedó en K y L.
+func isSwitchTabNextKey(ev *tcell.EventKey) bool {
+	return ev.Key() == tcell.KeyCtrlK && ev.Modifiers()&tcell.ModShift == 0
+}
+
+// isSwitchTabPrevKey reconoce Ctrl+L sin Shift: pestaña anterior. El par final
+// es Ctrl+K (siguiente) / Ctrl+L (anterior); Ctrl+Shift+K quedó descartado.
+// Nota de terminal: en xterm y consolas Unix el form feed (Ctrl+L) limpia la
+// pantalla y no llega a la app; en Windows Terminal, el entorno objetivo,
+// llega limpio.
+func isSwitchTabPrevKey(ev *tcell.EventKey) bool {
+	return ev.Key() == tcell.KeyCtrlL && ev.Modifiers()&tcell.ModShift == 0
 }
 
 // isUndoKey reconoce Ctrl+Z sin modificadores.
@@ -1026,6 +1318,28 @@ func (a *App) handlePromptKey(ev *tcell.EventKey) {
 
 	a.refreshPrompt()
 	a.redraw()
+}
+
+// quitEscape cierra el editor SOLO con la doble presión de Escape: dos Escape
+// dentro de quitEscapeWindow. Un solo Escape nunca cierra —con cambios sin
+// guardar avisa y arma la confirmación, sin ellos da el feedback de "de nuevo
+// rápido"—; un segundo Escape tardío reinicia el conteo. Ctrl+C dejó de ser
+// una forma de cerrar: esta es la única salida.
+func (a *App) quitEscape() bool {
+	now := clockNow()
+	if now.Sub(a.lastEscape) <= quitEscapeWindow {
+		a.lastEscape = time.Time{}
+		return true
+	}
+	a.lastEscape = now
+	if a.ws.AnyModified() && !a.confirmQuit {
+		a.confirmQuit = true
+		a.statusBar.SetMessage("Cambios sin guardar: Ctrl+S guarda, Escape dos veces rápido sale")
+	} else {
+		a.statusBar.SetMessage("Escape de nuevo rápido para salir")
+	}
+	a.redraw()
+	return false
 }
 
 // saveAs guarda el buffer capturado al abrir el pedido en la ruta elegida y pasa
@@ -1171,18 +1485,37 @@ func (a *App) redraw() {
 		a.menu.Draw(a.editorSurf, a.ws, editorW)
 	}
 
+	// La ventana de configuración flota centrada sobre el área del editor,
+	// como el menú de pestañas: se compone DESPUÉS del editor (tapa el
+	// documento, sin tocar pestañas ni barra) con la misma superficie recortada
+	// a su región (configRegion). toggleConfig jamás la abre con un editor de
+	// ancho 0, así que acá siempre hay espacio.
+	if a.configActive {
+		if a.editorSurf == nil {
+			a.editorSurf = view.NewOffsetSurface(a.screen)
+		}
+		x, y, w, h := a.configRegion()
+		a.editorSurf.SetRegion(x, y, w, h)
+		a.configMenu.Draw(a.editorSurf)
+	}
+
 	a.statusBar.Draw(a.screen, height-statusHeight, width)
 	a.screen.Show()
 }
 
 // toggleExplorer muestra u oculta el panel lateral. Mostrar enfoca el
-// explorador; ocultar lo desenfoca (el foco queda en el editor). En ambos casos
-// el ancho del editor cambia, así que todas las vistas reciben el mismo
-// tratamiento que un resize —sin eso, la vista de otra pestaña dibujaría con
-// el ancho viejo al volver— y se redibuja.
+// explorador y REVELA el buffer activo —otra puerta de entrada del foco, como
+// Shift+Tab—: el selector nunca vuelve a una selección vieja al reaparecer.
+// Ocultar lo desenfoca (el foco queda en el editor). En ambos casos el ancho
+// del editor cambia, así que todas las vistas reciben el mismo tratamiento que
+// un resize —sin eso, la vista de otra pestaña dibujaría con el ancho viejo al
+// volver— y se redibuja.
 func (a *App) toggleExplorer() {
 	a.explorerVisible = !a.explorerVisible
 	a.explorerFocused = a.explorerVisible
+	if a.explorerVisible {
+		a.revealActiveInExplorer()
+	}
 	a.resizeEditors()
 	a.redraw()
 }
@@ -1211,6 +1544,13 @@ func readEntries(dir string) ([]view.Entry, error) {
 
 	var dirs, files []view.Entry
 	for _, de := range infos {
+		// Los dotfiles (nombres que arrancan con ".") no entran al árbol: .git,
+		// .tcode y el resto son estado de la herramienta, no código. El filtro
+		// vive acá, en la ÚNICA puerta de datos del disco a la vista: cubre el
+		// nivel raíz y toda expansión de subdirectorio con la misma regla.
+		if strings.HasPrefix(de.Name(), ".") {
+			continue
+		}
 		info, err := de.Info()
 		if err != nil {
 			continue
@@ -1248,6 +1588,33 @@ func (a *App) activateExplorerEntry() {
 	a.syncStatus()
 }
 
+// revealActiveInExplorer acerca el selector al buffer activo: el bucle revela
+// un nivel por pasada —Reveal dice qué dir colapsado falta → readEntries lo
+// lee → ExpandDir lo deposita— hasta que el archivo queda visible y
+// seleccionado, o hasta demostrar que no está en el árbol (y el cursor queda
+// intacto). Sin buffer activo no hay nada que revelar. La expansión es
+// perezosa: solo lee los directorios colapsados del camino; un árbol ya
+// desplegado no re-lee nada. Un error de lectura es un no-op silencioso, como
+// en explorerExpand.
+func (a *App) revealActiveInExplorer() {
+	buf := a.activeBuffer()
+	if buf == nil {
+		return
+	}
+	target := buf.Path()
+	for {
+		done, dir := a.explorer.Reveal(target)
+		if done {
+			return
+		}
+		entries, err := readEntries(dir)
+		if err != nil {
+			return
+		}
+		a.explorer.ExpandDir(dir, entries)
+	}
+}
+
 // explorerExpand responde a ActionExpand: lee el directorio del nodo activo
 // (el controlador es quien toca el filesystem: el modelo es PieceTable y
 // texto, y la vista solo dibuja) y deposita sus hijos en el árbol con
@@ -1281,6 +1648,64 @@ func (a *App) switchTab(move func() *model.PieceTable) {
 	a.syncStatus()
 	a.tabBar.EnsureActive(a.ws, a.tabBarWidth())
 	a.redraw()
+}
+
+// configRegion devuelve la región de la ventana flotante de configuración:
+// 34x(ConfigMenuHeight) centrada en el área del editor (columna según el
+// panel, fila tras la de pestañas), recortada si la terminal es chica (nunca
+// más ancha que el editor ni más alta que su área). El alto lo decide la
+// ventana (marco + todas sus filas), no un número fijo: cada fila nueva la
+// agranda sola. Comparte la geometría entre toggleConfig (que solo usa el
+// tamaño para Resize) y redraw (que reencuadra la superficie con la posición).
+func (a *App) configRegion() (x, y, w, h int) {
+	width, height := a.screen.Size()
+	editorW := width - a.explorerColumn()
+	menuW := 34
+	if menuW > editorW {
+		menuW = editorW
+	}
+	menuH := view.ConfigMenuHeight()
+	if menuH > editorHeight(height) {
+		menuH = editorHeight(height)
+	}
+	x = a.explorerColumn() + (editorW-menuW)/2
+	y = tabBarHeight + (editorHeight(height)-menuH)/2
+	w, h = menuW, menuH
+	return
+}
+
+// toggleConfig abre o cierra la ventana flotante de configuración. Abrir la
+// dimensiona a la región del editor (configRegion) y coloca el cursor donde
+// quedó; cerrar solo apaga el flag. Sin espacio para el editor no abre: una
+// ventana de ancho 0 no tendría dónde dibujarse. El caller redibuja al cerrar.
+func (a *App) toggleConfig() {
+	a.configActive = !a.configActive
+	if a.configActive {
+		width, _ := a.screen.Size()
+		if width-a.explorerColumn() <= 0 {
+			a.configActive = false
+			return
+		}
+		_, _, w, h := a.configRegion()
+		a.configMenu.Resize(w, h)
+	}
+	a.redraw()
+}
+
+// configChanged aplica en vivo un cambio de la ventana de configuración: el
+// cambio pudo venir de la fila Theme, así que PRIMERO se aplica el tema con el
+// id nuevo (y se re-themean los editores abiertos) y después se persiste y se
+// reencuadra la composición —el tamaño del indent y el salto de palabra
+// afectan a todas las vistas, y el ancho del panel cambia el del editor— con
+// el mismo tratamiento que un resize. Si el cambio no fue del tema, re-aplicar
+// es inofensivo. El caller redibuja.
+func (a *App) configChanged() {
+	a.applyTheme()
+	a.saveConfig()
+	a.resizeEditors()
+	width, height := a.screen.Size()
+	a.explorer.Resize(panelWidth(width), editorHeight(height))
+	a.tabBar.EnsureActive(a.ws, a.tabBarWidth())
 }
 
 // toggleMenu abre o cierra el menú de pestañas. Abrir lo dimensiona a la
@@ -1427,6 +1852,17 @@ func (a *App) closeTab() {
 	a.emitEvent(ext.EventDidCloseBuffer)
 	a.confirmClose = false
 	a.statusBar.ClearMessage()
+	// Cerrar la ÚLTIMA pestaña deja el workspace en el estado a propósito
+	// vacío: el foco pasa al explorador —visible aunque estuviera oculto—,
+	// como en el arranque sobre un directorio. Sin buffers no hay documento
+	// que editar, y el árbol es el destino natural del teclado para dirigirse
+	// a otro archivo; si el foco quedara en el editor vacío, el guard de
+	// workspace vacío dejaría las teclas muertas salvo salir. Cerrar una
+	// pestaña que no es la última no toca el foco ni la visibilidad.
+	if a.ws.Len() == 0 {
+		a.explorerVisible = true
+		a.explorerFocused = true
+	}
 	a.tabBar.EnsureActive(a.ws, a.tabBarWidth())
 	a.syncStatus()
 	a.redraw()

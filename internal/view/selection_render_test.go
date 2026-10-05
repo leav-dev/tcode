@@ -21,13 +21,16 @@ func TestSelectionStyledInRender(t *testing.T) {
 	draw(v, s)
 
 	cells, width, _ := s.GetContents()
-	if cells[0*width+0].Style != DefaultTheme().Selection {
+	// El texto vive después del gutter: las celdas de documento suman
+	// gutterWidth() columnas de pantalla.
+	g := v.gutterWidth()
+	if cells[0*width+g].Style != DefaultTheme().Selection {
 		t.Fatal("la 'h' seleccionada debe llevar el estilo Selection")
 	}
-	if cells[0*width+2].Style != DefaultTheme().Selection {
+	if cells[0*width+g+2].Style != DefaultTheme().Selection {
 		t.Fatal("la 'l' seleccionada debe llevar el estilo Selection")
 	}
-	if cells[0*width+5].Style == DefaultTheme().Selection {
+	if cells[0*width+g+5].Style == DefaultTheme().Selection {
 		t.Fatal("el espacio fuera del rango no debe estar seleccionado")
 	}
 }
@@ -82,19 +85,20 @@ func TestDeleteReplacesSelection(t *testing.T) {
 func TestMouseDragSelects(t *testing.T) {
 	v := newTestView(t, "hola mundo", 20, 2)
 
-	press := tcell.NewEventMouse(0, 0, tcell.Button1, tcell.ModNone)
-	v.HandleEvent(press) // ancla en (0,0)
+	g := v.gutterWidth()
+	press := tcell.NewEventMouse(g, 0, tcell.Button1, tcell.ModNone)
+	v.HandleEvent(press) // ancla en la columna 0 del documento
 	if v.SelectionActive() {
 		t.Fatal("el press solo no debe seleccionar todavía")
 	}
 
-	drag := tcell.NewEventMouse(3, 0, tcell.Button1, tcell.ModNone)
-	v.HandleEvent(drag) // arrastre hasta (3,0)
+	drag := tcell.NewEventMouse(g+3, 0, tcell.Button1, tcell.ModNone)
+	v.HandleEvent(drag) // arrastre hasta la columna 3 del documento
 	if got := v.SelectionText(); got != "hol" {
 		t.Fatalf("selección tras arrastrar = %q, esperaba %q", got, "hol")
 	}
 
-	release := tcell.NewEventMouse(3, 0, tcell.ButtonNone, tcell.ModNone)
+	release := tcell.NewEventMouse(g+3, 0, tcell.ButtonNone, tcell.ModNone)
 	v.HandleEvent(release) // soltar: termina el arrastre
 	if !v.SelectionActive() {
 		t.Fatal("al soltar la selección debe quedar marcada")
@@ -109,8 +113,9 @@ func TestMouseDragSelects(t *testing.T) {
 func TestMouseClickDoesNotSelect(t *testing.T) {
 	v := newTestView(t, "hola mundo", 20, 2)
 
-	v.HandleEvent(tcell.NewEventMouse(1, 0, tcell.Button1, tcell.ModNone))
-	v.HandleEvent(tcell.NewEventMouse(1, 0, tcell.ButtonNone, tcell.ModNone))
+	g := v.gutterWidth()
+	v.HandleEvent(tcell.NewEventMouse(g+1, 0, tcell.Button1, tcell.ModNone))
+	v.HandleEvent(tcell.NewEventMouse(g+1, 0, tcell.ButtonNone, tcell.ModNone))
 
 	if v.SelectionActive() {
 		t.Fatal("un clic no debe dejar selección")

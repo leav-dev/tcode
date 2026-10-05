@@ -8,6 +8,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"tcode/internal/ext"
+	"tcode/internal/view"
 )
 
 // validExtSrc es un manifest sano con un comando declarado.
@@ -65,12 +66,12 @@ func TestExtensionKeybindingRunsBuiltin(t *testing.T) {
 		"version": "1.0.0",
 		"activation": ["onStartup"],
 		"contributes": {
-			"keybindings": [{"key": "ctrl+k", "command": "tcode.toggleExplorer"}]
+			"keybindings": [{"key": "ctrl+m", "command": "tcode.toggleExplorer"}]
 		}
 	}`)
 
-	if quit := press(app, tcell.KeyCtrlK); quit {
-		t.Fatal("ctrl+k no debe cerrar el editor")
+	if quit := press(app, tcell.KeyCtrlM); quit {
+		t.Fatal("ctrl+m no debe cerrar el editor")
 	}
 
 	// El built-in corrió: el panel quedó visible. Con foco de teclado verificar
@@ -147,14 +148,14 @@ func TestExtensionDeclaredCommandActivatesAndReports(t *testing.T) {
 		"activation": ["onCommand:ext.stub.saludar"],
 		"contributes": {
 			"commands": [{"id": "ext.stub.saludar", "title": "Saludar"}],
-			"keybindings": [{"key": "ctrl+k", "command": "ext.stub.saludar"}]
+			"keybindings": [{"key": "ctrl+m", "command": "ext.stub.saludar"}]
 		}
 	}`)
 
 	if app.ext.Active("ext.stub") {
 		t.Fatal("la extensión no debería activarse al arrancar")
 	}
-	press(app, tcell.KeyCtrlK)
+	press(app, tcell.KeyCtrlM)
 	if !app.ext.Active("ext.stub") {
 		t.Fatal("ejecutar el comando no activó la extensión")
 	}
@@ -174,11 +175,11 @@ func TestExtensionUnknownCommandShowsStatus(t *testing.T) {
 		"version": "1.0.0",
 		"activation": ["*"],
 		"contributes": {
-			"keybindings": [{"key": "ctrl+k", "command": "tcode.noexiste"}]
+			"keybindings": [{"key": "ctrl+m", "command": "tcode.noexiste"}]
 		}
 	}`)
 
-	press(app, tcell.KeyCtrlK)
+	press(app, tcell.KeyCtrlM)
 	msg := app.statusBar.Message()
 	if !strings.Contains(msg, "desconocido") || !strings.Contains(msg, "tcode.noexiste") {
 		t.Errorf("mensaje = %q, esperaba comando desconocido con su id", msg)
@@ -196,11 +197,11 @@ func TestExtensionChordRunsInController(t *testing.T) {
 		"version": "1.0.0",
 		"activation": ["onStartup"],
 		"contributes": {
-			"keybindings": [{"key": "ctrl+k ctrl+g", "command": "tcode.toggleExplorer"}]
+			"keybindings": [{"key": "ctrl+m ctrl+g", "command": "tcode.toggleExplorer"}]
 		}
 	}`)
 
-	press(app, tcell.KeyCtrlK)
+	press(app, tcell.KeyCtrlM)
 	if app.explorerVisible {
 		t.Fatal("la primera tecla del chord ya ejecutó el comando")
 	}
@@ -293,6 +294,48 @@ func writeExtensionDir(t *testing.T, root string, entries map[string]string) str
 	return root
 }
 
+// TestExtensionScriptInsertsAtCursor: integración del backend de scripting —
+// una extensión de disco con main.lua y un comando que declara (script, fn)
+// se dispara desde su keybinding; la función Lua inserta texto en el cursor
+// vía tcode.insert y el buffer queda editado.
+func TestExtensionScriptInsertsAtCursor(t *testing.T) {
+	resetConfigVars(t)
+	app, _ := newTestApp(t, "uno")
+
+	root := writeExtensionDir(t, "", map[string]string{
+		"escritor": `{
+			"id": "escritor",
+			"name": "Escritor",
+			"version": "1.0.0",
+			"activation": ["onStartup"],
+			"contributes": {
+				"commands": [
+					{ "id": "escritor.hola", "title": "Hola", "script": "main.lua", "fn": "hola" }
+				],
+				"keybindings": [
+					{ "key": "ctrl+shift+h", "command": "escritor.hola" }
+				]
+			}
+		}`,
+	})
+	luaSrc := `function hola()
+  tcode.insert("HOLA")
+end
+`
+	if err := os.WriteFile(filepath.Join(root, "escritor", "main.lua"), []byte(luaSrc), 0o644); err != nil {
+		t.Fatalf("main.lua: %v", err)
+	}
+	app.extensionRoots = []string{root}
+	app.loadExtensions()
+	app.ext.ActivateEvent(ext.ActivateStartup)
+
+	// La tecla del keybinding resuelve el comando declarado con script.
+	app.handleEvent(tcell.NewEventKey(tcell.KeyRune, 'H', tcell.ModCtrl|tcell.ModShift))
+	if got := app.ws.Active().GetContent(); got != "HOLAuno" {
+		t.Fatalf("contenido = %q, se esperaba %q (la fn Lua insertó en el cursor 0)", got, "HOLAuno")
+	}
+}
+
 // TestLoadExtensionsFromDisk: el cargador descubre las extensiones de las
 // raíces configuradas, registra sus stubs, deja sus keybindings activos y
 // avisa (sin romper) por cada extensión rota.
@@ -359,5 +402,63 @@ func TestLoadExtensionsPrefersFirstRoot(t *testing.T) {
 
 	if got := app.ext.Resolve(tcell.NewEventKey(tcell.KeyRune, 'k', tcell.ModCtrl)); got != "cmd.usuario" {
 		t.Fatalf("Resolve = %q, esperaba el keybinding del primer root (usuario)", got)
+	}
+}
+
+// TestExtensionScriptFillsDiagnostics: integración del backend de
+// diagnostics — una extensión de disco recorre el buffer con lineCount/line y
+// deposita las anotaciones (tcode.diagnostics.set); el editor las expone por
+// el getter con línea 0-indexada, tal como el HITO A las renderiza. El camino
+// es el mismo que TestExtensionScriptInsertsAtCursor (extensión de disco con
+// main.lua, keybinding y Activación de arranque).
+func TestExtensionScriptFillsDiagnostics(t *testing.T) {
+	resetConfigVars(t)
+	app, _ := newTestApp(t, "uno\nTODO aqui\nfin")
+
+	root := writeExtensionDir(t, "", map[string]string{
+		"marcador": `{
+			"id": "marcador",
+			"name": "Marcador TODO",
+			"version": "1.0.0",
+			"activation": ["onStartup"],
+			"contributes": {
+				"commands": [
+					{ "id": "marcador.todo", "title": "Marcar TODOs", "script": "main.lua", "fn": "marcar" }
+				],
+				"keybindings": [
+					{ "key": "ctrl+shift+t", "command": "marcador.todo" }
+				]
+			}
+		}`,
+	})
+	luaSrc := `function marcar()
+  local n = tcode.lineCount()
+  local diags = {}
+  for i = 1, n do
+    local l = tcode.line(i)
+    if string.find(l, "TODO") then
+      table.insert(diags, { line = i, message = "todo pendiente", severity = "warning" })
+    end
+  end
+  tcode.diagnostics.set(diags)
+end
+`
+	if err := os.WriteFile(filepath.Join(root, "marcador", "main.lua"), []byte(luaSrc), 0o644); err != nil {
+		t.Fatalf("main.lua: %v", err)
+	}
+	app.extensionRoots = []string{root}
+	app.loadExtensions()
+	app.ext.ActivateEvent(ext.ActivateStartup)
+
+	// La tecla del keybinding corre la función Lua que marca las TODOs.
+	app.handleEvent(tcell.NewEventKey(tcell.KeyRune, 'T', tcell.ModCtrl|tcell.ModShift))
+
+	ed := app.activeEditor()
+	d := ed.Diagnostics()
+	if len(d) != 1 {
+		t.Fatalf("diagnósticos = %+v, esperaba 1 (solo la línea con TODO)", d)
+	}
+	if d[0].Line != 1 || d[0].Severity != view.SeverityWarning || d[0].Message != "todo pendiente" {
+		t.Errorf("diag = %+v, esperaba Line=1 (0-indexada), Warning, todo pendiente", d[0])
 	}
 }

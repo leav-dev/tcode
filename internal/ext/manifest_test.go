@@ -103,6 +103,12 @@ func TestLoadRejects(t *testing.T) {
 		{"keybinding sin comando", func(m *Manifest) {
 			m.Contributes.Keybindings = append(m.Contributes.Keybindings, Keybinding{Key: "ctrl+k", Command: ""})
 		}, "keybinding"},
+		{"script sin fn", func(m *Manifest) {
+			m.Contributes.Commands = append(m.Contributes.Commands, Command{ID: "tcode.demosaludo.script1", Script: "main.lua"})
+		}, "script"},
+		{"fn sin script", func(m *Manifest) {
+			m.Contributes.Commands = append(m.Contributes.Commands, Command{ID: "tcode.demosaludo.script2", Fn: "correr"})
+		}, "script"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -162,5 +168,23 @@ func TestParseKeybindingAccepts(t *testing.T) {
 				t.Errorf("validateBindingKey(%q) falló: %v", key, err)
 			}
 		})
+	}
+}
+
+// TestCommandScriptPairLoads: script+fn juntos son válidos y quedan expuestos
+// en el Command cargado; el manifest de scripting declara la implementación
+// del comando sin escribirla en el JSON del manifest.
+func TestCommandScriptPairLoads(t *testing.T) {
+	m := mustManifest(t, `{
+		"id": "tcode.scriptdemo",
+		"name": "Script Demo",
+		"version": "1.0.0",
+		"contributes": {
+			"commands": [{"id": "tcode.scriptdemo.correr", "script": "main.lua", "fn": "correr"}]
+		}
+	}`)
+	c := m.Contributes.Commands[0]
+	if c.Script != "main.lua" || c.Fn != "correr" {
+		t.Errorf("Script/Fn = %q/%q, esperaba main.lua/correr", c.Script, c.Fn)
 	}
 }

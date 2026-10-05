@@ -33,11 +33,18 @@ type Contributions struct {
 }
 
 // Command declara un comando: su id y el título que mostraría una futura
-// palette. Sin backend de scripting, un comando declarado es un stub que al
-// ejecutarse activa la extensión y avisa que falta implementación.
+// palette. Con script y fn, la implementación vive en una función Lua del
+// script de la extensión (milestone de scripting); sin el par, un comando
+// declarado es un stub que al ejecutarse activa la extensión y avisa que
+// falta implementación.
 type Command struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`
+	// Script es la ruta del archivo Lua del script de la extensión, relativa
+	// al directorio de la extensión (e.Dir); Fn es la función global Lua que
+	// implementa el comando. Van obligatoriamente juntas: validate lo exige.
+	Script string `json:"script"`
+	Fn     string `json:"fn"`
 }
 
 // Keybinding re-mapea una tecla (o chord de dos tiempos) a un comando
@@ -110,6 +117,13 @@ func validate(m *Manifest) error {
 			return fmt.Errorf("comando duplicado: %q", c.ID)
 		}
 		seen[c.ID] = true
+		// Script y fn definen la implementación Lua del comando: el par es
+		// atómico. Un comando con uno solo quedaría a medio cablear (un
+		// script sin función no tiene qué llamar, una función sin script no
+		// tiene de dónde cargarse).
+		if (c.Script == "") != (c.Fn == "") {
+			return fmt.Errorf("comando %s: script y fn van juntos", c.ID)
+		}
 	}
 
 	for i, h := range m.Contributes.Hooks {

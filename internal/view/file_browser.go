@@ -6,6 +6,22 @@ import (
 	"github.com/gdamore/tcell/v2"
 )
 
+// isDescendantOf dice si node es descendiente estricto del directorio dir: su
+// ruta empieza con dir.path y el primer carácter tras el prefijo es un
+// separador de ruta. Acepta "/" y "\\" porque los nodos guardan rutas del SO
+// (filepath.Join en Windows) y los tests usan rutas de juguete con "/": un
+// prefijo a mitad de nombre —dir "/a", node "/ab"— no cuenta.
+func isDescendantOf(dir, node string) bool {
+	if !strings.HasPrefix(node, dir) || len(node) <= len(dir) {
+		return false
+	}
+	switch node[len(dir)] {
+	case '/', '\\':
+		return true
+	}
+	return false
+}
+
 // wheelScroll es el desplazamiento de la rueda del mouse en filas, el mismo
 // paso de 3 que usa el editor.
 const wheelScroll = 3
@@ -126,6 +142,15 @@ func (fb *FileBrowser) SetChildren(entries []Entry) {
 	if !node.isDir {
 		return
 	}
+	fb.expandNode(node, entries)
+	fb.ensureCursorVisible()
+}
+
+// expandNode marca expandido el nodo dir e inyecta sus entries como hijos si
+// no los tenía cargados, re-aplana y clampa: el núcleo común de SetChildren
+// (expansión del CURSOR) y ExpandDir (expansión por RUTA). Los hijos ya
+// cargados no se duplican: re-expandir un dir guardado es gratis, sin E/S.
+func (fb *FileBrowser) expandNode(node *treeNode, entries []Entry) {
 	if len(node.children) == 0 {
 		for _, e := range entries {
 			node.children = append(node.children, &treeNode{
@@ -139,7 +164,65 @@ func (fb *FileBrowser) SetChildren(entries []Entry) {
 	node.expanded = true
 	fb.flatten()
 	fb.clamp()
-	fb.ensureCursorVisible()
+}
+
+// ExpandDir marca expandido el dir con path dado —no hace falta que sea el del
+// cursor— e inyecta sus hijos si no los tenía: la expansión por RUTA que usa
+// el reveal del controlador (Reveal + ExpandDir alternan), donde la selección
+// puede estar en cualquier otro nodo. Cursor y scroll quedan estables: el
+// reveal posiciona el cursor recién al terminar, en Reveal. Devuelve false si
+// el dir no está en el árbol.
+func (fb *FileBrowser) ExpandDir(path string, entries []Entry) bool {
+	for _, n := range fb.nodes {
+		if n.path == path && n.isDir {
+			fb.expandNode(n, entries)
+			return true
+		}
+	}
+	return false
+}
+
+// Reveal acerca el cursor al nodo de path —absoluto, como los que guardan los
+// nodos— si está en el árbol, y devuelve:
+//   - (true, ""): el nodo quedó visible y seleccionado; o el nodo no existe
+//     o no está bajo el árbol actual, y el cursor NO se movió (el controlador
+//     termina igual en ambos casos).
+//   - (false, dir): falta expandir el ancestro visible más profundo del path
+//     (un dir colapsado); el controlador lee sus hijos con readEntries, llama
+//     ExpandDir y vuelve a llamar a Reveal.
+//
+// El controlador itera: cada pasada expande un nivel más, perezosamente —un
+// dir ya expandido no se relee—, hasta que el nodo queda visible o se prueba
+// que no está. La vista nunca toca el filesystem.
+func (fb *FileBrowser) Reveal(path string) (bool, string) {
+	// El nodo objetivo ya está en el aplanado: solo posicionar el cursor.
+	if idx, ok := fb.findNodeIndex(path); ok {
+		fb.setCursor(idx)
+		return true, ""
+	}
+	// Ancestro visible más profundo del path: el que hay que seguir abriendo.
+	var dir *treeNode
+	for _, n := range fb.nodes {
+		if n.isDir && isDescendantOf(n.path, path) && (dir == nil || n.depth > dir.depth) {
+			dir = n
+		}
+	}
+	if dir != nil && !dir.expanded {
+		return false, dir.path
+	}
+	// Sin ancestro visible (fuera del árbol) o ancestro expandido sin el nodo
+	// (el dir ya se leyó y no está ahí): no hay nada que revelar.
+	return true, ""
+}
+
+// findNodeIndex devuelve el índice del nodo con la ruta dada en el aplanado.
+func (fb *FileBrowser) findNodeIndex(path string) (int, bool) {
+	for i, n := range fb.nodes {
+		if n.path == path {
+			return i, true
+		}
+	}
+	return 0, false
 }
 
 // flatten reconstruye el aplanado de lo VISIBLE desde el árbol que ya vive en
@@ -417,12 +500,15 @@ func (fb *FileBrowser) HandleEvent(ev tcell.Event) (Action, bool) {
 }
 
 // Draw pinta el árbol en coordenadas propias desde (0,0): el nodo activo va
-// resaltado a todo el ancho del panel. Cada fila es indent + prefijo + nombre
-// (+ "/" en los directorios), con la indentación de dos celdas por nivel y el
-// prefijo como señal del tipo: "▸ " dir colapsado, "▾ " dir expandido, "  "
-// archivo (dos celdas, alineado con las flechas). Los nombres que no entran se
-// recortan contra el ancho del panel (writeString avanza por grapheme
-// cluster). Sin nodos o sin alto no hay nada que dibujar.
+// con la barra de selección (TreeCursor, fondo de acento) a todo el ancho del
+// panel. Cada fila es indent + prefijo + nombre (+ "/" en los directorios),
+// con la indentación de dos celdas por nivel y el prefijo como señal del tipo:
+// "▸ " dir colapsado, "▾ " dir expandido, "  " archivo inactivo y "> "
+// archivo ACTIVO —el marcador viaja con la selección y refuerza la barra sin
+// salir de las dos celdas, así los nombres quedan alineados con los carets de
+// los directorios—. Los nombres que no entran se recortan contra el ancho del
+// panel (writeString avanza por grapheme cluster). Sin nodos o sin alto no hay
+// nada que dibujar.
 func (fb *FileBrowser) Draw(s Surface) {
 	if len(fb.nodes) == 0 || fb.height <= 0 {
 		return
@@ -449,11 +535,18 @@ func (fb *FileBrowser) Draw(s Surface) {
 
 		prefix := "  "
 		if n.isDir {
+			// Los directorios conservan su caret también en la fila activa: el
+			// caret es el indicador de expansión, reemplazarlo en la selección
+			// perdería el estado expandido/colapsado.
 			if n.expanded {
 				prefix = "▾ "
 			} else {
 				prefix = "▸ "
 			}
+		} else if idx == fb.cursor {
+			// El marcador de la fila activa en los archivos: además de la barra
+			// de selección, "> " señala dónde está el cursor en el árbol.
+			prefix = "> "
 		}
 		line := strings.Repeat(" ", n.depth*2) + prefix + n.name
 		if n.isDir {

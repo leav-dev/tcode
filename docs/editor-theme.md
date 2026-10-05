@@ -4,6 +4,36 @@ tcode dibuja con una **paleta por rol** (un `Theme`). La paleta por defecto es
 estilo oscuro tipo VSCode Dark+; un archivo JSON del usuario la reemplaza sin
 tocar código.
 
+## Paletas integradas (selector de la ventana de configuración)
+
+Desde la ventana flotante de configuración (**`Ctrl+P`**, fila *Theme*) se
+cicla entre seis paletas; los cambios aplican **en vivo** (todas las vistas,
+los editores abiertos incluidos) y persisten en `~/.tcode/config.json`:
+
+| id | Nombre en el selector | Estilo |
+| --- | --- | --- |
+| `dark` | Dark | El default actual (VSCode Dark+) |
+| `light` | Light | Claro tipo VSCode Light |
+| `light-hc` | Light HC | Claro de alto contraste (estilo High Contrast) |
+| `dark-hc` | Dark HC | Oscuro de alto contraste |
+| `tokyo-night` | Tokyo Night | Paleta Tokyo Night |
+| `dracula` | Dracula | Paleta Dracula |
+
+La opción **Custom** aplica el `theme.json` del usuario (ver abajo); con el
+selector sin tocar, es el comportamiento original.
+
+## El fondo del documento es del tema, no de la terminal
+
+Cada paleta integrada pinta su **propio fondo de documento** (`Text` lleva su
+par fg/fondo, y `StyleForRole` lo propaga a la sintaxis; `TabIdle` comparte el
+par y el editor rellena su viewport): el tema `Light` se ve claro aunque tu
+terminal sea negra, y Tokyo Night/Dracula no dependen del fondo del emulador.
+
+Excepción documentada: el tema **Custom** —o cualquier tema sin fondo—
+heredan el par del tema base o, si tu `theme.json` define `"text":
+"default"`, vuelven a depender de los colores default de la terminal (el
+comportamiento original). El esquema `theme.json` no tiene clave de fondo.
+
 ## El archivo
 
 `~/.tcode/theme.json` mapea nombres de rol a colores:
@@ -14,6 +44,10 @@ tocar código.
   "cursorLine": "236",
   "tabActive": "45",
   "treeCursor": "237",
+  "gutter": "246",
+  "diagError": "208",
+  "diagWarning": "220",
+  "diagInfo": "45",
   "keyword": "#569cd6",
   "comment": "244",
   "string": "173",
@@ -36,14 +70,21 @@ tocar código.
 | `text` | Texto del documento sin resaltar |
 | `cursorLine` | Fondo de la línea del cursor (un color) |
 | `tabActive` / `tabIdle` | Pestaña activa / inactivas |
-| `treeCursor` | Nodo activo del árbol |
+| `treeCursor` | Fondo de la fila activa del árbol (un color, como `cursorLine`) |
 | `status` / `message` | Barra de estado / mensaje transitorio |
 | `modified` | Marca de documento sucio *(reservado)* |
+| `gutter` | Números de línea de la columna lateral (fondo del tema, fg gris) |
+| `diagError` / `diagWarning` / `diagInfo` | Marcador de severidad en el gutter y mensaje del diagnóstico |
 | `comment`, `keyword`, `string`, `number`, `type`, `function`, `variable`, `punct` | Roles de sintaxis |
 
-Los roles "activos" (`tabActive`, `treeCursor`) conservan el atributo `Reverse`
-además del color de acento: la noción de "seleccionado" nunca depende solo del
-color de la terminal.
+`tabActive` conserva el atributo `Reverse` además del color de acento: la
+noción de "seleccionado" nunca depende solo del color de la terminal.
+
+`treeCursor` es un color de **fondo** —como `cursorLine`—: la fila activa del
+árbol lleva esa barra de selección a todo el ancho y el texto en el color por
+defecto, que se adapta a terminales claras y oscuras. Así la selección nunca
+cae en un color invisible aunque el tema cargue un índice oscuro (el default es
+blanco sobre azul oscuro, el acento de la barra de estado).
 
 ## Resaltado de sintaxis
 

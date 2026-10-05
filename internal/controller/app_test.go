@@ -10,7 +10,24 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"tcode/internal/model"
+	"tcode/internal/view"
 )
+
+// TestMain aísla la suite del entorno REAL del usuario: ni ~/.tcode/config.json
+// ni ~/.tcode/theme.json entran a los tests (son las dos rutas que el arranque
+// lee) y las variables globales de view arrancan en sus defaults. Los tests
+// que necesitan un config o tema propio los remapean explícitamente (ver
+// app_config_test.go y theme_test.go) — ese remapeo corre después de TestMain,
+// con precedencia sobre los pines que quedan acá.
+func TestMain(m *testing.M) {
+	themeFilePath = func() string { return filepath.Join(os.TempDir(), "tcode-test-no-theme.json") }
+	configFilePath = func() string { return filepath.Join(os.TempDir(), "tcode-test-no-config.json") }
+	view.SetIndentSize(4)
+	view.SetWordWrapEnabled(true)
+	view.SetExplorerWidth(24)
+	view.SetActiveThemeID("")
+	os.Exit(m.Run())
+}
 
 func newTestApp(t *testing.T, content string) (*App, string) {
 	t.Helper()
@@ -89,11 +106,70 @@ func TestCtrlSSavesTheDocument(t *testing.T) {
 	}
 }
 
-func TestEscapeOnUnmodifiedDocumentQuits(t *testing.T) {
+func TestSingleEscapeDoesNotQuit(t *testing.T) {
 	app, _ := newTestApp(t, "uno")
 
+	// La ÚNICA salida es la doble presión rápida de Escape: un solo Escape
+	// (con o sin cambios) nunca cierra.
+	if quit := press(app, tcell.KeyEscape); quit {
+		t.Fatal("un solo Escape no debe cerrar el editor: se necesita doble rápido")
+	}
 	if quit := press(app, tcell.KeyEscape); !quit {
-		t.Fatal("Escape sin cambios debe cerrar el editor")
+		t.Fatal("el segundo Escape rápido debe cerrar el editor")
+	}
+}
+
+// TestDoubleEscapeMustBeQuick: la doble presión de Escape solo cierra dentro de
+// la ventana (quitEscapeWindow). Con el reloj inyectado: un segundo Escape
+// dentro de la ventana cierra; pasado el umbral no cierra y el conteo se
+// reinicia (el siguiente rápido sí cierra). Sin cambios sin guardar también.
+func TestDoubleEscapeMustBeQuick(t *testing.T) {
+	oldClock := clockNow
+	oldWin := quitEscapeWindow
+	quitEscapeWindow = 500 * time.Millisecond
+	now := time.Unix(0, 0).Add(time.Hour)
+	clockNow = func() time.Time { return now }
+	defer func() { clockNow, quitEscapeWindow = oldClock, oldWin }()
+
+	app, _ := newTestApp(t, "uno")
+
+	// Primer Escape en t, segundo a t+400ms: cierra.
+	press(app, tcell.KeyEscape)
+	now = now.Add(400 * time.Millisecond)
+	clockNow = func() time.Time { return now }
+	if quit := press(app, tcell.KeyEscape); !quit {
+		t.Fatal("el segundo Escape dentro de la ventana debe cerrar")
+	}
+
+	// Reinicio: primer Escape en t2, segundo a t2+600ms (> ventana): NO cierra
+	// y el tercero a t2+700ms (rápido respecto del segundo) sí.
+	now = now.Add(time.Second)
+	clockNow = func() time.Time { return now }
+	press(app, tcell.KeyEscape) // primer press
+	now = now.Add(600 * time.Millisecond)
+	clockNow = func() time.Time { return now }
+	if quit := press(app, tcell.KeyEscape); quit {
+		t.Fatal("un segundo Escape fuera de la ventana no debe cerrar")
+	}
+	now = now.Add(50 * time.Millisecond)
+	clockNow = func() time.Time { return now }
+	if quit := press(app, tcell.KeyEscape); !quit {
+		t.Fatal("el Escape siguiente, rápido, debe cerrar (el conteo se reinició)")
+	}
+}
+
+// TestCtrlCNoLongerQuits: la única salida es el doble Escape; Ctrl+C ya no
+// cierra el editor (la tecla cae al flujo normal) y no toca el documento.
+func TestCtrlCNoLongerQuits(t *testing.T) {
+	app, _ := newTestApp(t, "uno")
+	if quit := press(app, tcell.KeyCtrlC); quit {
+		t.Fatal("Ctrl+C no debe cerrar el editor")
+	}
+	if quit := press(app, tcell.KeyCtrlC); quit {
+		t.Fatal("ni dos veces seguidas: la única salida es el doble Escape")
+	}
+	if got := app.ws.Active().GetContent(); got != "uno" {
+		t.Fatalf("el documento no debe haberse tocado: %q", got)
 	}
 }
 
@@ -158,8 +234,11 @@ func TestCtrlSSavesAndThenEscapeQuits(t *testing.T) {
 	typeRune(app, 'X')
 	press(app, tcell.KeyCtrlS)
 
+	if quit := press(app, tcell.KeyEscape); quit {
+		t.Fatal("tras guardar, un solo Escape no cierra: doble rápido")
+	}
 	if quit := press(app, tcell.KeyEscape); !quit {
-		t.Fatal("tras guardar, Escape debe cerrar sin preguntar")
+		t.Fatal("tras guardar, el segundo Escape rápido debe cerrar sin preguntar")
 	}
 	if got := readFile(t, path); got != "Xuno" {
 		t.Fatalf("archivo en disco = %q, se esperaba %q", got, "Xuno")
@@ -301,8 +380,9 @@ func TestUndoPlacesTheCursorAtTheChange(t *testing.T) {
 	if !visible {
 		t.Fatal("el cursor debe quedar visible")
 	}
-	if x != 3 || y != 2 {
-		t.Fatalf("cursor en (%d,%d), se esperaba (3,2): el final de \"dos\" en la fila del editor", x, y)
+	// La columna 3 de \ "dos\ " vive en la celda gutterWidth+3 (gutter de 2).
+	if x != 5 || y != 2 {
+		t.Fatalf("cursor en (%d,%d), se esperaba (5,2): el final de \"dos\" en la fila del editor", x, y)
 	}
 }
 
@@ -313,8 +393,11 @@ func TestUndoThenEscapeQuitsWithoutAsking(t *testing.T) {
 	press(app, tcell.KeyCtrlZ)
 
 	// El documento volvió al estado inicial, así que ya no hay nada que perder.
+	if quit := press(app, tcell.KeyEscape); quit {
+		t.Fatal("tras deshacer todo, un solo Escape no cierra: doble rápido")
+	}
 	if quit := press(app, tcell.KeyEscape); !quit {
-		t.Fatal("tras deshacer todo, Escape debe cerrar sin pedir confirmación")
+		t.Fatal("tras deshacer todo, el segundo Escape rápido debe cerrar sin pedir confirmación")
 	}
 }
 
@@ -819,8 +902,10 @@ func TestResizeUpdatesEveryEditor(t *testing.T) {
 		if ed == nil {
 			t.Fatalf("la vista de %v es nil", buf)
 		}
-		if w, h := ed.Size(); w != 30 || h != 3 {
-			t.Fatalf("la vista de %v quedó con %dx%d, se esperaba 30x3", buf, w, h)
+		// El área de texto descuenta el gutter (2 columnas para buffers de 1
+		// línea): 30 de widget → 28 de texto.
+		if w, h := ed.Size(); w != 28 || h != 3 {
+			t.Fatalf("la vista de %v quedó con %dx%d, se esperaba 28x3", buf, w, h)
 		}
 	}
 }
@@ -878,8 +963,11 @@ func TestEmptyWorkspaceDoesNotPanic(t *testing.T) {
 	if quit := press(app, tcell.KeyDown); quit {
 		t.Fatal("una tecla común no debe cerrar el editor")
 	}
+	if quit := press(app, tcell.KeyEscape); quit {
+		t.Fatal("un solo Escape sobre el workspace vacío no cierra: doble rápido")
+	}
 	if quit := press(app, tcell.KeyEscape); !quit {
-		t.Fatal("Escape sobre un workspace vacío debe cerrar el editor")
+		t.Fatal("el segundo Escape rápido sobre el workspace vacío debe cerrar el editor")
 	}
 	app.redraw()
 }
@@ -1001,6 +1089,54 @@ func TestCtrlPageDownSwitchesTabs(t *testing.T) {
 	}
 }
 
+// TestCtrlKSwitchesTabs: Ctrl+K es el atajo de pestañas de la familia K
+// (pedido del usuario; Ctrl+J no existe porque en la terminal es el byte LF,
+// el Enter que ya activa/inserta salto de línea): pasa a la SIGUIENTE con
+// wrap, como Ctrl+PageDown.
+func TestCtrlKSwitchesTabs(t *testing.T) {
+	app := newThreeBufferApp(t, "uno", "dos", "tres")
+	if got := app.ws.ActiveIndex(); got != 2 {
+		t.Fatalf("ActiveIndex() = %d, se esperaba 2", got)
+	}
+
+	app.handleEvent(tcell.NewEventKey(tcell.KeyCtrlK, 0, tcell.ModNone))
+	if got := app.ws.ActiveIndex(); got != 0 {
+		t.Fatalf("tras Ctrl+K, ActiveIndex() = %d, se esperaba 0 (wrap)", got)
+	}
+
+	app.handleEvent(tcell.NewEventKey(tcell.KeyCtrlK, 0, tcell.ModNone))
+	if got := app.ws.ActiveIndex(); got != 1 {
+		t.Fatalf("tras el segundo Ctrl+K, ActiveIndex() = %d, se esperaba 1", got)
+	}
+}
+
+// TestCtrlLSwitchesTabsBackwards: Ctrl+L vuelve a la ANTERIOR con wrap —el
+// par final es Ctrl+K (siguiente) / Ctrl+L (anterior); Ctrl+Shift+K quedó
+// descartado por pedido del usuario. En Windows Terminal Ctrl+L llega limpio
+// (el form feed de los terminales Unix, que limpian la pantalla, no aplica).
+func TestCtrlLSwitchesTabsBackwards(t *testing.T) {
+	app := newThreeBufferApp(t, "uno", "dos", "tres")
+	if got := app.ws.ActiveIndex(); got != 2 {
+		t.Fatalf("ActiveIndex() = %d, se esperaba 2", got)
+	}
+
+	app.handleEvent(tcell.NewEventKey(tcell.KeyCtrlL, 0, tcell.ModNone))
+	if got := app.ws.ActiveIndex(); got != 1 {
+		t.Fatalf("tras Ctrl+L, ActiveIndex() = %d, se esperaba 1", got)
+	}
+
+	app.handleEvent(tcell.NewEventKey(tcell.KeyCtrlL, 0, tcell.ModNone))
+	if got := app.ws.ActiveIndex(); got != 0 {
+		t.Fatalf("tras el segundo Ctrl+L, ActiveIndex() = %d, se esperaba 0", got)
+	}
+
+	// Wrap al inicio: desde la 0, cae en la última.
+	app.handleEvent(tcell.NewEventKey(tcell.KeyCtrlL, 0, tcell.ModNone))
+	if got := app.ws.ActiveIndex(); got != 2 {
+		t.Fatalf("tras Ctrl+L en la primera, ActiveIndex() = %d, se esperaba 2 (wrap)", got)
+	}
+}
+
 // TestCtrlWClosesACleanTab: una pestaña limpia se cierra sin confirmación y su
 // vista sale del mapa de vistas.
 func TestCtrlWClosesACleanTab(t *testing.T) {
@@ -1098,8 +1234,87 @@ func TestClosingTheLastTabLeavesAnEmptyWorkspace(t *testing.T) {
 		t.Fatalf("workspace vacío: Active()=%v ActiveIndex()=%d", app.ws.Active(), app.ws.ActiveIndex())
 	}
 
+	if quit := press(app, tcell.KeyEscape); quit {
+		t.Fatal("un solo Escape sobre el workspace vacío no cierra: doble rápido")
+	}
 	if quit := press(app, tcell.KeyEscape); !quit {
-		t.Fatal("Escape sobre el workspace vacío debe cerrar el editor")
+		t.Fatal("el segundo Escape rápido sobre el workspace vacío debe cerrar el editor")
+	}
+}
+
+// TestClosingTheLastTabReturnsFocusToTheExplorer: cerrar la ÚLTIMA pestaña deja
+// el workspace en el estado a propósito vacío, y el foco pasa al explorador
+// —visible aunque estuviera oculto—, como en el arranque sobre un directorio.
+// Sin buffers no hay documento que editar: el árbol es el destino natural del
+// teclado para dirigirse a otro archivo; si el foco quedara en el editor
+// vacío, el guard de workspace vacío dejaría las teclas muertas salvo salir.
+func TestClosingTheLastTabReturnsFocusToTheExplorer(t *testing.T) {
+	dir := t.TempDir()
+	doc := filepath.Join(dir, "doc.txt")
+	if err := os.WriteFile(doc, []byte("uno"), 0o644); err != nil {
+		t.Fatalf("no se pudo crear el archivo: %v", err)
+	}
+
+	s := tcell.NewSimulationScreen("UTF-8")
+	if err := s.Init(); err != nil {
+		t.Fatalf("no se pudo inicializar la pantalla simulada: %v", err)
+	}
+	app, err := NewAppWithScreen(s, doc) // arranque de editor: panel oculto
+	if err != nil {
+		t.Fatalf("NewAppWithScreen falló: %v", err)
+	}
+	t.Cleanup(func() { app.ws.CloseAll(); s.Fini() })
+
+	if app.explorerVisible || app.explorerFocused {
+		t.Fatal("el arranque con archivo debe dejar el panel oculto y sin foco")
+	}
+
+	press(app, tcell.KeyCtrlW) // una pestaña limpia cierra directo
+	if got := app.ws.Len(); got != 0 {
+		t.Fatalf("Len() = %d, se esperaba 0", got)
+	}
+	if !app.explorerVisible {
+		t.Fatal("cerrar la última pestaña debe mostrar el explorador")
+	}
+	if !app.explorerFocused {
+		t.Fatal("cerrar la última pestaña debe pasar el foco al explorador")
+	}
+
+	// El teclado queda vivo en el árbol: ↓ no sale ni abre nada (una sola
+	// entrada se mantiene), y Enter abre el archivo de la raíz devolviendo el
+	// foco al editor.
+	press(app, tcell.KeyDown)
+	if got := app.explorer.CursorPath(); got != doc {
+		t.Fatalf("CursorPath() = %q, se esperaba %q", got, doc)
+	}
+	press(app, tcell.KeyEnter)
+	if got := app.ws.Len(); got != 1 {
+		t.Fatalf("Len() = %d, se esperaba 1 tras abrir desde el árbol", got)
+	}
+	if app.explorerFocused {
+		t.Fatal("abrir un archivo desde el árbol devuelve el foco al editor")
+	}
+}
+
+// TestClosingANonLastTabKeepsTheEditorFocus: el paso al explorador es SOLO del
+// estado sin buffers —cerrar la última pestaña—, no un efecto lateral de
+// cualquier cierre: cerrar una pestaña que no es la última deja el foco en el
+// editor y el panel oculto queda oculto.
+func TestClosingANonLastTabKeepsTheEditorFocus(t *testing.T) {
+	app, _, _ := newTwoBufferApp(t, "uno", "dos")
+	if app.explorerVisible || app.explorerFocused {
+		t.Fatal("el arranque con archivo debe dejar el panel oculto")
+	}
+
+	press(app, tcell.KeyCtrlW) // cierra el buffer activo (el 0); queda 1
+	if got := app.ws.Len(); got != 1 {
+		t.Fatalf("Len() = %d, se esperaba 1", got)
+	}
+	if app.explorerVisible {
+		t.Fatal("cerrar una pestaña que no es la última no debe mostrar el panel")
+	}
+	if app.explorerFocused {
+		t.Fatal("cerrar una pestaña que no es la última no debe mover el foco")
 	}
 }
 
@@ -1147,18 +1362,18 @@ func TestRedrawComposesTabsAboveTheEditor(t *testing.T) {
 	app.redraw()
 
 	// El primer carácter de la etiqueta de la pestaña ("doc.txt" → 'd') va en
-	// (0,0); el primer carácter del documento va en (0,1), la primera fila del
-	// editor.
+	// (0,0); el primer carácter del documento vive tras el gutter de 2
+	// columnas en (2,1), la primera fila del editor.
 	if got := cellRune(app, 0, 0); got != 'd' {
 		t.Fatalf("(0,0) = %q, se esperaba 'd' (inicio de la pestaña)", got)
 	}
-	if got := cellRune(app, 0, 1); got != 'u' {
-		t.Fatalf("(0,1) = %q, se esperaba 'u' (inicio del documento)", got)
+	if got := cellRune(app, 2, 1); got != 'u' {
+		t.Fatalf("(2,1) = %q, se esperaba 'u' (inicio del documento tras el gutter)", got)
 	}
 
 	sim := app.screen.(tcell.SimulationScreen)
-	if x, y, vis := sim.GetCursor(); !vis || x != 0 || y != 1 {
-		t.Fatalf("cursor = (%d,%d,vis=%v), se esperaba (0,1,true)", x, y, vis)
+	if x, y, vis := sim.GetCursor(); !vis || x != 2 || y != 1 {
+		t.Fatalf("cursor = (%d,%d,vis=%v), se esperaba (2,1,true)", x, y, vis)
 	}
 }
 
@@ -1168,7 +1383,8 @@ func TestRedrawComposesTabsAboveTheEditor(t *testing.T) {
 func TestMouseClickIsTranslatedPastTheTabBar(t *testing.T) {
 	app, _ := newTestApp(t, "uno\ndos\ntres")
 
-	app.handleEvent(tcell.NewEventMouse(0, 2, tcell.Button1, tcell.ModNone))
+	// La columna 2 es la primera celda de texto (tras el gutter de la vista).
+	app.handleEvent(tcell.NewEventMouse(2, 2, tcell.Button1, tcell.ModNone))
 	typeRune(app, 'X')
 
 	if got := app.ws.Active().GetContent(); got != "uno\nXdos\ntres" {
@@ -1218,6 +1434,56 @@ func panelRow(app *App, y int) string {
 		sb.WriteRune(c.Runes[0])
 	}
 	return strings.TrimRight(sb.String(), " ")
+}
+
+// TestReadEntriesSkipsDotfiles: readEntries —la única puerta de datos del
+// disco al árbol— NO lista los dotfiles: carpetas y archivos que arrancan
+// con "." (.git/, .tcode/, .oculto) quedan fuera, en el nivel raíz y en
+// cualquier subdirectorio. Es el contrato "el árbol muestra código, no el
+// estado de la herramienta".
+func TestReadEntriesSkipsDotfiles(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{".git", ".tcode", "docs", "visible.txt", ".oculto.txt"} {
+		p := filepath.Join(dir, name)
+		if name == ".git" || name == ".tcode" || name == "docs" {
+			if err := os.MkdirAll(p, 0o755); err != nil {
+				t.Fatalf("no se pudo crear el dir %s: %v", name, err)
+			}
+			continue
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatalf("no se pudo crear %s: %v", name, err)
+		}
+	}
+
+	entries, err := readEntries(dir)
+	if err != nil {
+		t.Fatalf("readEntries falló: %v", err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name)
+	}
+	want := []string{"docs", "visible.txt"} // dirs primero, sin dotfiles
+	if got := strings.Join(names, ","); got != strings.Join(want, ",") {
+		t.Fatalf("readEntries = %v, se esperaba %v (los dotfiles no se listan)", names, want)
+	}
+
+	// Un subdirectorio con dotfiles tampoco los muestra.
+	sub := filepath.Join(dir, "docs")
+	if err := os.MkdirAll(filepath.Join(sub, ".escondido"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "nota.md"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	entries, err = readEntries(sub)
+	if err != nil {
+		t.Fatalf("readEntries del subdir falló: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name != "nota.md" {
+		t.Fatalf("readEntries del subdir = %+v, se esperaba solo nota.md", entries)
+	}
 }
 
 // TestPanelWidthKeepsTheEditorAtLeastSixteenColumns: la fórmula del ancho del
@@ -1313,13 +1579,13 @@ func TestStartupWithDirectoryArgument(t *testing.T) {
 	}
 
 	// El archivo está en el primer nivel del árbol: es el único nodo, el cursor
-	// ya está sobre él y el panel lo dibuja con su prefijo de archivo.
+	// ya está sobre él y el panel lo dibuja con el marcador de la fila activa.
 	app.redraw()
 	if got := app.explorer.CursorPath(); got != doc {
 		t.Fatalf("CursorPath() = %q, se esperaba %q", got, doc)
 	}
-	if got := panelRow(app, 0); got != "  doc.txt" {
-		t.Fatalf("fila 0 del panel = %q, se esperaba %q", got, "  doc.txt")
+	if got := panelRow(app, 0); got != "> doc.txt" {
+		t.Fatalf("fila 0 del panel = %q, se esperaba %q", got, "> doc.txt")
 	}
 }
 
@@ -1353,12 +1619,12 @@ func TestStartupWithFileArgumentKeepsTheExplorerHidden(t *testing.T) {
 		t.Fatal("el explorador debe arrancar oculto con un archivo como argumento")
 	}
 
-	// El documento arranca en (0,1): el panel oculto no desplaza nada y la
-	// geometría de los tests existentes se conserva.
+	// El documento arranca en (2,1): el panel oculto no desplaza nada salvo el
+	// gutter de la vista del editor.
 	resizeApp(app, 24, 6)
 	app.redraw()
-	if got := cellRune(app, 0, 1); got != 'c' {
-		t.Fatalf("(0,1) = %q, se esperaba 'c' (el inicio del documento)", got)
+	if got := cellRune(app, 2, 1); got != 'c' {
+		t.Fatalf("(2,1) = %q, se esperaba 'c' (el inicio del documento tras el gutter)", got)
 	}
 }
 
@@ -1412,8 +1678,9 @@ func TestCtrlBTogglesTheExplorer(t *testing.T) {
 	// EXISTENTES, así que la vista tiene que existir primero.
 	app.redraw()
 	ed := app.activeEditor()
-	if w, _ := ed.Size(); w != 80 {
-		t.Fatalf("la vista del editor = %d columnas, se esperaba 80 (panel oculto)", w)
+	// Size() es el área de texto: descuenta el gutter (2 para 1 línea).
+	if w, _ := ed.Size(); w != 78 {
+		t.Fatalf("la vista del editor = %d columnas de texto, se esperaba 78 (80 de widget - gutter, panel oculto)", w)
 	}
 
 	if quit := press(app, tcell.KeyCtrlB); quit {
@@ -1425,12 +1692,13 @@ func TestCtrlBTogglesTheExplorer(t *testing.T) {
 	if !app.explorerFocused {
 		t.Fatal("al mostrar, el foco debe ir al explorador")
 	}
-	// El editor conserva 80-24 columnas y el documento arranca en la columna 24.
-	if w, h := ed.Size(); w != 56 || h != 6 {
-		t.Fatalf("vista del editor = %dx%d, se esperaba 56x6", w, h)
+	// El editor conserva 80-24 columnas de widget; el área de texto descuenta
+	// el gutter y el documento arranca en la columna del panel + gutter.
+	if w, h := ed.Size(); w != 54 || h != 6 {
+		t.Fatalf("vista del editor = %dx%d, se esperaba 54x6", w, h)
 	}
-	if got := cellRune(app, 24, 1); got != 'u' {
-		t.Fatalf("(24,1) = %q, se esperaba 'u': el documento desplazado por el panel", got)
+	if got := cellRune(app, 26, 1); got != 'u' {
+		t.Fatalf("(26,1) = %q, se esperaba 'u': el documento desplazado por el panel y el gutter", got)
 	}
 
 	if quit := press(app, tcell.KeyCtrlB); quit {
@@ -1442,11 +1710,11 @@ func TestCtrlBTogglesTheExplorer(t *testing.T) {
 	if app.explorerFocused {
 		t.Fatal("al ocultar, el explorador debe desenfocarse")
 	}
-	if w, _ := ed.Size(); w != 80 {
-		t.Fatalf("la vista del editor = %d columnas tras ocultar, se esperaba 80", w)
+	if w, _ := ed.Size(); w != 78 {
+		t.Fatalf("la vista del editor = %d columnas de texto tras ocultar, se esperaba 78", w)
 	}
-	if got := cellRune(app, 0, 1); got != 'u' {
-		t.Fatalf("(0,1) = %q, se esperaba 'u': el documento de vuelta en la columna 0", got)
+	if got := cellRune(app, 2, 1); got != 'u' {
+		t.Fatalf("(2,1) = %q, se esperaba 'u': el documento de vuelta tras el gutter", got)
 	}
 }
 
@@ -1593,6 +1861,240 @@ func TestTabInsertsInTheDocumentWhileTheExplorerIsVisible(t *testing.T) {
 	}
 	if app.explorerFocused {
 		t.Fatal("Tab con el foco en el editor no debe cambiar el foco")
+	}
+}
+
+// TestShiftTabReturnsFocusToTheExplorer: Shift+Tab (KeyBacktab) es el inverso
+// de Tab: con el foco en el editor y el panel visible devuelve el foco al
+// explorador SIN editar el documento (la tecla no llega a la edición) y SIN
+// tocar la visibilidad del panel, que es decisión de Ctrl+B. Tab y Shift+Tab
+// alternan entre panel y editor desde el teclado.
+func TestShiftTabReturnsFocusToTheExplorer(t *testing.T) {
+	dir := t.TempDir()
+	doc := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(doc, []byte(""), 0o644); err != nil {
+		t.Fatalf("no se pudo crear el archivo: %v", err)
+	}
+	app := newExplorerApp(t, dir)
+
+	press(app, tcell.KeyEnter) // abre a.txt: el foco vuelve al editor
+	if app.explorerFocused {
+		t.Fatal("abrir un archivo devuelve el foco al editor")
+	}
+
+	if quit := press(app, tcell.KeyBacktab); quit {
+		t.Fatal("Shift+Tab no debe cerrar el editor")
+	}
+	if !app.explorerFocused {
+		t.Fatal("Shift+Tab con el foco en el editor debe llevarlo al explorador")
+	}
+	if !app.explorerVisible {
+		t.Fatal("Shift+Tab solo mueve el foco: no debe ocultar el panel")
+	}
+	// El foco cambió sin tocar el documento: Shift+Tab no es una tecla de
+	// edición y el editor no llega a recibirla.
+	if got := app.ws.Active().GetContent(); got != "" {
+		t.Fatalf("contenido = %q, se esperaba \"\": Shift+Tab no edita el documento", got)
+	}
+
+	// El par alterna: Tab devuelve al editor y Shift+Tab vuelve al panel.
+	press(app, tcell.KeyTab)
+	if app.explorerFocused {
+		t.Fatal("Tab debe devolver el foco al editor")
+	}
+	press(app, tcell.KeyBacktab)
+	if !app.explorerFocused {
+		t.Fatal("tras Tab+Shift+Tab el foco debe volver al explorador")
+	}
+}
+
+// TestShiftTabWithHiddenExplorerDoesNothing: con el panel oculto Shift+Tab no
+// lo muestra ni cambia el foco: mostrar el panel es decisión de Ctrl+B.
+func TestShiftTabWithHiddenExplorerDoesNothing(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a"), 0o644); err != nil {
+		t.Fatalf("no se pudo crear el archivo: %v", err)
+	}
+	app := newExplorerApp(t, dir)
+
+	press(app, tcell.KeyCtrlB) // ocultar
+	if app.explorerVisible {
+		t.Fatal("el test requiere el panel oculto")
+	}
+	press(app, tcell.KeyBacktab)
+	if app.explorerVisible || app.explorerFocused {
+		t.Fatal("Shift+Tab con el panel oculto no debe mostrarlo ni enfocarlo")
+	}
+}
+
+// TestShiftTabFocusesTheExplorerWithAnEmptyWorkspace: mover el foco no toca
+// ningún buffer, así que Shift+Tab funciona también sin pestañas abiertas —el
+// arranque sobre un directorio—, igual que Tab.
+func TestShiftTabFocusesTheExplorerWithAnEmptyWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a"), 0o644); err != nil {
+		t.Fatalf("no se pudo crear el archivo: %v", err)
+	}
+	app := newExplorerApp(t, dir)
+	if !app.explorerFocused {
+		t.Fatal("el arranque sobre un directorio enfoca el explorador")
+	}
+
+	press(app, tcell.KeyTab) // desenfoca el panel sin abrir nada
+	if app.explorerFocused {
+		t.Fatal("el test requiere el foco en el editor")
+	}
+	press(app, tcell.KeyBacktab)
+	if !app.explorerFocused {
+		t.Fatal("Shift+Tab sin buffers debe devolver el foco al explorador")
+	}
+}
+
+// TestShiftTabFromTheExplorerReturnsToTheEditor: Shift+Tab es SIMÉTRICO: con
+// el foco ya en el explorador, Shift+Tab devuelve el foco al editor —el
+// mismo comportamiento que Tab—. Quien llega al selector con Shift+Tab no
+// queda atrapado: la misma tecla lo saca. El viaje de foco no edita el
+// documento ni toca la visibilidad del panel.
+func TestShiftTabFromTheExplorerReturnsToTheEditor(t *testing.T) {
+	dir := t.TempDir()
+	doc := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(doc, []byte(""), 0o644); err != nil {
+		t.Fatalf("no se pudo crear el archivo: %v", err)
+	}
+	app := newExplorerApp(t, dir)
+
+	press(app, tcell.KeyEnter) // abre a.txt: foco al editor
+	if app.explorerFocused {
+		t.Fatal("abrir un archivo devuelve el foco al editor")
+	}
+
+	// Alternancia completa con la MISMA tecla: editor → Shift+Tab → selector
+	// → Shift+Tab → editor.
+	press(app, tcell.KeyBacktab)
+	if !app.explorerFocused {
+		t.Fatal("Shift+Tab desde el editor debe llevar el foco al selector")
+	}
+	press(app, tcell.KeyBacktab)
+	if app.explorerFocused {
+		t.Fatal("Shift+Tab desde el selector debe devolver el foco al editor (el par alterna)")
+	}
+	if !app.explorerVisible {
+		t.Fatal("el viaje de foco no debe tocar la visibilidad del panel")
+	}
+
+	// Y Tab sigue saliendo del selector también (la vía clásica).
+	press(app, tcell.KeyBacktab) // al selector
+	press(app, tcell.KeyTab)
+	if app.explorerFocused {
+		t.Fatal("Tab desde el selector debe devolver el foco al editor")
+	}
+
+	if got := app.ws.Active().GetContent(); got != "" {
+		t.Fatalf("contenido = %q, se esperaba \"\": el viaje de foco no edita el documento", got)
+	}
+}
+
+// newSubtreeApp arma un workspace con directorios anidados y devuelve la app
+// y la ruta del archivo hoja: el árbol arranca con el dir raíz colapsado y
+// SIN hijos (nunca expandido), que es lo que fuerza al reveal a leer el disco.
+func newSubtreeApp(t *testing.T) (*App, string) {
+	t.Helper()
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "internal", "view")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatalf("no se pudo crear el subdirectorio: %v", err)
+	}
+	inner := filepath.Join(sub, "editor.go")
+	if err := os.WriteFile(inner, []byte("package view"), 0o644); err != nil {
+		t.Fatalf("no se pudo crear el archivo: %v", err)
+	}
+	app := newExplorerApp(t, dir)
+	if !app.explorerFocused {
+		t.Fatal("el arranque sobre un directorio enfoca el explorador")
+	}
+	return app, inner
+}
+
+// TestShiftTabRevealsTheActiveFile: Shift+Tab no solo devuelve el foco al
+// explorador: REVELA el buffer activo. El archivo se abrió por el modelo con
+// el árbol todavía colapsado (internal sin hijos cargados); al volver con
+// Shift+Tab el controlador expande el camino con E/S real y deja el cursor
+// sobre editor.go.
+func TestShiftTabRevealsTheActiveFile(t *testing.T) {
+	app, inner := newSubtreeApp(t)
+
+	if _, err := app.ws.Open(inner); err != nil {
+		t.Fatalf("no se pudo abrir el buffer: %v", err)
+	}
+	app.explorerFocused = false // foco al editor
+
+	press(app, tcell.KeyBacktab)
+
+	if !app.explorerFocused {
+		t.Fatal("Shift+Tab debe devolver el foco al explorador")
+	}
+	if got := app.explorer.CursorPath(); got != inner {
+		t.Fatalf("CursorPath() = %q, se esperaba el archivo activo %q (el árbol debe revelarlo)", got, inner)
+	}
+
+	// El panel dibuja el archivo en alguna fila (la activa, con el marcador).
+	found := false
+	for y := 0; y < 5; y++ {
+		if strings.Contains(panelRow(app, y), "editor.go") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("el panel debe dibujar el archivo revelado en alguna fila")
+	}
+}
+
+// TestCtrlBShowRevealsTheActiveFile: mostrar el panel con Ctrl+B es otra
+// puerta de ENTRADA del foco y también revela el buffer activo; ocultarlo no
+// toca el árbol.
+func TestCtrlBShowRevealsTheActiveFile(t *testing.T) {
+	app, inner := newSubtreeApp(t)
+
+	if _, err := app.ws.Open(inner); err != nil {
+		t.Fatalf("no se pudo abrir el buffer: %v", err)
+	}
+	app.explorerFocused = false // foco al editor
+
+	press(app, tcell.KeyCtrlB) // ocultar
+	if app.explorerVisible {
+		t.Fatal("el test requiere el panel oculto")
+	}
+	press(app, tcell.KeyCtrlB) // mostrar: enfoca y revela
+
+	if !app.explorerVisible || !app.explorerFocused {
+		t.Fatal("el segundo Ctrl+B debe volver a mostrar y enfocar el panel")
+	}
+	if got := app.explorer.CursorPath(); got != inner {
+		t.Fatalf("CursorPath() = %q tras mostrar con Ctrl+B, se esperaba el archivo activo %q", got, inner)
+	}
+}
+
+// TestClickOnTheTreeDoesNotReveal: un clic en el árbol es intención del
+// usuario: selecciona la fila del clic y NO se pisa con el reveal del buffer
+// activo, que solo corre al ENTRAR el foco por teclado o al mostrar el panel.
+func TestClickOnTheTreeDoesNotReveal(t *testing.T) {
+	app, inner := newSubtreeApp(t)
+
+	if _, err := app.ws.Open(inner); err != nil {
+		t.Fatalf("no se pudo abrir el buffer: %v", err)
+	}
+	app.explorerFocused = false
+	press(app, tcell.KeyBacktab)
+	if got := app.explorer.CursorPath(); got != inner {
+		t.Fatalf("el test requiere el reveal previo: CursorPath() = %q", got)
+	}
+
+	// Clic sobre el NOMBRE del dir del primer nivel (fuera de su caret): solo
+	// selecciona la fila 0 (internal) y no se re-revela el buffer activo.
+	app.handleEvent(tcell.NewEventMouse(5, tabBarHeight, tcell.Button1, tcell.ModNone))
+	want := filepath.Dir(filepath.Dir(inner)) // el dir internal del nivel raíz
+	if got := app.explorer.CursorPath(); got != want {
+		t.Fatalf("CursorPath() = %q tras el clic, se esperaba el dir clickeado %q (el clic manda)", got, want)
 	}
 }
 
@@ -1895,8 +2397,9 @@ func TestMouseClickInTheEditorIsTranslatedPastThePanel(t *testing.T) {
 	resizeApp(app, 80, 8)
 	press(app, tcell.KeyCtrlB) // mostrar el panel: el editor arranca en x=24
 
-	// Pantalla (25, 2): el editor recibe (1, 1) — línea 1, columna 1 de "dos".
-	app.handleEvent(tcell.NewEventMouse(25, 2, tcell.Button1, tcell.ModNone))
+	// Pantalla (27, 2): el editor recibe (3, 1) — línea 1, columna 1 de "dos"
+	// (3 = gutter de 2 + columna 1 del texto).
+	app.handleEvent(tcell.NewEventMouse(27, 2, tcell.Button1, tcell.ModNone))
 	typeRune(app, 'X')
 
 	if got := app.ws.Active().GetContent(); got != "uno\ndXos\ntres" {
@@ -2004,6 +2507,7 @@ func TestRunSavesTheSession(t *testing.T) {
 	app := newExplorerApp(t, dir)
 	press(app, tcell.KeyEnter) // abre doc.txt desde el explorador
 
+	app.screen.(tcell.SimulationScreen).InjectKey(tcell.KeyEscape, 0, tcell.ModNone)
 	app.screen.(tcell.SimulationScreen).InjectKey(tcell.KeyEscape, 0, tcell.ModNone)
 	if err := app.Run(); err != nil {
 		t.Fatalf("Run falló: %v", err)
@@ -2159,6 +2663,7 @@ func TestQuitRemovesTheSessionFileWhenNoTabs(t *testing.T) {
 	}
 
 	app.screen.(tcell.SimulationScreen).InjectKey(tcell.KeyEscape, 0, tcell.ModNone)
+	app.screen.(tcell.SimulationScreen).InjectKey(tcell.KeyEscape, 0, tcell.ModNone)
 	if err := app.Run(); err != nil {
 		t.Fatalf("Run falló: %v", err)
 	}
@@ -2258,8 +2763,8 @@ func TestSaveAsPromptOwnsTheMouse(t *testing.T) {
 }
 
 // TestCtrlCCopiesSelectionInsteadOfQuitting: Ctrl+C con una selección activa
-// copia (mensaje "Copiado") y el editor NO sale; sin selección, Ctrl+C sigue
-// saliendo (comportamiento de siempre).
+// copia (mensaje "Copiado") y el editor NO sale; sin selección, Ctrl+C dejó
+// de ser una forma de salir: la única salida es la doble presión de Escape.
 func TestCtrlCCopiesSelectionInsteadOfQuitting(t *testing.T) {
 	app, _ := newTestApp(t, "uno\ndos")
 
@@ -2276,5 +2781,31 @@ func TestCtrlCCopiesSelectionInsteadOfQuitting(t *testing.T) {
 	}
 	if app.ws.Active() == nil {
 		t.Fatal("el editor no debe haber salido")
+	}
+}
+
+// TestDiagMessageStaysOffStatusBar: el diagnóstico ya no vive en la barra de
+// estado (decisión de producto: se muestra inline, a la derecha de cada línea
+// anotada, para ver varias a la vez). Mover el cursor por una línea anotada
+// NO debe depositar el mensaje del diagnóstico en la barra.
+func TestDiagMessageStaysOffStatusBar(t *testing.T) {
+	app, _ := newTestApp(t, "uno\ndos\ntres")
+	ed := app.activeEditor()
+	ed.SetDiagnostics("", []view.Diagnostic{
+		{Line: 0, Message: "mal", Severity: view.SeverityError},
+		{Line: 0, Message: "aviso", Severity: view.SeverityWarning},
+	})
+
+	// Una tecla que mueve el cursor (derecha) pasa por el path de teclas del
+	// editor: la línea 0 del cursor tiene diagnóstico, pero la barra no lo
+	// muestra.
+	press(app, tcell.KeyRight)
+	if got := app.statusBar.Message(); got != "" {
+		t.Fatalf("mensaje = %q, se esperaba la barra sin diagnóstico (el inline vive en el view)", got)
+	}
+
+	press(app, tcell.KeyDown)
+	if got := app.statusBar.Message(); got != "" {
+		t.Fatalf("mensaje = %q, la barra debe seguir sin diagnóstico", got)
 	}
 }
