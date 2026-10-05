@@ -11,28 +11,28 @@ usuario sigue siendo el fallback: se muestra como la opción **Custom** (id "") 
 se aplica cuando `Theme` es "".
 
 ## Tasks
-- [ ] `view/theme.go`: seis fábricas de paleta, helpers `fg`/`on`/`active`
+- [x] `view/theme.go`: seis fábricas de paleta, helpers `fg`/`on`/`active`
   promovidos a nivel de paquete, registry ordenado (id/name/build) con
   `ThemeIDs()`, `ThemeNames()`, `ThemeByID()`; `DefaultTheme()` = `DarkTheme()`
   (LoadTheme y themeOr intactos) <!-- id: 0 -->
-- [ ] `view/settings.go`: `activeThemeID` ("" = custom) + `ActiveThemeID()` /
+- [x] `view/settings.go`: `activeThemeID` ("" = custom) + `ActiveThemeID()` /
   `SetActiveThemeID(id)` validando contra el registry <!-- id: 1 -->
-- [ ] `view/config_menu.go`: `ConfigKind` nuevo `ConfigEnum` (names), ítem
+- [x] `view/config_menu.go`: `ConfigKind` nuevo `ConfigEnum` (names), ítem
   `Theme` (opciones = nombres de los 6 + "Custom"), get = índice del id actual
   ("" → Custom), set = id o ""; `ConfigMenuHeight()` exportado (items+2) para
   la geometría del controller <!-- id: 2 -->
-- [ ] Controller: `loadTheme` carga `a.customTheme`; `applyTheme()` central
+- [x] Controller: `loadTheme` carga `a.customTheme`; `applyTheme()` central
   (5 vistas + `for ed := range a.editors`); `themeFor()` = registry si el id
   existe, si no custom; `loadConfig` aplica `Theme` y re-aplica; `saveConfig`
   persiste el id; `configChanged` re-aplica el tema; `configRegion` usa
   `ConfigMenuHeight()` <!-- id: 3 -->
-- [ ] Tests view: paletas válidas y distintas entre sí, registry estable y
+- [x] Tests view: paletas válidas y distintas entre sí, registry estable y
   `ThemeByID` con id desconocido → no; ConfigMenu: fila Theme visible, ciclar
   cambia `ActiveThemeID`, Custom → "" <!-- id: 4 -->
-- [ ] Tests controller: `Theme` en config carga y aplica (a.theme == paleta);
+- [x] Tests controller: `Theme` en config carga y aplica (a.theme == paleta);
   ciclar en el menú persiste el id; custom (sin id) sigue usando theme.json
   <!-- id: 5 -->
-- [ ] Verificación y commit de unidad <!-- id: 6 -->
+- [x] Verificación y commit de unidad: `448b879` <!-- id: 6 -->
 
 ## Design decisions
 - **El tema deja de aplicarse solo al arranque.** `applyTheme` central recorre
