@@ -576,6 +576,17 @@ func (v *EditorView) insertText(s string) bool {
 	return true
 }
 
+// PasteText inserta el texto COMPLETO de un paste del TERMINAL (evento de
+// bracketed paste: tcode pide el modo con EnablePaste y el terminal entrega el
+// portapapeles como un solo evento, con sus saltos de línea intactos). Es la
+// diferencia con el "pegar" que el terminal hace a secas —sin bracketed paste—,
+// que llega runa por runa y se inserta (y se deshace) carácter por carácter.
+// Reutiliza insertText: reemplaza la selección activa si hay y queda como UN
+// paso de deshacer.
+func (v *EditorView) PasteText(text string) bool {
+	return v.insertText(text)
+}
+
 // backspace borra el grapheme cluster anterior al cursor. Al inicio de una línea
 // borra el salto anterior, que es lo que fusiona las dos líneas.
 func (v *EditorView) backspace() bool {

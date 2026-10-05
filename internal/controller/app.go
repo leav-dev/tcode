@@ -121,6 +121,11 @@ type App struct {
 	// registry.
 	customTheme view.Theme
 
+	// pasteActive/pasteBuf acumulan el contenido de un paste bracketed entre
+	// el EventPaste de inicio y el de fin (tcell entrega el texto como teclas).
+	pasteActive bool
+	pasteBuf    strings.Builder
+
 	// extensionRoots son los directorios donde se buscan extensiones, en orden
 	// de precedencia: el primero gana en caso de ids duplicados. Por defecto,
 	// las del usuario y las del proyecto actual; los tests los reemplazan.
@@ -150,6 +155,13 @@ func NewAppWithScreen(s tcell.Screen, path string) (*App, error) {
 		return nil, err
 	}
 	s.EnableMouse()
+	// Bracketed paste: con el modo activo, el paste del terminal (Ctrl+V en
+	// Windows Terminal) llega como UN evento EventPaste con el texto completo
+	// —y sus saltos de línea— en vez de caer como teclas una por una (que se
+	// insertaban y se deshacían carácter por carácter). El editor también
+	// mantiene su Ctrl+V propio (portapapeles del sistema) para terminales sin
+	// este modo.
+	s.EnablePaste()
 
 	ws := model.NewWorkspace()
 	app := &App{
@@ -855,6 +867,20 @@ var setCrashPaper = func() {
 func (a *App) handleEvent(ev tcell.Event) bool {
 	switch ev := ev.(type) {
 	case *tcell.EventKey:
+		if a.pasteActive {
+			// Dentro de un paste bracketed el contenido llega como teclas: se
+			// acumulan tal cual (con sus saltos de línea) y se insertan juntas al
+			// EventPaste de cierre; ninguna llega al documento ni a los atajos.
+			switch ev.Key() {
+			case tcell.KeyRune:
+				a.pasteBuf.WriteRune(ev.Rune())
+			case tcell.KeyEnter, tcell.KeyLF:
+				a.pasteBuf.WriteByte('\n')
+			case tcell.KeyTab:
+				a.pasteBuf.WriteByte('\t')
+			}
+			return false
+		}
 		// Cada evento de actividad revisa los buffers abiertos: un archivo que
 		// cambió por fuera y un buffer limpio se recargan solos. Con ediciones
 		// sin guardar no se toca nada: ahí decide el Ctrl+R (confirmado).
@@ -1101,6 +1127,31 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		a.clearForceSave()
 		a.statusBar.ClearMessage()
 		if ed := a.activeEditor(); ed != nil && ed.HandleEvent(ev) {
+			a.redraw()
+		}
+
+	case *tcell.EventPaste:
+		// Bracketed paste (modo pedido con EnablePaste): tcell marca el INICIO
+		// y el FIN del bloque, pero el contenido llega como teclas una por una.
+		// Se acumulan en pasteBuf y se insertan de un golpe al cierre: un paso de
+		// undo, sin un hook por tecla. Sin este modo el terminal pega "a secas"
+		// y el texto entra (y se deshace) carácter por carácter.
+		if ev.Start() {
+			a.pasteActive = true
+			a.pasteBuf.Reset()
+			return false
+		}
+		text := a.pasteBuf.String()
+		a.pasteActive, a.pasteBuf = false, strings.Builder{}
+		// Con un pedido o un overlay abierto el teclado es de esos, no del
+		// documento: el paste se descarta como cualquier tecla ajena.
+		if text == "" || a.promptActive || a.menuActive || a.configActive {
+			return false
+		}
+		if ed := a.activeEditor(); ed != nil && ed.PasteText(text) {
+			a.confirmQuit = false
+			a.confirmClose = false
+			a.clearForceSave()
 			a.redraw()
 		}
 
