@@ -8,26 +8,26 @@ instalador detecta la plataforma, **descarga** el binario correspondiente a
 como modo explícito `--build` / `-Build` para desarrolladores.
 
 ## Tasks
-- [ ] `.github/workflows/release.yml`: on `push: tags ['v*']`; matrix de targets
+- [x] `.github/workflows/release.yml`: on `push: tags ['v*']`; matrix de targets
   (linux-amd64, darwin-amd64, darwin-arm64, windows-amd64) cross-compilando con
   CGO_ENABLED=0 desde ubuntu; nombres `tcode-<os>-<arch>[.exe]`; `checksums.txt`
   (sha256); upload con softprops/action-gh-release <!-- id: 0 -->
-- [ ] `scripts/install.sh`: por defecto descarga de
+- [x] `scripts/install.sh`: por defecto descarga de
   `https://github.com/leav-dev/tcode/releases/latest/download/` (detecta
   Linux/Darwin/MINGW + arquitectura), verifica sha256 contra checksums.txt,
   instala como `tcode` (o `.exe`) y configura el PATH; `--build` ejecuta la
   compilación local actual; `TCODE_RELEASE_BASE` para pruebas <!-- id: 1 -->
-- [ ] `scripts/install.ps1`: por defecto descarga vía Invoke-WebRequest
+- [x] `scripts/install.ps1`: por defecto descarga vía Invoke-WebRequest
   (detecta AMD64/ARM64), Get-FileHash + comparación, instala `tcode.exe`;
   `-Build` compila local; `TCODE_RELEASE_BASE` para pruebas <!-- id: 2 -->
-- [ ] Docs: `docs/install.md` con la vía recomendada (release, sin requisitos
+- [x] Docs: `docs/install.md` con la vía recomendada (release, sin requisitos
   de Go/git) y la vía dev (`--build`); nota del primer tag pendiente
   <!-- id: 3 -->
-- [ ] Verificación funcional: release falso servido local (python http.server
+- [x] Verificación funcional: release falso servido local (python http.server
   con assets + checksums) y ambos instaladores apuntados a esa base con
   `TCODE_RELEASE_BASE`, en sandbox (HOME/`-InstallDir` + `-NoPath`); mapping
   de plataforma validado en el host (Git Bash → windows/amd64) <!-- id: 4 -->
-- [ ] Commit de unidad <!-- id: 5 -->
+- [x] Commit de unidad: `a290fac` <!-- id: 5 -->
 
 ## Design decisions
 - **Cross-compile desde un solo runner:** tcode es Go puro (tcell sin cgo),
