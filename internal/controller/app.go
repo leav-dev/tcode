@@ -1417,6 +1417,13 @@ func readEntries(dir string) ([]view.Entry, error) {
 
 	var dirs, files []view.Entry
 	for _, de := range infos {
+		// Los dotfiles (nombres que arrancan con ".") no entran al árbol: .git,
+		// .tcode y el resto son estado de la herramienta, no código. El filtro
+		// vive acá, en la ÚNICA puerta de datos del disco a la vista: cubre el
+		// nivel raíz y toda expansión de subdirectorio con la misma regla.
+		if strings.HasPrefix(de.Name(), ".") {
+			continue
+		}
 		info, err := de.Info()
 		if err != nil {
 			continue

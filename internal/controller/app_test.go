@@ -10,7 +10,24 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"tcode/internal/model"
+	"tcode/internal/view"
 )
+
+// TestMain aísla la suite del entorno REAL del usuario: ni ~/.tcode/config.json
+// ni ~/.tcode/theme.json entran a los tests (son las dos rutas que el arranque
+// lee) y las variables globales de view arrancan en sus defaults. Los tests
+// que necesitan un config o tema propio los remapean explícitamente (ver
+// app_config_test.go y theme_test.go) — ese remapeo corre después de TestMain,
+// con precedencia sobre los pines que quedan acá.
+func TestMain(m *testing.M) {
+	themeFilePath = func() string { return filepath.Join(os.TempDir(), "tcode-test-no-theme.json") }
+	configFilePath = func() string { return filepath.Join(os.TempDir(), "tcode-test-no-config.json") }
+	view.SetIndentSize(4)
+	view.SetWordWrapEnabled(true)
+	view.SetExplorerWidth(24)
+	view.SetActiveThemeID("")
+	os.Exit(m.Run())
+}
 
 func newTestApp(t *testing.T, content string) (*App, string) {
 	t.Helper()
@@ -1342,6 +1359,56 @@ func panelRow(app *App, y int) string {
 		sb.WriteRune(c.Runes[0])
 	}
 	return strings.TrimRight(sb.String(), " ")
+}
+
+// TestReadEntriesSkipsDotfiles: readEntries —la única puerta de datos del
+// disco al árbol— NO lista los dotfiles: carpetas y archivos que arrancan
+// con "." (.git/, .tcode/, .oculto) quedan fuera, en el nivel raíz y en
+// cualquier subdirectorio. Es el contrato "el árbol muestra código, no el
+// estado de la herramienta".
+func TestReadEntriesSkipsDotfiles(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{".git", ".tcode", "docs", "visible.txt", ".oculto.txt"} {
+		p := filepath.Join(dir, name)
+		if name == ".git" || name == ".tcode" || name == "docs" {
+			if err := os.MkdirAll(p, 0o755); err != nil {
+				t.Fatalf("no se pudo crear el dir %s: %v", name, err)
+			}
+			continue
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatalf("no se pudo crear %s: %v", name, err)
+		}
+	}
+
+	entries, err := readEntries(dir)
+	if err != nil {
+		t.Fatalf("readEntries falló: %v", err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name)
+	}
+	want := []string{"docs", "visible.txt"} // dirs primero, sin dotfiles
+	if got := strings.Join(names, ","); got != strings.Join(want, ",") {
+		t.Fatalf("readEntries = %v, se esperaba %v (los dotfiles no se listan)", names, want)
+	}
+
+	// Un subdirectorio con dotfiles tampoco los muestra.
+	sub := filepath.Join(dir, "docs")
+	if err := os.MkdirAll(filepath.Join(sub, ".escondido"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "nota.md"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	entries, err = readEntries(sub)
+	if err != nil {
+		t.Fatalf("readEntries del subdir falló: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name != "nota.md" {
+		t.Fatalf("readEntries del subdir = %+v, se esperaba solo nota.md", entries)
+	}
 }
 
 // TestPanelWidthKeepsTheEditorAtLeastSixteenColumns: la fórmula del ancho del
