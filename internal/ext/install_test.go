@@ -2,6 +2,7 @@ package ext
 
 import (
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -847,5 +848,213 @@ func TestInstallFromGitWithRealGit(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(userRoot, id, ".git")); !os.IsNotExist(err) {
 		t.Errorf(".git real no debió copiarse: %v", err)
+	}
+}
+
+// remoteProviderForUpdate crea un proveedor remoto (URL) backed por un
+// "monorepo" en disco: el fetchFake emula el sparse checkout, así el test
+// ejercita el camino de lectura liviana (solo manifests) y el acotado a la
+// subcarpeta de la extensión.
+func remoteProviderForUpdate(name string) Provider {
+	return Provider{Name: name, Source: "https://example.com/" + name + ".git", Approved: true}
+}
+
+// bumpVersion reescribe el manifest de la extensión id en el "monorepo" src con
+// una versión nueva: simula al autor publicando un cambio. Devuelve el archivo
+// auxiliar con contenido nuevo, para poder afirmar que los archivos cambiaron.
+func bumpVersion(t *testing.T, src, subdir, id, name, version, marker string) {
+	t.Helper()
+	toyExt(t, filepath.Join(src, subdir), id, name, version)
+	if err := os.WriteFile(filepath.Join(src, subdir, "main.lua"), []byte(marker), 0o644); err != nil {
+		t.Fatalf("WriteFile main.lua: %v", err)
+	}
+}
+
+// TestUpdateAllSkipsWhenVersionIsTheSame: con la misma versión instalada y
+// declarada no hay nada que hacer: ni se actualiza ni se reporta un error.
+func TestUpdateAllSkipsWhenVersionIsTheSame(t *testing.T) {
+	src := providerFixture(t, map[string][3]string{"linter": {"tcode.linter", "Linter", "1.2.3"}})
+	if err := os.WriteFile(filepath.Join(src, "linter", "main.lua"), []byte("return {v=1}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile main.lua: %v", err)
+	}
+	p := remoteProviderForUpdate("remoto")
+	userRoot := t.TempDir()
+	if _, err := InstallByID("tcode.linter", []Provider{p}, userRoot, fetchFake(src), nil); err != nil {
+		t.Fatalf("InstallByID: %v", err)
+	}
+
+	updates, errs := UpdateAll([]Provider{p}, userRoot, fetchFake(src))
+	if len(errs) != 0 {
+		t.Errorf("UpdateAll reportó errores inesperados: %v", errs)
+	}
+	if len(updates) != 0 {
+		t.Errorf("UpdateAll actualizó sin cambio de versión: %+v", updates)
+	}
+	// La instalación queda intacta: el archivo conserva su contenido.
+	data, err := os.ReadFile(filepath.Join(userRoot, "remoto", "tcode.linter", "main.lua"))
+	if err != nil {
+		t.Fatalf("leyendo el archivo instalado: %v", err)
+	}
+	if string(data) != "return {v=1}\n" {
+		t.Errorf("la instalación fue tocada sin cambio de versión: %q", data)
+	}
+}
+
+// TestUpdateAllUpdatesWhenVersionChanges: si el proveedor sube la versión, la
+// instalación se reemplaza con la nueva (manifest y archivos) y se reporta el
+// salto de versión.
+func TestUpdateAllUpdatesWhenVersionChanges(t *testing.T) {
+	src := providerFixture(t, map[string][3]string{"linter": {"tcode.linter", "Linter", "1.2.3"}})
+	if err := os.WriteFile(filepath.Join(src, "linter", "main.lua"), []byte("viejo\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile main.lua: %v", err)
+	}
+	p := remoteProviderForUpdate("remoto")
+	userRoot := t.TempDir()
+	if _, err := InstallByID("tcode.linter", []Provider{p}, userRoot, fetchFake(src), nil); err != nil {
+		t.Fatalf("InstallByID: %v", err)
+	}
+
+	bumpVersion(t, src, "linter", "tcode.linter", "Linter", "2.0.0", "nuevo\n")
+	updates, errs := UpdateAll([]Provider{p}, userRoot, fetchFake(src))
+	if len(errs) != 0 {
+		t.Fatalf("UpdateAll reportó errores: %v", errs)
+	}
+	if len(updates) != 1 {
+		t.Fatalf("UpdateAll devolvió %d actualizaciones, esperaba 1: %+v", len(updates), updates)
+	}
+	got := updates[0]
+	if got.Ref != "remoto/tcode.linter" || got.OldVer != "1.2.3" || got.NewVer != "2.0.0" {
+		t.Errorf("UpdateResult inesperado: %+v", got)
+	}
+	dest := filepath.Join(userRoot, "remoto", "tcode.linter")
+	manifest, err := os.ReadFile(filepath.Join(dest, "extension.json"))
+	if err != nil {
+		t.Fatalf("leyendo el manifest actualizado: %v", err)
+	}
+	if !strings.Contains(string(manifest), "2.0.0") {
+		t.Errorf("el manifest en disco sigue viejo: %s", manifest)
+	}
+	code, err := os.ReadFile(filepath.Join(dest, "main.lua"))
+	if err != nil {
+		t.Fatalf("leyendo el archivo actualizado: %v", err)
+	}
+	if string(code) != "nuevo\n" {
+		t.Errorf("el archivo en disco no se reemplazó: %q", code)
+	}
+}
+
+// TestUpdateAllReportsUnknownProvider: una instalación cuyo proveedor ya no
+// está en la lista vigente no se puede comparar: se reporta y no se corta la
+// revisión de las demás.
+func TestUpdateAllReportsUnknownProvider(t *testing.T) {
+	src := providerFixture(t, map[string][3]string{"linter": {"tcode.linter", "Linter", "1.0.0"}})
+	viejo := remoteProviderForUpdate("viejo")
+	otro := remoteProviderForUpdate("otro")
+	otroSrc := providerFixture(t, map[string][3]string{"tema": {"tcode.tema", "Tema", "3.0.0"}})
+	userRoot := t.TempDir()
+	if _, err := InstallByID("tcode.linter", []Provider{viejo}, userRoot, fetchFake(src), nil); err != nil {
+		t.Fatalf("InstallByID: %v", err)
+	}
+	if _, err := InstallByID("tcode.tema", []Provider{otro}, userRoot, fetchFake(otroSrc), nil); err != nil {
+		t.Fatalf("InstallByID tema: %v", err)
+	}
+
+	fetch := func(url, dest, pattern string) error {
+		if strings.Contains(url, "viejo") {
+			return fetchFake(src)(url, dest, pattern)
+		}
+		return fetchFake(otroSrc)(url, dest, pattern)
+	}
+	updates, errs := UpdateAll([]Provider{otro}, userRoot, fetch)
+	if len(updates) != 0 {
+		t.Errorf("no debía actualizar nada, pero actualizó: %+v", updates)
+	}
+	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "viejo") {
+		t.Fatalf("errores inesperados: %v", errs)
+	}
+}
+
+// TestUpdateAllReportsExtensionMissingFromProvider: si el proveedor ya no
+// ofrece la extensión instalada, es un error reportado (no un borrado ni una
+// falla silenciosa).
+func TestUpdateAllReportsExtensionMissingFromProvider(t *testing.T) {
+	src := providerFixture(t, map[string][3]string{"linter": {"tcode.linter", "Linter", "1.0.0"}})
+	p := remoteProviderForUpdate("remoto")
+	userRoot := t.TempDir()
+	if _, err := InstallByID("tcode.linter", []Provider{p}, userRoot, fetchFake(src), nil); err != nil {
+		t.Fatalf("InstallByID: %v", err)
+	}
+
+	// El autor saca la extensión del monorepo.
+	if err := os.RemoveAll(filepath.Join(src, "linter")); err != nil {
+		t.Fatalf("RemoveAll: %v", err)
+	}
+	updates, errs := UpdateAll([]Provider{p}, userRoot, fetchFake(src))
+	if len(updates) != 0 {
+		t.Errorf("no debía actualizar nada: %+v", updates)
+	}
+	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "tcode.linter") {
+		t.Fatalf("errores inesperados: %v", errs)
+	}
+}
+
+// TestUpdateAllUpdatesOnlyChangedAcrossProviders: con varias instaladas, solo
+// cambian las que el proveedor reporta con otra versión, y una caída no impide
+// revisar el resto.
+func TestUpdateAllUpdatesOnlyChangedAcrossProviders(t *testing.T) {
+	src := providerFixture(t, map[string][3]string{
+		"linter":  {"tcode.linter", "Linter", "1.0.0"},
+		"tema":    {"tcode.tema", "Tema", "2.0.0"},
+		"formato": {"tcode.formato", "Formato", "5.0.0"},
+	})
+	p := remoteProviderForUpdate("remoto")
+	caido := remoteProviderForUpdate("caido")
+	caidoSrc := providerFixture(t, map[string][3]string{"x": {"tcode.x", "X", "1.0.0"}})
+	userRoot := t.TempDir()
+	fetch := func(url, dest, pattern string) error {
+		if strings.Contains(url, "caido") {
+			return fetchFake(caidoSrc)(url, dest, pattern)
+		}
+		return fetchFake(src)(url, dest, pattern)
+	}
+	for _, id := range []string{"tcode.linter", "tcode.tema", "tcode.formato"} {
+		if _, err := InstallByID(id, []Provider{p}, userRoot, fetch, nil); err != nil {
+			t.Fatalf("InstallByID %s: %v", id, err)
+		}
+	}
+	if _, err := InstallByID("tcode.x", []Provider{caido}, userRoot, fetch, nil); err != nil {
+		t.Fatalf("InstallByID tcode.x: %v", err)
+	}
+
+	bumpVersion(t, src, "tema", "tcode.tema", "Tema", "2.1.0", "tema nuevo\n")
+
+	var caidas int
+	caidoAbajo := func(url, dest, pattern string) error {
+		if strings.Contains(url, "caido") {
+			caidas++
+			return errors.New("repo inalcanzable")
+		}
+		return fetchFake(src)(url, dest, pattern)
+	}
+	updates, errs := UpdateAll([]Provider{p, caido}, userRoot, caidoAbajo)
+	if len(updates) != 1 || updates[0].Ref != "remoto/tcode.tema" || updates[0].NewVer != "2.1.0" {
+		t.Fatalf("solo debía actualizarse tcode.tema: %+v", updates)
+	}
+	// La caída del segundo proveedor se reporta, sin cortar la actualización.
+	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "caido") {
+		t.Fatalf("errores inesperados: %v", errs)
+	}
+	if caidas == 0 {
+		t.Error("el proveedor caído no llegó a leerse")
+	}
+	// Las que no cambiaron siguen en su versión anterior.
+	for id, want := range map[string]string{"tcode.linter": "1.0.0", "tcode.formato": "5.0.0"} {
+		data, err := os.ReadFile(filepath.Join(userRoot, "remoto", id, "extension.json"))
+		if err != nil {
+			t.Fatalf("leyendo %s: %v", id, err)
+		}
+		if !strings.Contains(string(data), want) {
+			t.Errorf("%s cambió sin que el proveedor cambiara su versión: %s", id, data)
+		}
 	}
 }

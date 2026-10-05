@@ -161,6 +161,24 @@ Los binarios de otro SO **no** se pueden ejecutar ni testear en el anfitrión:
 | Agregar una fuente de extensiones | `tcode --add-provider <url-git\|carpeta>` (luego `tcode --approve-provider <nombre>`) |
 | Ver / borrar extensiones | `tcode --list-extensions` · `tcode --remove-extension <proveedor:id\|id>` |
 
+Las extensiones instaladas se **actualizan solas al arrancar**: al abrir el
+editor, `tcode` vuelve a leer cada proveedor del que salió una extensión
+instalada y, si esa extensión declara una versión distinta de la instalada,
+la reemplaza por la nueva antes de abrir la UI (no hay que reinstalar ni
+volver a aprobar el proveedor). Solo se revisan las que cambiaron de versión,
+así que no baja código que no haga falta, y las actualizaciones se anuncian
+por stdout:
+
+```
+Actualizada: tcode-extention/tcode.errordetector (2.0.0 → 2.1.0)
+```
+
+Dos cosas para saber: la comparación es por **versión**, así que si el autor
+de la extensión publica un cambio sin subir el campo `version` del manifest,
+el editor no lo detecta (reinstalar a mano con `--install-extension` lo trae);
+y un proveedor caído o inalcanzable no impide arrancar —se avisa por stderr y
+el editor abre igual— ni impide revisar los demás proveedores.
+
 Directorio como argumento arranca con el árbol visible y enfocado; sin
 argumento, sobre el directorio actual.
 

@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -183,6 +184,127 @@ type InstallResult struct {
 
 // Ref es la referencia legible "proveedor/id" de lo instalado.
 func (r InstallResult) Ref() string { return r.Provider + "/" + r.ID }
+
+// UpdateResult dice qué extensión se actualizó al arrancar: su referencia y el
+// salto de versión, de la instalada a la que declara el proveedor.
+type UpdateResult struct {
+	Ref    string
+	OldVer string
+	NewVer string
+}
+
+// UpdateAll revisa TODAS las extensiones instaladas en userRoot y actualiza las
+// cuyo proveedor ofrece una versión distinta. La copia instalada no tiene .git
+// (copyTree lo excluye), así que no hay clon local al que hacele fetch: la
+// detección es releer el proveedor —liviano, solo manifests— y comparar
+// versiones. Es la limitación de este diseño: si el autor no sube la versión,
+// el cambio no se detecta.
+//
+// Actualizar NO vuelve a pedir confianza: la extensión instalada salió de ese
+// proveedor, así que actualizar es continuar la instalación, no agregar una
+// fuente nueva. Lo que sí se valida es el manifest nuevo (installSubdir), que
+// aborta SIN tocar el destino si es inválido.
+//
+// Es tolerante: un proveedor caído, una extensión que el proveedor ya no ofrece
+// o una instalación heredada sin proveedor se reportan como error y NO cortan
+// la revisión de las demás. Nada de esto puede impedir el arranque: los errores
+// se devuelven para que quien llama los muestre.
+//
+// fetcher nil usa el lector real (necesita git en el PATH).
+func UpdateAll(providers []Provider, userRoot string, fetcher FetchFunc) ([]UpdateResult, []error) {
+	if fetcher == nil {
+		fetcher = fetch
+	}
+
+	infos, listErrs := List(userRoot)
+	// Las instaladas se agrupan por proveedor para leer cada fuente UNA vez, y
+	// el orden de resolución manda: si dos proveedores ofrecen la misma
+	// extensión, actualiza el primero, igual que al instalar.
+	pending := map[string][]Info{}
+	var errs []error
+	errs = append(errs, listErrs...)
+	for _, info := range infos {
+		if info.Provider == "" {
+			// Instalación plana heredada: no tiene de qué proveedor salir, así
+			// que no hay contra qué comparar. Se avisa en vez de ignorarlo en
+			// silencio.
+			errs = append(errs, fmt.Errorf("la extensión %q no tiene proveedor: no se puede actualizar", info.ID))
+			continue
+		}
+		pending[info.Provider] = append(pending[info.Provider], info)
+	}
+
+	seen := map[string]bool{}
+	var updates []UpdateResult
+	for _, p := range providers {
+		inst := pending[p.Name]
+		if len(inst) == 0 {
+			continue
+		}
+		if !providerNameRe.MatchString(p.Name) {
+			errs = append(errs, fmt.Errorf("proveedor con nombre inválido %q: se ignora", p.Name))
+			continue
+		}
+		seen[p.Name] = true
+		exts, err := ListExtensions(p, fetcher)
+		if err != nil {
+			// Proveedor caído: no impide revisar los siguientes.
+			errs = append(errs, fmt.Errorf("revisando el proveedor %q: %w", p.Name, err))
+			continue
+		}
+		for _, info := range inst {
+			ext, ok := findProviderExt(exts, info.ID)
+			if !ok {
+				errs = append(errs, fmt.Errorf("el proveedor %q ya no ofrece la extensión %q instalada", p.Name, info.ID))
+				continue
+			}
+			if ext.Version == info.Version {
+				continue
+			}
+			if err := withProviderRoot(p, fetcher, ext.Subdir, func(root string) error {
+				return installSubdir(root, ext.Subdir, p.Name, userRoot)
+			}); err != nil {
+				errs = append(errs, fmt.Errorf("actualizando %s: %w", info.Ref(), err))
+				continue
+			}
+			updates = append(updates, UpdateResult{Ref: info.Ref(), OldVer: info.Version, NewVer: ext.Version})
+		}
+	}
+
+	// Instaladas cuyo proveedor no está en la lista vigente: sin fuente contra
+	// la cual comparar. Se recorren en orden alfabético para que el reporte sea
+	// estable entre corridas.
+	for _, name := range sortedKeys(pending) {
+		if seen[name] {
+			continue
+		}
+		for _, info := range pending[name] {
+			errs = append(errs, fmt.Errorf("la extensión %s viene del proveedor %q, que ya no está registrado", info.Ref(), name))
+		}
+	}
+	return updates, errs
+}
+
+// findProviderExt busca el id entre las extensiones que ofrece un proveedor.
+func findProviderExt(exts []ProviderExt, id string) (ProviderExt, bool) {
+	for _, e := range exts {
+		if e.ID == id {
+			return e, true
+		}
+	}
+	return ProviderExt{}, false
+}
+
+// sortedKeys ordena las claves del mapa para que un recorrido no dependa del
+// orden aleatorio de iteración de Go.
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
 
 // ConfirmFunc pregunta al usuario si confía en el proveedor. Recibe el
 // proveedor sin aprobar y devuelve true solo con un sí explícito.
