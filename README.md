@@ -73,6 +73,24 @@ correr el `ln -sfn`. Si preferís una versión congelada e independiente del rep
 copiá el binario en vez de enlazarlo (`cp dist/tcode-linux-amd64
 ~/.local/bin/tcode`), a costa de repetir la copia en cada recompilación.
 
+### Para desarrollo: que `tcode` compile solo si hace falta
+
+Ojo con una trampa: ese enlace apunta a un **artefacto compilado**, así que
+cambiar un `.go` **no** cambia el binario hasta que corras `go build`. Es la
+causa más común de "mi cambio no aparece". Para no acordarte, el repo trae
+`scripts/tcode-dev.sh`: un wrapper que reconstruye si alguna fuente es más nueva
+que el binario y después lo ejecuta.
+
+```bash
+ln -sfn "$PWD/scripts/tcode-dev.sh" ~/.local/bin/tcode
+```
+
+El entry del PATH pasa a ser un enlace al **script**, no al binario. El script
+resuelve el repo desde su propia ubicación (siguiendo symlinks) y conserva tu
+directorio de trabajo, así `tcode` sin argumentos abre la carpeta donde estás
+parado. Sin cambios en las fuentes solo corre un `find` (milisegundos); con
+fuentes nuevas compila antes de abrir y avisa por stderr.
+
 En otros SO vale la misma idea: `~/.local/bin` es la convención XDG, y en macOS
 lo habitual es `/usr/local/bin`.
 
