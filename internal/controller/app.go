@@ -761,11 +761,19 @@ func (a *App) syncDiagStatus() {
 	if ed == nil {
 		return
 	}
-	if d, ok := ed.DiagAtCursor(); ok {
-		a.statusBar.SetMessage(fmt.Sprintf("línea %d: %s (%s)", d.Line+1, d.Message, diagSeverityName(d.Severity)))
+	// La línea del cursor puede tener VARIOS mensajes (solo informativos, nunca
+	// parte del archivo): la barra los muestra todos, en orden de severidad, con
+	// " · " entre medio; la barra de estado recorta con "…" si no entran.
+	diags := ed.DiagsAtCursor()
+	if len(diags) == 0 {
+		a.statusBar.ClearMessage()
 		return
 	}
-	a.statusBar.ClearMessage()
+	parts := make([]string, 0, len(diags))
+	for _, d := range diags {
+		parts = append(parts, fmt.Sprintf("%s (%s)", d.Message, diagSeverityName(d.Severity)))
+	}
+	a.statusBar.SetMessage(fmt.Sprintf("línea %d: %s", diags[0].Line+1, strings.Join(parts, " · ")))
 }
 
 // diagSeverityName nombra la severidad de un diagnóstico para el mensaje de la

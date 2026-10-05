@@ -2765,6 +2765,27 @@ func TestSaveAsPromptOwnsTheMouse(t *testing.T) {
 // TestDiagMessageShowsInStatusBar: el diagnóstico de la línea del cursor se
 // refleja en la barra de estado al pasar por el path de teclas del editor, y
 // el mensaje se limpia al salir a una línea sin anotar.
+// TestDiagMessageShowsAllMessagesOnTheLine: una línea con VARIOS mensajes
+// informativos (nunca parte del archivo) los muestra TODOS en la barra de
+// estado, en orden de severidad, unidos con " · ".
+func TestDiagMessageShowsAllMessagesOnTheLine(t *testing.T) {
+	app, _ := newTestApp(t, "uno\ndos\ntres")
+	ed := app.activeEditor()
+	ed.SetDiagnostics([]view.Diagnostic{
+		{Line: 0, Message: "nota", Severity: view.SeverityInfo},
+		{Line: 0, Message: "aviso", Severity: view.SeverityWarning},
+		{Line: 0, Message: "mal", Severity: view.SeverityError},
+	})
+
+	press(app, tcell.KeyRight) // mueve el cursor por el path que sincroniza la barra
+	msg := app.statusBar.Message()
+	for _, want := range []string{"línea 1", "mal (error)", "aviso (advertencia)", "nota (info)"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("mensaje = %q, se esperaba que contuviera %q", msg, want)
+		}
+	}
+}
+
 func TestDiagMessageShowsInStatusBar(t *testing.T) {
 	app, _ := newTestApp(t, "uno\ndos\ntres")
 	ed := app.activeEditor()

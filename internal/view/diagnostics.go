@@ -1,6 +1,7 @@
 package view
 
 import (
+	"sort"
 	"strconv"
 
 	"github.com/gdamore/tcell/v2"
@@ -29,10 +30,6 @@ type Diagnostic struct {
 // backend de scripting: un analizador deposita acá el diagnóstico de cada
 // línea y el editor lo pinta en el próximo redibujo (el draw consulta siempre
 // el buffer activo, así que el reemplazo es inmediato).
-func (v *EditorView) SetDiagnostics(d []Diagnostic) {
-	v.diagnostics = d
-}
-
 // Diagnostics devuelve la lista de anotaciones actuales del editor (la misma
 // del último SetDiagnostics). Es el acceso de lectura de la integración: el
 // backend de scripting escribe con SetDiagnostics y este getter le permite al
@@ -41,23 +38,50 @@ func (v *EditorView) Diagnostics() []Diagnostic {
 	return v.diagnostics
 }
 
-// diagAt devuelve el diagnóstico de la línea, priorizando la severidad
-// (Error > Warning > Info) y, con empate, el primero de la lista. false si la
-// línea no está anotada.
-func (v *EditorView) diagAt(line int) (Diagnostic, bool) {
-	best, found := Diagnostic{}, false
-	for _, d := range v.diagnostics {
-		if d.Line == line && (!found || d.Severity > best.Severity) {
-			best, found = d, true
-		}
-	}
-	return best, found
+// SetDiagnostics reemplaza las anotaciones del buffer y las normaliza: se
+// ordenan por severidad (Error > Warning > Info, con orden de llegada dentro
+// del mismo nivel) para que el marcador del gutter y el mensaje del cursor
+// usen SIEMPRE el más grave de la línea y la barra pueda listar el resto.
+// Los mensajes son meramente informativos: nunca forman parte del archivo.
+func (v *EditorView) SetDiagnostics(d []Diagnostic) {
+	sort.SliceStable(d, func(i, j int) bool { return d[i].Severity > d[j].Severity })
+	v.diagnostics = d
 }
 
-// DiagAtCursor devuelve el diagnóstico de la línea del cursor. Es lo que el
-// controlador consulta para el mensaje de la barra de estado.
+// diagAt devuelve el diagnóstico MÁS GRAVE de la línea (el primero de la lista,
+// ya ordenada por severidad): es el que marca el gutter y subraya la línea.
+func (v *EditorView) diagAt(line int) (Diagnostic, bool) {
+	for _, d := range v.diagnostics {
+		if d.Line == line {
+			return d, true
+		}
+	}
+	return Diagnostic{}, false
+}
+
+// diagsAt devuelve TODOS los diagnósticos de la línea, en orden de severidad
+// (Error → Warning → Info): la barra de estado los muestra completos y solo el
+// primero decide el marcador del gutter.
+func (v *EditorView) diagsAt(line int) []Diagnostic {
+	var out []Diagnostic
+	for _, d := range v.diagnostics {
+		if d.Line == line {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// DiagAtCursor devuelve el diagnóstico principal (más grave) de la línea del
+// cursor; DiagsAtCursor devuelve todos. El controlador usa la lista completa
+// para el mensaje de la barra de estado.
 func (v *EditorView) DiagAtCursor() (Diagnostic, bool) {
 	return v.diagAt(v.cursor.Line)
+}
+
+// DiagsAtCursor devuelve todos los diagnósticos de la línea del cursor.
+func (v *EditorView) DiagsAtCursor() []Diagnostic {
+	return v.diagsAt(v.cursor.Line)
 }
 
 // digitsOf devuelve la cantidad de dígitos decimales de n, con mínimo 1: 0 y 9

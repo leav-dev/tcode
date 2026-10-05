@@ -94,6 +94,31 @@ func TestGutterContinuationRowsBlank(t *testing.T) {
 // TestDiagSeverityMappingAndPriority: diagAt devuelve el diagnóstico de la
 // línea priorizando la severidad (Error > Warning > Info) y, con empate, el
 // primero de la lista; las líneas sin anotar devuelven false.
+// TestMultipleDiagnosticsPerLineOrdered: una línea puede tener VARIOS
+// mensajes informativos (nunca parte del archivo): la lista se ordena por
+// severidad (Error > Warning > Info) y diagAt/DiagAtCursor devuelven el más
+// grave (marca gutter/underline), mientras DiagsAtCursor devuelve todos para
+// la barra de estado.
+func TestMultipleDiagnosticsPerLineOrdered(t *testing.T) {
+	v := newTestView(t, "uno\ndos", 20, 2)
+	v.SetDiagnostics([]Diagnostic{
+		{Line: 1, Message: "aviso", Severity: SeverityInfo},
+		{Line: 1, Message: "ojo", Severity: SeverityWarning},
+		{Line: 1, Message: "mal", Severity: SeverityError},
+	})
+
+	// El principal de la línea (gutter/underline): el más grave.
+	if d, ok := v.diagAt(1); !ok || d.Message != "mal" {
+		t.Fatalf("diagAt(1) = %+v, se esperaba el error", d)
+	}
+	// DiagsAtCursor: todos, en orden de severidad.
+	v.moveVertical(1) // el cursor a la línea 1
+	diags := v.DiagsAtCursor()
+	if len(diags) != 3 || diags[0].Message != "mal" || diags[1].Message != "ojo" || diags[2].Message != "aviso" {
+		t.Fatalf("DiagsAtCursor = %+v, se esperaba [mal, ojo, aviso]", diags)
+	}
+}
+
 func TestDiagSeverityMappingAndPriority(t *testing.T) {
 	v := newTestView(t, "uno\ndos", 20, 2)
 	v.SetDiagnostics([]Diagnostic{
