@@ -196,27 +196,33 @@ Los binarios de otro SO **no** se pueden ejecutar ni testear en el anfitrión:
 | Agregar una fuente de extensiones | `tcode --add-provider <url-git\|carpeta>` (luego `tcode --approve-provider <nombre>`) |
 | Ver / borrar extensiones | `tcode --list-extensions` · `tcode --remove-extension <proveedor:id\|id>` |
 
-Al arrancar, `tcode` revisa las extensiones y **te pregunta antes de tocar nada**:
-compara la versión de cada extensión instalada con la que declara su proveedor,
-y compara el catálogo de cada proveedor con lo que tenés instalado. Si hay
-actualizaciones o novedades, aparece un prompt en la barra de estado con el
-detalle y solo se aplican si respondés `s` (o `y`):
+Al arrancar, `tcode` revisa las extensiones **en segundo plano**: en cuanto el
+editor abre, una goroutine lee el catálogo de cada proveedor (comparte la versión
+de cada extensión instalada con la que declara su proveedor, y compara el
+catálogo con lo que tenés instalado). El arranque **no espera** esa lectura, así
+que se puede escribir mientras corre.
+
+Cuando llega, si hay actualizaciones o novedades, la barra de estado lo avisa
+—sin prompt, sin bloquear, sin aplicar nada por su cuenta—:
 
 ```
-Aplicar 1 actualización y 2 novedades? [s/N] s
-1 actualización aplicada, 2 novedades instaladas
+2 actualizaciones, 1 novedad — Ctrl+P → Extensiones
 ```
 
-El default es **no**: cualquier otra tecla —incluido `Enter`— omite todo por
-esta vez, sin tocar el disco. Denegar no es "nunca más": el próximo arranque
-vuelve a preguntar. Sin cambios no hay nada que preguntar y el editor abre
-derecho.
+De ahí se gestiona todo: la ventana de extensiones abre **instantánea** con los
+datos ya cacheados (si la lectura todavía no terminó, muestra `cargando…` y se
+rellena sola), y `Enter` sobre la fila instala, actualiza o borra con su
+confirmación. La ventana no vuelve a leer los proveedores: tras una acción solo
+relee la lista local de instaladas y vuelve a derivar las dos listas del mismo
+catálogo, así que instalar o actualizar es inmediato. La extensión instalada o
+actualizada entra en la sesión en el acto (sus comandos y keybindings quedan
+registrados al instante, con el código nuevo).
 
-**Actualizaciones.** Cuando respondés `s`, `tcode` vuelve a leer cada proveedor
-del que salió una extensión instalada y reemplaza la instalación por la versión
-nueva antes de cargar las extensiones (no hay que reinstalar ni volver a
-aprobar el proveedor). Solo se revisan las que cambiaron de versión, así que no
-baja código que no haga falta.
+**Actualizaciones.** Aplicarlas es la acción de la fila en la pestaña
+*actualizables*: `tcode` vuelve a leer el proveedor del que salió la extensión y
+reemplaza la instalación por la versión nueva. Solo se revisan las que cambiaron
+de versión, así que no baja código que no haga falta, y no hay que reinstalar ni
+volver a aprobar el proveedor.
 
 Dos cosas para saber: la comparación es por **versión**, así que si el autor de
 la extensión publica un cambio sin subir el campo `version` del manifest, el
@@ -224,20 +230,17 @@ editor no lo detecta (reinstalar a mano con `--install-extension` lo trae); y
 un proveedor caído o inalcanzable no impide arrancar —se avisa en la barra y el
 editor abre igual— ni impide revisar los demás proveedores.
 
-**Novedades.** Las extensiones que un proveedor ofrece y no tenés instaladas se
-revisan en la misma pregunta y, si aceptás, se instalan —en el mismo arranque—
-cuando vienen de un proveedor **aprobado**. Instalar una extensión es continuar
-la confianza que ya se le dio a esa fuente, así que no vuelve a preguntar.
-
-Las novedades de un proveedor **sin aprobar** no se instalan ni se ocultan:
-aceptando, la barra las nombra agrupadas por proveedor y quedan a la espera de
-`tcode --approve-provider <nombre>`:
+**Novedades.** Las extensiones que un proveedor ofrece y no tenés instaladas
+aparecen en la pestaña *disponibles*. Instalar una es continuar la confianza que
+ya se le dio a esa fuente, así que no vuelve a preguntar; las de un proveedor
+**sin aprobar** no se ofrecen ni se ocultan: la fila lo dice al lado y hay que
+aprobarla primero por terminal.
 
 ```
-1 actualización aplicada, 0 novedades instaladas — sin aprobar: mios (tcode.mioformato, tcode.miolinter)
+tcode --approve-provider mios
 ```
 
-Directorio como argumento arranca con el árbol visible y enfocado; sin
+Directorio como argumento arranca con el árbol visible y enfocado; sinDirectorio como argumento arranca con el árbol visible y enfocado; sin
 argumento, sobre el directorio actual.
 
 ## Configuración

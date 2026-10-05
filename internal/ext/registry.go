@@ -54,6 +54,23 @@ func (r *Registry) Has(id string) bool {
 	return ok
 }
 
+// Unregister quita el handler de id y devuelve si estaba.
+//
+// El registro es la tabla ÚNICA de built-ins y extensiones, así que desregistrar
+// a ciegas se llevaría por delante los tcode.* del controlador: por eso el
+// Manager recuerda qué ids registró cada extensión y solo esos los desregistra
+// al recargar (ver Manager.Reload). Devolver false para un id ausente hace que
+// recargar dos veces seguidas no sea un error.
+func (r *Registry) Unregister(id string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.handlers[id]; !ok {
+		return false
+	}
+	delete(r.handlers, id)
+	return true
+}
+
 // Run ejecuta el handler del id. Si el id no existe devuelve un error que
 // envuelve ErrUnknownCommand y nombra el comando; si el handler falla, su
 // error llega intacto al llamador.

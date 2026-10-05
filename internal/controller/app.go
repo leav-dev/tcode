@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
-	"sort"
 	"strings"
 	"time"
 
@@ -65,7 +64,7 @@ type App struct {
 	// PieceTable ya desmapeado.
 	editors map[*model.PieceTable]*view.EditorView
 
-	lastEscape time.Time // marca del último Escape (doble presión para salir)
+	lastEscape   time.Time // marca del último Escape (doble presión para salir)
 	confirmQuit  bool
 	confirmClose bool
 	// confirmReload arma la confirmación no modal de Ctrl+R sobre un buffer
@@ -114,15 +113,27 @@ type App struct {
 	extManager *view.ExtManager
 	extActive  bool
 
-	// Los datos de la ventana se cargan AL ABRIRLA y se recargan después de
-	// cada acción: userRoot es la raíz de extensiones del usuario sobre la que
-	//-Corren las acciones- y las tres listas son las que llenan las pestañas.
-	// La vista no lee el disco: recibe filas (view.ExtItem) ya resueltas.
+	// Los datos de la ventana se derivan del snapshot (extSnapshot): userRoot
+	// es la raíz de extensiones del usuario sobre la que corren las acciones, y
+	// las cuatro listas son las que llenan las pestañas. La vista no lee el
+	// disco: recibe filas (view.ExtItem) ya resueltas.
 	extUserRoot  string
 	extInstalled []ext.Info
 	extUpdates   []ext.UpdateResult
 	extAvailable []ext.AvailableExt
 	extProviders []ext.Provider
+
+	// extSnapshot es la lectura de los proveedores CACHEADA por la goroutine de
+	// arranque: nil hasta que llega. Es lo que hace que la ventana abra
+	// instantánea (con lo que hay) y que las acciones no vuelvan a pagar el
+	// partial clone: tras instalar, actualizar o borrar solo cambia lo
+	// instalado, así que el snapshot se repinta sin releer el proveedor.
+	extSnapshot *ext.Snapshot
+	// extPrefetchSeq numera las lecturas en vuelo. Cada prefetch entrega su
+	// número con el snapshot y el manejador descarta las que llegaron después
+	// de una más nueva: agregar un proveedor dispara una lectura nueva, y una
+	// vieja que llegue tarde no puede pisar el dato fresco.
+	extPrefetchSeq int
 
 	// sessionEnabled marca los modos con sesión persistida (directorio o sin
 	// argumentos): el modo archivo explícito no guarda ni restaura. Se define
@@ -150,14 +161,6 @@ type App struct {
 	// de precedencia: el primero gana en caso de ids duplicados. Por defecto,
 	// las del usuario y las del proyecto actual; los tests los reemplazan.
 	extensionRoots []string
-
-	// startupCheck es la revisión de extensiones del arranque —el inyector de
-	// appStartupCheck— con su resultado: lo detectado (actualizaciones y
-	// novedades) y lo que se aplicó. Vive en el App para que el arranque y sus
-	// tests puedan afirmar qué pasó sin volver a tocar el disco.
-	startupUpdates   []ext.UpdateResult
-	startupAvailable []ext.AvailableExt
-	startupApplied   bool
 }
 
 // NewApp inicializa la terminal y carga el archivo indicado (si path != "").
@@ -259,10 +262,12 @@ func NewAppWithScreen(s tcell.Screen, path string) (*App, error) {
 	// Las extensiones de disco se cargan ANTES de los built-ins: sus comandos
 	// declarados no pueden piser a tcode.*.
 	app.extensionRoots = defaultExtensionRoots(app.ws.Root())
-	// El prompt de actualizaciones y novedades va ANTES de loadExtensions: al
-	// aceptar, lo nuevo queda en disco y lo carga el mismo arranque. Después no
-	// se recarga —AddExtensions no es idempotente—.
-	app.checkExtensionsAndPrompt()
+	// La revisión de extensiones va EN SEGUNDO PLANO: leer el catálogo de los
+	// proveedores es un partial clone contra GitHub (~3,8 s) y nada de eso puede
+	// retrasar el arranque. La goroutine entrega el snapshot por el bucle de
+	// eventos y el aviso aparece en la barra cuando llega; hasta entonces el
+	// editor ya está escribiendo.
+	app.prefetchExtensions()
 	app.loadExtensions()
 	// El manager habla con el editor a través del App: los comandos con script
 	// corren Lua con la API tcode.* cableada a App (ScriptAPI).
@@ -563,114 +568,96 @@ var providersConfigPath = func() (string, error) {
 	return ext.ProvidersFilePath(home), nil
 }
 
-// appStartupCheck es la INYECCIÓN del chequeo de arranque: devuelve las
-// actualizaciones disponibles y las novedades, sin tocar el disco. Vive en una
-// variable para que los tests no dependan de la red ni del HOME real, y para que
-// una falla de lectura sea un no-op en vez de un arranque roto.
-var appStartupCheck = detectStartupExtensions
+// Los providers y la raíz del usuario son disco local (barato): solo el
+// catálogo de cada proveedor es la parte cara. Por eso prefetchExtensions
+// resuelve las fuentes acá, en el arranque, y manda a la goroutine SOLO la
+// lectura remota.
 
-// detectStartupExtensions revisa el HOME del usuario: primero las
-// actualizaciones de lo instalado (ext.CheckUpdates, que NO aplica nada) y
-// después las novedades (ext.AvailableExtensions). Un error de resolución se
-// devuelve como aviso: el arranque nunca falla por esto.
-func detectStartupExtensions() ([]ext.UpdateResult, []ext.AvailableExt, []error) {
+// extSnapshotEvent es el sobre con el que la goroutine del prefetch entrega el
+// snapshot al bucle de eventos. Viaja como tcell.EventInterrupt porque
+// screen.PostEvent es la única puerta thread-safe hacia el loop: ninguna
+// goroutine toca la UI, solo publica el dato y el manejador lo aplica en el
+// hilo de los eventos.
+type extSnapshotEvent struct {
+	// Seq es el número de la lectura que lo produjo: el manejador descarta lo
+	// que llegó después de una lectura más nueva (ver App.extPrefetchSeq).
+	Seq      int
+	Snapshot ext.Snapshot
+	// Err es el último error tolerado de la lectura (proveedor caído, lista con
+	// problemas). No es fatal: el editor sigue con lo que ya está instalado.
+	Err error
+}
+
+// prefetchExtensions dispara la lectura de los proveedores en segundo plano y
+// devuelve de inmediato: el arranque sigue sin esperar. Lo que llega después se
+// atiende en handleExtSnapshot, que cachea el snapshot y avisa en la barra de
+// estado ("N actualizaciones, M novedades — Ctrl+P → Extensiones").
+//
+// Volver a llamarla (al agregar un proveedor, cuya lectura todavía no existe)
+// numera la lectura y descarta cualquier entrega anterior: el dato viejo no
+// puede pisar al nuevo.
+func (a *App) prefetchExtensions() {
 	providers, userRoot, err := extensionUserSources()
 	if err != nil {
-		return nil, nil, []error{err}
-	}
-	updates, errs := ext.CheckUpdates(providers, userRoot, startupExtFetch)
-	// El diff de novedades va DESPUÉS de la detección de actualizaciones a
-	// propósito: comparar contra el conjunto ya refrescado evita anunciar como
-	// novedad algo que se acaba de actualizar.
-	available, availErrs := ext.AvailableExtensions(providers, userRoot, startupExtFetch)
-	return updates, available, append(errs, availErrs...)
-}
-
-// checkExtensionsAndPrompt es el chequeo de extensiones del arranque, ahora
-// VISIBLE: detecta actualizaciones y novedades, y en vez de aplicarlas en
-// silencio le pregunta al usuario.
-//
-// La pregunta cubre las dos cosas juntas ("Aplicar N actualizaciones y M
-// novedades?"): revisá todo, decidí una vez. El default es NO —cualquier tecla
-// que no sea un sí explícito omite— y denegar omite SOLO esta vez: el próximo
-// arranque vuelve a preguntar, porque el estado de la decisión no se persiste.
-//
-// El prompt usa un loop anidado de eventos (como el config menu, pero antes del
-// loop principal): al arrancar todavía no hay nada que editar, así que espera
-// solo por su respuesta y devuelve el control al resto del arranque.
-//
-// Va antes de loadExtensions por diseño: al aceptar, lo aplicado ya está en
-// disco y lo carga el mismo arranque. Después NO se recarga, porque
-// AddExtensions no es idempotente (appendea a los estados del manager y el
-// registro rechaza el segundo registro).
-//
-// Nunca impide arrancar: un error de revisión se avisa en la barra y el editor
-// sigue con lo que ya está instalado.
-func (a *App) checkExtensionsAndPrompt() {
-	updates, available, errs := appStartupCheck()
-	a.startupUpdates, a.startupAvailable = updates, available
-	if len(errs) > 0 {
-		a.statusBar.SetMessage("Aviso de extensiones: " + errs[len(errs)-1].Error())
-	}
-	if len(updates) == 0 && len(available) == 0 {
+		a.statusBar.SetMessage("Aviso de extensiones: " + err.Error())
 		return
 	}
+	a.extUserRoot, a.extProviders = userRoot, providers
 
-	if !a.confirmStartupExtensions(len(updates), len(available)) {
-		a.statusBar.SetMessage("Actualizaciones y novedades omitidas: se vuelven a preguntar al próximo arranque")
+	a.extPrefetchSeq++
+	seq := a.extPrefetchSeq
+	// El lector se captura ACÁ, en el hilo de los eventos: la goroutine no
+	// vuelve a leer la variable global (ni ninguna otra mutable), así que su
+	// única lectura compartida es el puntero de la pantalla.
+	fetcher := startupExtFetch
+	go func() {
+		snap, errs := ext.LoadAll(providers, userRoot, fetcher)
+		a.screen.PostEvent(tcell.NewEventInterrupt(extSnapshotEvent{
+			Seq:      seq,
+			Snapshot: snap,
+			Err:      lastError(errs),
+		}))
+	}()
+}
+
+// lastError devuelve el último error de la lista, o nil si no hay: los errores
+// de la lectura de extensiones son TOLERANTES (un proveedor caído no impide ver
+// el resto), así que la barra muestra uno —el último, que es el que explica el
+// problema más reciente— en vez de una lista.
+func lastError(errs []error) error {
+	if len(errs) == 0 {
+		return nil
+	}
+	return errs[len(errs)-1]
+}
+
+// handleExtSnapshot cachea el snapshot que trajo la goroutine y avisa en la
+// barra. Con la ventana de extensiones abierta, la repinta con el dato nuevo:
+// abrirla antes de que llegue muestra "cargando…", no una espera.
+func (a *App) handleExtSnapshot(ev extSnapshotEvent) {
+	if ev.Seq < a.extPrefetchSeq {
+		return // llegó una lectura vieja: el dato fresco ya está en caché
+	}
+	snap := ev.Snapshot
+	a.extSnapshot = &snap
+	// Derivar es local y barato: aunque la ventana esté cerrada, las listas
+	// quedan al día para el aviso y para cuando abra.
+	a.applyExtSnapshot()
+	if ev.Err != nil {
+		a.statusBar.SetMessage("Aviso de extensiones: " + ev.Err.Error())
 		return
 	}
-	a.applyStartupExtensions(updates, available)
-}
-
-// confirmStartupExtensions muestra la pregunta de arranque y espera la
-// respuesta con un loop anidado. Acepta con "s"/"y" (en mayúscula o no) y
-// deniega con cualquier otra tecla, Enter incluido: el default de "[s/N]" es
-// NO, así que un Escape impaciente o un Enter a ciegas nunca instalan nada.
-//
-// El prompt se dibuja sobre la barra de estado con statusBar.Draw, no con
-// redraw: en este punto la composición todavía no está armada (el tema y la
-// configuración se aplican después) y no hace falta pintar el editor para que
-// la pregunta se lea.
-func (a *App) confirmStartupExtensions(updates, available int) bool {
-	a.statusBar.SetPrompt(startupPromptLabel(updates, available))
-	width, height := a.screen.Size()
-	a.screen.Clear()
-	a.statusBar.Draw(a.screen, height-statusHeight, width)
-	a.screen.Show()
-
-	answer := false
-	for {
-		ev := a.screen.PollEvent()
-		if ev == nil {
-			break
-		}
-		switch ev := ev.(type) {
-		case *tcell.EventKey:
-			if ev.Key() == tcell.KeyRune {
-				switch ev.Rune() {
-				case 's', 'S', 'y', 'Y':
-					answer = true
-				}
-			}
-			// Cualquier tecla cierra el pedido: solo un sí explícito acepta.
-			a.statusBar.SetPrompt("")
-			return answer
-		case *tcell.EventResize:
-			a.screen.Sync()
-			width, height = a.screen.Size()
-			a.statusBar.Draw(a.screen, height-statusHeight, width)
-			a.screen.Show()
-		}
+	n, m := len(a.extUpdates), len(a.extAvailable)
+	if n == 0 && m == 0 {
+		return // nada que ofrecer: el estado de la barra sigue siendo el de la sesión
 	}
-	a.statusBar.SetPrompt("")
-	return answer
+	a.statusBar.SetMessage(extPendingNotice(n, m))
 }
 
-// startupPromptLabel arma la pregunta del arranque con los plurales correctos:
-// el rótulo tiene que decir cuántos cambios se van a aplicar, porque es lo
-// único que el usuario tiene para decidir.
-func startupPromptLabel(updates, available int) string {
+// extPendingNotice arma el aviso de la barra con lo que hay para mirar, sin
+// plurales raras ni preguntas: la gestión va por la ventana (Ctrl+P →
+// Extensiones), no por un prompt de arranque.
+func extPendingNotice(updates, available int) string {
 	parts := make([]string, 0, 2)
 	if updates > 0 {
 		parts = append(parts, plural(updates, "actualización", "actualizaciones"))
@@ -678,7 +665,7 @@ func startupPromptLabel(updates, available int) string {
 	if available > 0 {
 		parts = append(parts, plural(available, "novedad", "novedades"))
 	}
-	return "Aplicar " + strings.Join(parts, " y ") + "? [s/N] "
+	return strings.Join(parts, ", ") + " — Ctrl+P → Extensiones"
 }
 
 // plural cuenta un sustantivo en español: 1 va en singular, el resto en
@@ -690,66 +677,16 @@ func plural(n int, one, many string) string {
 	return fmt.Sprintf("%d %s", n, many)
 }
 
-// applyStartupExtensions aplica lo que el usuario aceptó: las actualizaciones de
-// las instaladas y las novedades de los proveedores APROBADOS (las de un
-// proveedor sin aprobar se saltan en silencio, igual que siempre: instalarlas
-// sin confianza repetiría por la puerta de atrás la confirmación que pide
-// instalar por id).
+// loadExtensions descubre las extensiones de cada root y RECARGA el conjunto
+// registrado en el manager. Cada extensión rota se avisa en la barra de estado
+// una vez; el arranque nunca falla por una extensión quebrada.
 //
-// El resultado se resume en la barra, y las novedades que quedaron sin instalar
-// se nombran agrupadas por proveedor con el comando para aprobarlo: el usuario
-// acaba de decidir que las quiere y tiene que saber cuál no entró y por qué.
-func (a *App) applyStartupExtensions(updates []ext.UpdateResult, available []ext.AvailableExt) {
-	providers, userRoot, err := extensionUserSources()
-	if err != nil {
-		a.statusBar.SetMessage("Aviso de extensiones: " + err.Error())
-		return
-	}
-
-	applied, errs := ext.UpdateAll(providers, userRoot, startupExtFetch)
-	installed, installErrs := ext.InstallAvailable(available, userRoot, startupExtFetch)
-	errs = append(errs, installErrs...)
-	a.startupApplied = len(applied) > 0 || len(installed) > 0
-
-	msg := plural(len(applied), "actualización aplicada", "actualizaciones aplicadas") +
-		", " + plural(len(installed), "novedad instalada", "novedades instaladas")
-	if pend := unapprovedRefs(available); pend != "" {
-		msg += " — sin aprobar: " + pend + " (tcode --list-extensions para verlas)"
-	}
-	// El resumen es el mensaje; un fallo puntual se le cuelga al final para que
-	// no se pierda (el editor siguió con lo instalado).
-	if len(errs) > 0 {
-		msg += " — con errores: " + errs[len(errs)-1].Error()
-	}
-	a.statusBar.SetMessage(msg)
-}
-
-// unapprovedRefs agrupa por proveedor las novedades que no se instalaron por no
-// estar su proveedor aprobado, en orden alfabético para que el aviso sea
-// estable entre corridas.
-func unapprovedRefs(available []ext.AvailableExt) string {
-	pending := map[string][]string{}
-	for _, av := range available {
-		if av.Approved() {
-			continue
-		}
-		pending[av.Provider.Name] = append(pending[av.Provider.Name], av.ID)
-	}
-	names := make([]string, 0, len(pending))
-	for name := range pending {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	groups := make([]string, 0, len(names))
-	for _, name := range names {
-		groups = append(groups, name+" ("+strings.Join(pending[name], ", ")+")")
-	}
-	return strings.Join(groups, "; ")
-}
-
-// loadExtensions descubre las extensiones de cada root y las agrega al
-// manager. Cada extensión rota se avisa en la barra de estado una vez; el
-// arranque nunca falla por una extensión quebrada.
+// Es re-llamable: Manager.Reload desregistra solo los comandos que las
+// extensiones anteriores dejaron (los built-ins tcode.* quedan intactos) y
+// descarta los hosts de Lua cacheados, así que una extensión instalada,
+// actualizada o borrada entra en la sesión vigente sin esperar al próximo
+// arranque. Las extensiones que declaran onStartup vuelven a activarse después
+// de cada recarga (reloadExtensions).
 func (a *App) loadExtensions() {
 	var exts []ext.Extension
 	for _, root := range a.extensionRoots {
@@ -759,7 +696,16 @@ func (a *App) loadExtensions() {
 			a.statusBar.SetMessage("Extensión ignorada: " + e.Error())
 		}
 	}
-	a.ext.AddExtensions(exts)
+	a.ext.Reload(exts)
+}
+
+// reloadExtensions recarga las extensiones y vuelve a disparar la activación
+// de arranque, que es lo que hace el constructor: tras instalar, actualizar o
+// borrar, la extensión nueva (o el código nuevo de la actualizada) tiene que
+// quedar activa en esta sesión, no en la próxima.
+func (a *App) reloadExtensions() {
+	a.loadExtensions()
+	a.ext.ActivateEvent(ext.ActivateStartup)
 }
 
 // reloadActive recarga el buffer activo desde disco con la confirmación no
@@ -1393,6 +1339,16 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		a.clearForceSave()
 		a.statusBar.ClearMessage()
 		if ed := a.activeEditor(); ed != nil && ed.HandleEvent(ev) {
+			a.redraw()
+		}
+
+	case *tcell.EventInterrupt:
+		// Entrega de una goroutine (la del prefetch de extensiones): el dato
+		// viaja como el payload del interrupt y se aplica acá, en el hilo de los
+		// eventos. Ninguna goroutine toca la UI. Un interrupt de otro origen se
+		// ignora: no es de la aplicación.
+		if p, ok := ev.Data().(extSnapshotEvent); ok {
+			a.handleExtSnapshot(p)
 			a.redraw()
 		}
 
@@ -2308,10 +2264,13 @@ func (a *App) extRegion() (x, y, w, h int) {
 }
 
 // openExtManager abre la ventana de extensiones: la dimensiona a la región del
-// editor (extRegion) y CARGA los datos recién abiertos —instaladas, actualizables,
-// disponibles y proveedores—, porque leer los proveedores es una E/S con git que
-// no puede correr en cada tecla. Sin espacio para el editor no abre. El caller
-// redibuja (la ventana de configuración que la abre, o quien la invoque).
+// editor (extRegion) y la llena con el SNAPSHOT cacheado —instaladas,
+// actualizables, disponibles y proveedores—, sin tocar la red: leer los
+// proveedores es una E/S con git que ya se pagó en segundo plano al arrancar.
+// Si esa lectura todavía no llegó, la ventana abre igual mostrando "cargando…"
+// y se rellena sola cuando el evento se atiende. Sin espacio para el editor no
+// abre. El caller redibuja (la ventana de configuración que la abre, o quien la
+// invoque).
 func (a *App) openExtManager() {
 	width, _ := a.screen.Size()
 	if width-a.explorerColumn() <= 0 {
@@ -2326,38 +2285,68 @@ func (a *App) openExtManager() {
 	a.loadExtManagerData()
 }
 
-// loadExtManagerData relee las tres listas de la ventana con la misma maquinaria
-// de la CLI (ext.List, ext.CheckUpdates, ext.AvailableExtensions, ext.AllProviders
-// a través de extensionUserSources) y las traduce a filas de la vista. Los
-// errores son TOLERANTES igual que en el arranque —un proveedor caído no impide
-// ver el resto— y el último se avisa en la barra: la ventana nunca queda rota
-// por una fuente caída.
-//
-// Los datos se releen al abrir y después de cada acción, no en cada tecla.
+// loadExtManagerData llena la ventana desde el snapshot cacheado. No relee los
+// proveedores: el catálogo no cambia por abrir la ventana. Sin snapshot todavía
+// (la goroutine de arranque no entregó) muestra "cargando…", que no es una
+// espera: el bucle de eventos sigue corriendo y la ventana se repinta sola.
 func (a *App) loadExtManagerData() {
-	providers, userRoot, err := extensionUserSources()
-	if err != nil {
-		a.statusBar.SetMessage("Aviso de extensiones: " + err.Error())
+	if a.extSnapshot == nil {
+		a.buildExtLoadingItems()
 		return
 	}
-	a.extProviders, a.extUserRoot = providers, userRoot
+	a.applyExtSnapshot()
+}
 
-	var listErrs, updateErrs, availErrs []error
-	a.extInstalled, listErrs = ext.List(userRoot)
-	a.extUpdates, updateErrs = ext.CheckUpdates(providers, userRoot, startupExtFetch)
-	// El diff de novedades va DESPUÉS de la detección de actualizaciones, como
-	// en el arranque: comparar contra el conjunto ya refrescado evita ofrecer
-	// como novedad algo que el proveedor acaba de actualizar.
-	a.extAvailable, availErrs = ext.AvailableExtensions(providers, userRoot, startupExtFetch)
-
-	var errs []error
-	errs = append(errs, listErrs...)
-	errs = append(errs, updateErrs...)
-	errs = append(errs, availErrs...)
+// applyExtSnapshot traduce el snapshot a las listas de la ventana: instaladas y
+// proveedores salen del snapshot; actualizaciones y novedades se DERIVAN de él
+// contra lo instalado, sin releer. Los errores son TOLERANTES igual que siempre
+// —un proveedor caído no impide ver el resto— y el último se avisa en la barra.
+func (a *App) applyExtSnapshot() {
+	snap := a.extSnapshot
+	a.extProviders, a.extInstalled = snap.Providers, snap.Installed
+	updates, errs := snap.Updates()
+	a.extUpdates = updates
+	a.extAvailable = snap.Available()
+	// Los errores de la derivación son los casos sin contra qué comparar (una
+	// instalación heredada sin proveedor, un proveedor que ya no ofrece la
+	// extensión instalada): tolerantes, se avisa el último.
 	if len(errs) > 0 {
 		a.statusBar.SetMessage("Aviso de extensiones: " + errs[len(errs)-1].Error())
 	}
 	a.buildExtItems()
+}
+
+// refreshExtData repinta la ventana DESPUÉS de una acción (instalar, actualizar,
+// borrar) y recarga las extensiones de la sesión. El proveedor NO se relee: el
+// catálogo no cambió, solo la lista local de instaladas, y eso se lee del disco
+// en un momento. Recargar lo que salió de esa misma raíz es lo que hace que la
+// extensión nueva —o el código nuevo de la actualizada— sea efecto ya, y no en
+// la próxima sesión.
+func (a *App) refreshExtData() {
+	if a.extSnapshot == nil {
+		a.buildExtLoadingItems()
+		return
+	}
+	infos, errs := ext.List(a.extUserRoot)
+	if len(errs) > 0 {
+		a.statusBar.SetMessage("Aviso de extensiones: " + errs[len(errs)-1].Error())
+	}
+	a.extSnapshot.Installed = infos
+	a.applyExtSnapshot()
+	a.reloadExtensions()
+}
+
+// buildExtLoadingItems es la ventana sin datos: una fila de "cargando…" en cada
+// pestaña. Es el estado honesto entre que se abre la ventana y que llega la
+// lectura en segundo plano —la ventana abre INSTANTÁNEA, no espera— y las
+// pestañas de proveedores ya muestran lo que hay en disco (providers.json es
+// local), que es lo único que se puede saber sin red.
+func (a *App) buildExtLoadingItems() {
+	loading := view.ExtItem{Kind: view.ExtItemInfo, Label: "cargando…"}
+	a.extManager.SetItems(view.ExtTabInstalled, []view.ExtItem{loading})
+	a.extManager.SetItems(view.ExtTabUpdatable, []view.ExtItem{loading})
+	a.extManager.SetItems(view.ExtTabAvailable, []view.ExtItem{loading})
+	a.buildExtProviderItems()
 }
 
 // buildExtItems traduce las listas cargadas a las filas de las cuatro pestañas.
@@ -2366,7 +2355,7 @@ func (a *App) loadExtManagerData() {
 // marca de "(sin aprobar)" tanto en las novedades como en los proveedores —el
 // modelo de confianza hecho visible en la fila—.
 func (a *App) buildExtItems() {
-	var installed, updatable, available, providers []view.ExtItem
+	var installed, updatable, available []view.ExtItem
 
 	for _, i := range a.extInstalled {
 		label := i.Name
@@ -2401,6 +2390,17 @@ func (a *App) buildExtItems() {
 			ID: av.ID, Provider: av.Provider.Name, Ref: av.Ref(),
 		})
 	}
+	a.extManager.SetItems(view.ExtTabInstalled, installed)
+	a.extManager.SetItems(view.ExtTabUpdatable, updatable)
+	a.extManager.SetItems(view.ExtTabAvailable, available)
+	a.buildExtProviderItems()
+}
+
+// buildExtProviderItems arma la pestaña de proveedores desde lo que ya está en
+// el App: son disco local (~/.tcode/providers.json), así que se puede mostrar
+// incluso antes de que llegue la lectura en segundo plano.
+func (a *App) buildExtProviderItems() {
+	var providers []view.ExtItem
 	for _, p := range a.extProviders {
 		right := ""
 		if !p.Approved {
@@ -2411,10 +2411,6 @@ func (a *App) buildExtItems() {
 	// Agregar proveedor es la ÚLTIMA fila de la pestaña, siempre presente: la
 	// ventana tiene que poder sumar una fuente sin salir a la terminal.
 	providers = append(providers, view.ExtItem{Kind: view.ExtItemAddProvider, Label: "+ Agregar proveedor"})
-
-	a.extManager.SetItems(view.ExtTabInstalled, installed)
-	a.extManager.SetItems(view.ExtTabUpdatable, updatable)
-	a.extManager.SetItems(view.ExtTabAvailable, available)
 	a.extManager.SetItems(view.ExtTabProviders, providers)
 }
 
@@ -2472,22 +2468,24 @@ func (a *App) promptInstallExtension(item view.ExtItem) {
 // installExtension instala la extensión por id con la MISMA ruta que la CLI
 // (ext.InstallByID, no una reinvención): resolución por orden de proveedores y
 // validación del manifest antes de tocar el destino. Los datos de la ventana se
-// recargan pase lo que pase —instalar agrega o quita filas— y el error, si lo
+// repintan pase lo que pase —instalar agrega o quita filas— y el error, si lo
 // hay, lo muestra el pedido.
 //
-// Como en la CLI, la extensión recién instalada entra en la sesión SIGUIENTE:
-// recargar las extensiones en caliente no es idempotente.
+// La extensión recién instalada entra en la MISMA sesión: el catálogo no cambió
+// (no se relee el proveedor), así que solo se relee la lista local y las
+// extensiones de disco se recargan —con Manager.Reload, que también descarta el
+// host de Lua cacheado— para que sus comandos existan desde ya.
 func (a *App) installExtension(item view.ExtItem) error {
 	providers, userRoot, err := extensionUserSources()
 	if err != nil {
 		return err
 	}
 	res, err := ext.InstallByID(item.ID, providers, userRoot, startupExtFetch, nil)
-	a.loadExtManagerData()
+	a.refreshExtData()
 	if err != nil {
 		return err
 	}
-	a.statusBar.SetMessage("Instalada: " + res.Ref() + " — disponible en la próxima sesión")
+	a.statusBar.SetMessage("Instalada: " + res.Ref())
 	return nil
 }
 
@@ -2496,6 +2494,10 @@ func (a *App) installExtension(item view.ExtItem) error {
 // cuyas versiones difieren, que —con los datos recién cargados— son exactamente
 // las de la pestaña. Actualizar no vuelve a pedir confianza en el proveedor: la
 // extensión instalada salió de ahí, continuarla no es agregar una fuente.
+//
+// Actualizar baja el código NUEVO, así que además de repintar la ventana
+// recarga las extensiones de la sesión: un host de Lua cacheado ejecutaría el
+// script viejo.
 func (a *App) promptUpdateExtension(item view.ExtItem) {
 	a.openPrompt("¿Actualizar "+item.Ref+"? [s/N] ", "", func(answer string) error {
 		if !isYesAnswer(answer) {
@@ -2507,7 +2509,7 @@ func (a *App) promptUpdateExtension(item view.ExtItem) {
 			return err
 		}
 		applied, errs := ext.UpdateAll(providers, userRoot, startupExtFetch)
-		a.loadExtManagerData()
+		a.refreshExtData()
 		msg := plural(len(applied), "actualización aplicada", "actualizaciones aplicadas")
 		if len(applied) == 0 {
 			msg = item.Ref + " ya estaba al día"
@@ -2536,7 +2538,7 @@ func (a *App) promptRemoveExtension(item view.ExtItem) {
 		} else {
 			err = ext.Remove(a.extUserRoot, item.ID)
 		}
-		a.loadExtManagerData()
+		a.refreshExtData()
 		if err != nil {
 			return err
 		}
@@ -2617,7 +2619,11 @@ func (a *App) addProviderSource(source string) error {
 		return err
 	}
 	// La ventana se recarga para que el proveedor nuevo aparezca en su lista,
-	// marcado como sin aprobar.
+	// marcado como sin aprobar. Como su catálogo todavía no está leído (y leerlo
+	// es la parte cara), lo que se hace es disparar UNA lectura de fondo nueva:
+	// hasta que llegue, la ventana muestra "cargando…".
+	a.extSnapshot = nil
+	a.prefetchExtensions()
 	a.loadExtManagerData()
 	a.statusBar.SetMessage("Proveedor agregado (sin aprobar): " + name)
 	return nil

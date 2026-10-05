@@ -31,9 +31,10 @@ func main() {
 	}
 
 	// El chequeo de actualizaciones y novedades NO vive acá: corre dentro del
-	// controller (checkExtensionsAndPrompt), que lo muestra en la pantalla y le
-	// pregunta al usuario antes de aplicar. Antes se imprimía por stdout, antes
-	// de abrir la TUI, así que era invisible.
+	// controller, en una goroutine que arranca con la app, y avisa por la barra de
+	// estado. Antes se imprimía por stdout, antes de abrir la TUI, así que era
+	// invisible; después pasó a bloquear el arranque mientras leía los proveedores
+	// (git, segundos), y ahora esa lectura corre en segundo plano.
 
 	path := ""
 	if len(os.Args) > 1 {

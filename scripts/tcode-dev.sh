@@ -24,7 +24,7 @@ bin="$repo/dist/tcode-linux-amd64"
 # Reconstruye si el binario falta o si algún .go es más nuevo. `.git` se poda
 # porque recorrerlo no aporta fuentes y es lo más pesado del árbol.
 if [ ! -x "$bin" ] || [ -n "$(find "$repo" -path "$repo/.git" -prune -o -name '*.go' -newer "$bin" -print -quit 2>/dev/null)" ]; then
-	printf 'tcode: fuentes más nuevas que el binario, compilando...\n' >&2
+	printf 'tcode: Iniciando...\n' >&2
 	if ! (cd "$repo" && go build -trimpath -ldflags="-s -w" -o "$bin" .); then
 		printf 'tcode: la compilación falló; el binario NO se actualizó\n' >&2
 		exit 1
