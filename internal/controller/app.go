@@ -1265,6 +1265,10 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 					a.explorerExpand()
 				case view.ActionDelete:
 					a.promptDeleteEntry()
+				case view.ActionNewFile:
+					a.promptCreateEntry(false)
+				case view.ActionNewFolder:
+					a.promptCreateEntry(true)
 				}
 				a.redraw()
 				return false
@@ -1505,8 +1509,17 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		if a.explorerVisible {
 			panelW := panelWidth(width)
 			if x < panelW {
-				if _, handled := a.explorer.HandleEvent(tcell.NewEventMouse(x, y-tabBarHeight, ev.Buttons(), ev.Modifiers())); handled {
+				action, handled := a.explorer.HandleEvent(tcell.NewEventMouse(x, y-tabBarHeight, ev.Buttons(), ev.Modifiers()))
+				if handled {
 					a.explorerFocused = true
+					// El pie del panel pide la creación contextual: el mismo flujo
+					// que Ctrl+N / Ctrl+Shift+N.
+					switch action {
+					case view.ActionNewFile:
+						a.promptCreateEntry(false)
+					case view.ActionNewFolder:
+						a.promptCreateEntry(true)
+					}
 					a.redraw()
 					return false
 				}

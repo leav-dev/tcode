@@ -2,6 +2,7 @@ package view
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
@@ -575,8 +576,8 @@ func TestFileBrowserEnterActivatesFilesAndFallsOtherwise(t *testing.T) {
 	}
 }
 
-// TestFileBrowserPages: PageUp/PageDown saltan una página (el alto del panel)
-// y se clamps a los bordes del árbol.
+// TestFileBrowserPages: PageUp/PageDown saltan una página (el alto del árbol,
+// sin la fila del pie) y se clamps a los bordes del árbol.
 func TestFileBrowserPages(t *testing.T) {
 	fb := NewFileBrowser()
 	fb.Resize(10, 5)
@@ -587,8 +588,8 @@ func TestFileBrowserPages(t *testing.T) {
 	if action != ActionMove || !handled {
 		t.Fatalf("PgDn devolvió (action=%v, handled=%v), se esperaba (ActionMove, true)", action, handled)
 	}
-	if fb.cursor != 5 {
-		t.Fatalf("cursor = %d tras PgDn, se esperaba 5 (una página)", fb.cursor)
+	if fb.cursor != 4 {
+		t.Fatalf("cursor = %d tras PgDn, se esperaba 4 (una página: el alto del árbol sin el pie)", fb.cursor)
 	}
 
 	fb.HandleEvent(tcell.NewEventKey(tcell.KeyPgUp, 0, tcell.ModNone))
@@ -650,8 +651,8 @@ func TestFileBrowserMouseSelectsAndScrollsAtAnyDepth(t *testing.T) {
 	if fb.cursor != 5 {
 		t.Fatalf("cursor = %d tras la rueda, se esperaba 5", fb.cursor)
 	}
-	if fb.top != 1 {
-		t.Fatalf("top = %d tras la rueda, se esperaba 1 (la activa en la última fila)", fb.top)
+	if fb.top != 2 {
+		t.Fatalf("top = %d tras la rueda, se esperaba 2 (la activa en la última fila del árbol)", fb.top)
 	}
 }
 
@@ -668,26 +669,26 @@ func TestFileBrowserScrollKeepsTheActiveVisible(t *testing.T) {
 	if fb.cursor != 29 {
 		t.Fatalf("cursor = %d tras End, se esperaba 29", fb.cursor)
 	}
-	if fb.top != 25 {
-		t.Fatalf("top = %d tras End, se esperaba 25 (la activa en la última fila)", fb.top)
+	if fb.top != 26 {
+		t.Fatalf("top = %d tras End, se esperaba 26 (la activa en la última fila del árbol)", fb.top)
 	}
 
 	s := newTestScreen(t, 10, 5)
 	fb.Draw(s)
 	s.Show()
-	if got := screenLines(s)[4]; got != "> e29" {
-		t.Fatalf("última fila visible = %q, se esperaba %q (entrada activa con marcador)", got, "> e29")
+	if got := screenLines(s)[3]; got != "> e29" {
+		t.Fatalf("última fila del árbol = %q, se esperaba %q (entrada activa con marcador)", got, "> e29")
 	}
-	if cellBg(s, 0, 4) != tcell.PaletteColor(24) {
-		t.Fatal("la entrada activa 29 debe dibujarse con la barra de selección en la última fila")
+	if cellBg(s, 0, 3) != tcell.PaletteColor(24) {
+		t.Fatal("la entrada activa 29 debe dibujarse con la barra de selección en la última fila del árbol")
 	}
 
 	// Subir una: la activa sigue dentro de la ventana [25,30), así que el
 	// scroll NO se mueve todavía —el scroll mínimo corre top solo cuando el
 	// cursor saldría de la ventana, como el editor.
 	fb.HandleEvent(tcell.NewEventKey(tcell.KeyUp, 0, tcell.ModNone))
-	if fb.cursor != 28 || fb.top != 25 {
-		t.Fatalf("tras Up: cursor=%d top=%d, se esperaba 28 y 25 (sin mover el top)", fb.cursor, fb.top)
+	if fb.cursor != 28 || fb.top != 26 {
+		t.Fatalf("tras Up: cursor=%d top=%d, se esperaba 28 y 26 (sin mover el top)", fb.cursor, fb.top)
 	}
 
 	// Subir hasta que la activa salga por arriba: top la acompaña.
@@ -727,14 +728,21 @@ func TestFileBrowserSetRootEntriesClampsTheCursor(t *testing.T) {
 		t.Fatalf("con lista vacía cursor=%d top=%d, se esperaban 0 y 0", fb.cursor, fb.top)
 	}
 
-	// Con el primer nivel vacío no se dibuja nada, aunque el panel tenga alto.
-	s := newTestScreen(t, 10, 5)
+	// Con el primer nivel vacío el ÁRBOL no dibuja nada, aunque el panel tenga
+	// alto; la última fila es del pie de botones, que sigue ahí para poder
+	// crear un archivo justamente en el directorio vacío. El panel se ensancha
+	// para que la etiqueta del botón entre completa.
+	fb.Resize(24, 5)
+	s := newTestScreen(t, 24, 5)
 	fb.Draw(s)
 	s.Show()
-	for y := 0; y < 5; y++ {
+	for y := 0; y < 4; y++ {
 		if got := cellRuneAt(s, 0, y); got != 0 {
 			t.Fatalf("fila %d = %q, con el árbol vacío no debe dibujarse nada", y, got)
 		}
+	}
+	if got := screenLines(s)[4]; !strings.Contains(got, NewFileLabel) {
+		t.Fatalf("pie = %q, se esperaba el botón %q aun con el árbol vacío", got, NewFileLabel)
 	}
 }
 
@@ -1142,5 +1150,84 @@ func TestFileBrowserDeleteKeyAsksTheControllerToDelete(t *testing.T) {
 		if action, handled := fb.HandleEvent(tcell.NewEventKey(key, 0, tcell.ModNone)); action != ActionDelete || !handled {
 			t.Fatalf("tecla %v sobre el cursor devolvió (action=%v, handled=%v), se esperaba (ActionDelete, true)", key, action, handled)
 		}
+	}
+}
+
+// TestFileBrowserFooterDrawsBothButtons: el pie del panel muestra los dos
+// botones de creación en su última fila.
+func TestFileBrowserFooterDrawsBothButtons(t *testing.T) {
+	fb := NewFileBrowser()
+	fb.Resize(24, 5)
+	fb.SetRoot("/cwd")
+	fb.SetRootEntries(newList(2))
+
+	s := newTestScreen(t, 24, 5)
+	fb.Draw(s)
+	s.Show()
+
+	bottom := screenLines(s)[4]
+	if !strings.Contains(bottom, NewFileLabel) || !strings.Contains(bottom, NewFolderLabel) {
+		t.Fatalf("pie = %q, se esperaban los dos botones (%q y %q)", bottom, NewFileLabel, NewFolderLabel)
+	}
+}
+
+// TestFileBrowserFooterClickReturnsTheCreateActions: un clic en cada botón
+// devuelve la acción de creación correspondiente —la vista no crea nada— y un
+// clic en el pie fuera de los botones se consume sin proponer nada.
+func TestFileBrowserFooterClickReturnsTheCreateActions(t *testing.T) {
+	fb := NewFileBrowser()
+	fb.Resize(24, 5)
+	fb.SetRoot("/cwd")
+	fb.SetRootEntries(newList(2))
+	file, folder := buttonRanges()
+	footerY := 4 // alto 5: la última fila es del pie
+
+	action, handled := fb.HandleEvent(tcell.NewEventMouse(file[0], footerY, tcell.Button1, tcell.ModNone))
+	if !handled || action != ActionNewFile {
+		t.Fatalf("clic en %q devolvió (action=%v, handled=%v), se esperaba (ActionNewFile, true)", NewFileLabel, action, handled)
+	}
+	action, handled = fb.HandleEvent(tcell.NewEventMouse(folder[0], footerY, tcell.Button1, tcell.ModNone))
+	if !handled || action != ActionNewFolder {
+		t.Fatalf("clic en %q devolvió (action=%v, handled=%v), se esperaba (ActionNewFolder, true)", NewFolderLabel, action, handled)
+	}
+	action, handled = fb.HandleEvent(tcell.NewEventMouse(0, footerY, tcell.Button1, tcell.ModNone))
+	if !handled || action != ActionNone {
+		t.Fatalf("clic en el pie fuera de los botones devolvió (action=%v, handled=%v), se esperaba (ActionNone, true)", action, handled)
+	}
+}
+
+// TestFileBrowserClickBelowTheNodesIsConsumed: un clic en el espacio vacío del
+// panel (menos nodos que filas de árbol) no selecciona nada y no rompe.
+func TestFileBrowserClickBelowTheNodesIsConsumed(t *testing.T) {
+	fb := NewFileBrowser()
+	fb.Resize(24, 5)
+	fb.SetRoot("/cwd")
+	fb.SetRootEntries(newList(2)) // 2 nodos en 4 filas de árbol
+
+	if got := fb.CursorPath(); got != "/cwd/e00.txt" {
+		t.Fatalf("CursorPath() = %q, se esperaba el primer nodo", got)
+	}
+	action, handled := fb.HandleEvent(tcell.NewEventMouse(1, 3, tcell.Button1, tcell.ModNone))
+	if !handled || action != ActionNone {
+		t.Fatalf("clic bajo el último nodo devolvió (action=%v, handled=%v), se esperaba (ActionNone, true)", action, handled)
+	}
+	if got := fb.CursorPath(); got != "/cwd/e00.txt" {
+		t.Fatalf("CursorPath() = %q, el clic en el vacío no debía mover el cursor", got)
+	}
+}
+
+// TestFileBrowserWithoutFooterSpaceKeepsTheTreeFull: con alto 1 no hay lugar
+// para el pie y el árbol conserva su única fila (el pie no se dibuja).
+func TestFileBrowserWithoutFooterSpaceKeepsTheTreeFull(t *testing.T) {
+	fb := NewFileBrowser()
+	fb.Resize(24, 1)
+	fb.SetRoot("/cwd")
+	fb.SetRootEntries(newList(2))
+
+	s := newTestScreen(t, 24, 1)
+	fb.Draw(s)
+	s.Show()
+	if got := screenLines(s)[0]; got != "> e00" {
+		t.Fatalf("fila única = %q, se esperaba el primer nodo sin pie", got)
 	}
 }

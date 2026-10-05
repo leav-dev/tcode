@@ -46,11 +46,20 @@ type Entry struct {
 type Action int
 
 const (
-	ActionNone     Action = iota // el evento no cayó en el panel, o no pidió nada
-	ActionMove                   // solo redibujar (movimiento, colapso interno, click)
-	ActionActivate               // abrir el archivo del nodo del cursor
-	ActionExpand                 // leer los hijos del dir del cursor y depositarlos
-	ActionDelete                 // borrar el nodo del cursor (el controlador confirma)
+	ActionNone      Action = iota // el evento no cayó en el panel, o no pidió nada
+	ActionMove                    // solo redibujar (movimiento, colapso interno, click)
+	ActionActivate                // abrir el archivo del nodo del cursor
+	ActionExpand                  // leer los hijos del dir del cursor y depositarlos
+	ActionDelete                  // borrar el nodo del cursor (el controlador confirma)
+	ActionNewFile                 // pie del panel: crear un archivo en el destino del cursor
+	ActionNewFolder               // pie del panel: crear una carpeta en el destino del cursor
+)
+
+// Etiquetas de los botones del pie del panel: el texto vive en la vista y el
+// controlador (y los tests) lo referencian por estas constantes.
+const (
+	NewFileLabel   = "+ Archivo"
+	NewFolderLabel = "+ Carpeta"
 )
 
 // treeNode es el nodo del árbol: el dato mutable que conserva la jerarquía
@@ -262,24 +271,38 @@ func (fb *FileBrowser) clamp() {
 	}
 	n := len(fb.nodes)
 	fb.cursor = min(max(fb.cursor, 0), n-1)
-	maxTop := n - fb.height
+	maxTop := n - fb.listRows()
 	if maxTop < 0 {
 		maxTop = 0
 	}
 	fb.top = min(max(fb.top, 0), maxTop)
 }
 
+// listRows es cuántas filas del panel usa el ÁRBOL: el alto menos la fila del
+// pie de botones. Con alto <= 1 no hay lugar para el pie y el árbol se queda
+// con todo (el pie no se dibuja).
+func (fb *FileBrowser) listRows() int {
+	if fb.height <= 1 {
+		return fb.height
+	}
+	return fb.height - 1
+}
+
+// hasFooter dice si el panel tiene alto para el pie de botones.
+func (fb *FileBrowser) hasFooter() bool { return fb.height > 1 }
+
 // ensureCursorVisible corre top lo mínimo para que el nodo activo quede
-// dentro del alto del panel, como hace el editor con su viewport.
+// dentro del alto del árbol, como hace el editor con su viewport.
 func (fb *FileBrowser) ensureCursorVisible() {
-	if len(fb.nodes) == 0 || fb.height <= 0 {
+	rows := fb.listRows()
+	if len(fb.nodes) == 0 || rows <= 0 {
 		return
 	}
 	if fb.cursor < fb.top {
 		fb.top = fb.cursor
 	}
-	if fb.cursor >= fb.top+fb.height {
-		fb.top = fb.cursor - fb.height + 1
+	if fb.cursor >= fb.top+rows {
+		fb.top = fb.cursor - rows + 1
 	}
 	fb.clamp()
 }
@@ -313,10 +336,10 @@ func (fb *FileBrowser) moveCursor(delta int) bool {
 	return true
 }
 
-// page es el salto de página: lo que cabe en el alto del panel, mínimo 1.
+// page es el salto de página: lo que cabe en el alto del árbol, mínimo 1.
 func (fb *FileBrowser) page() int {
-	if fb.height > 1 {
-		return fb.height
+	if rows := fb.listRows(); rows > 1 {
+		return rows
 	}
 	return 1
 }
@@ -630,13 +653,30 @@ func (fb *FileBrowser) HandleEvent(ev tcell.Event) (Action, bool) {
 		x, y := ev.Position()
 		switch {
 		case ev.Buttons()&tcell.Button1 != 0:
-			// El clic selecciona la fila del aplanado —cualquier nivel—; el
-			// controlador enfoca el panel al enterarse de que el panel lo
-			// manejó. Un clic fuera de las filas del panel no selecciona nada.
-			if len(fb.nodes) == 0 || y < 0 || y >= fb.height {
+			// El pie del panel: un clic sobre un botón pide la creación
+			// contextual; fuera de los botones el panel lo consume igual —el
+			// clic es del panel, no del editor que está detrás—.
+			if fb.hasFooter() && y == fb.height-1 {
+				file, folder := buttonRanges()
+				switch {
+				case x >= file[0] && x < file[1]:
+					return ActionNewFile, true
+				case x >= folder[0] && x < folder[1]:
+					return ActionNewFolder, true
+				}
+				return ActionNone, true
+			}
+			// Un clic fuera de las filas del panel no selecciona nada (y cae al
+			// flujo normal del controlador).
+			if y < 0 || y >= fb.height {
 				return ActionNone, false
 			}
 			idx := fb.top + y
+			if idx >= len(fb.nodes) {
+				// Espacio vacío del panel (menos nodos que filas): el clic es del
+				// panel y no selecciona nada.
+				return ActionNone, true
+			}
 			n := fb.nodes[idx]
 			// Clic sobre la flecha de expansión (▸/▾) de un directorio:
 			// alterna colapsado ↔ expandido, como en cualquier árbol GUI. La
@@ -674,10 +714,17 @@ func (fb *FileBrowser) HandleEvent(ev tcell.Event) (Action, bool) {
 // panel (writeString avanza por grapheme cluster). Sin nodos o sin alto no hay
 // nada que dibujar.
 func (fb *FileBrowser) Draw(s Surface) {
-	if len(fb.nodes) == 0 || fb.height <= 0 {
+	if fb.height <= 0 || fb.width <= 0 {
 		return
 	}
-	for row := 0; row < fb.height; row++ {
+	fb.drawTree(s)
+	fb.drawFooter(s)
+}
+
+// drawTree pinta las filas visibles del árbol en las primeras listRows() filas
+// del panel: la última es del pie de botones.
+func (fb *FileBrowser) drawTree(s Surface) {
+	for row := 0; row < fb.listRows(); row++ {
 		idx := fb.top + row
 		if idx >= len(fb.nodes) {
 			break
@@ -718,4 +765,32 @@ func (fb *FileBrowser) Draw(s Surface) {
 		}
 		writeString(s, 0, row, line, style, fb.width)
 	}
+}
+
+// buttonRanges devuelve los rangos [x0,x1) que ocupan los dos botones del pie:
+// el dibujo y el hit-test del mouse usan la MISMA cuenta, así no se
+// desincronizan cuando cambia el ancho o el texto de un botón.
+func buttonRanges() (file, folder [2]int) {
+	x := 1
+	file = [2]int{x, x + 1 + displayWidth(NewFileLabel) + 1}
+	x = file[1] + 1
+	folder = [2]int{x, x + 1 + displayWidth(NewFolderLabel) + 1}
+	return file, folder
+}
+
+// drawFooter pinta el pie del panel: la fila entera con el fondo del panel y
+// los dos botones como chips (rol Button) con un espacio de padding a cada
+// lado. Sin alto para el pie no dibuja nada —el árbol se queda con todo—.
+func (fb *FileBrowser) drawFooter(s Surface) {
+	if !fb.hasFooter() {
+		return
+	}
+	th := themeOr(fb.theme)
+	y := fb.height - 1
+	for x := 0; x < fb.width; x++ {
+		s.SetContent(x, y, ' ', nil, th.Text)
+	}
+	file, folder := buttonRanges()
+	writeString(s, file[0], y, " "+NewFileLabel+" ", th.Button, fb.width-file[0])
+	writeString(s, folder[0], y, " "+NewFolderLabel+" ", th.Button, fb.width-folder[0])
 }
