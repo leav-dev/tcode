@@ -278,3 +278,71 @@ func TestExtManagerResizeReencuadra(t *testing.T) {
 		t.Fatalf("top = %d con todo dentro, se esperaba 0", got)
 	}
 }
+
+// TestExtManagerSpaceTogglesInstalledRow: Space sobre una fila de Instaladas
+// propone alternar el estado de esa extensión.
+func TestExtManagerSpaceTogglesInstalledRow(t *testing.T) {
+	m := extManagerFixture(t)
+
+	handled, intent := m.HandleEvent(tcell.NewEventKey(tcell.KeyRune, ' ', tcell.ModNone))
+	if !handled {
+		t.Fatal("Space es una tecla de la ventana: no debe caer al controlador")
+	}
+	if intent.Kind != ExtIntentToggle {
+		t.Fatalf("intent = %v, se esperaba ExtIntentToggle", intent.Kind)
+	}
+	if intent.Item.ID != "tcode.linter" {
+		t.Fatalf("item = %q, se esperaba la fila del cursor", intent.Item.ID)
+	}
+}
+
+// TestExtManagerSpaceIsSilentOutsideInstalled: en otra pestaña Space se consume
+// (la ventana no se cierra) pero no propone nada.
+func TestExtManagerSpaceIsSilentOutsideInstalled(t *testing.T) {
+	m := extManagerFixture(t)
+	m.HandleEvent(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone)) // Actualizables
+
+	handled, intent := m.HandleEvent(tcell.NewEventKey(tcell.KeyRune, ' ', tcell.ModNone))
+	if !handled {
+		t.Fatal("Space debe ser una tecla de la ventana en cualquier pestaña")
+	}
+	if intent.Kind != ExtIntentNone {
+		t.Fatalf("intent = %v, se esperaba ExtIntentNone fuera de Instaladas", intent.Kind)
+	}
+}
+
+// TestExtManagerSpaceOnEmptyInstalledDoesNothing: sin filas que alternar, Space
+// se consume sin proponer nada.
+func TestExtManagerSpaceOnEmptyInstalledDoesNothing(t *testing.T) {
+	m := NewExtManager()
+	m.Resize(60, ExtManagerHeight())
+
+	handled, intent := m.HandleEvent(tcell.NewEventKey(tcell.KeyRune, ' ', tcell.ModNone))
+	if !handled || intent.Kind != ExtIntentNone {
+		t.Fatalf("(handled=%v, intent=%v), se esperaba consumir sin intención", handled, intent.Kind)
+	}
+}
+
+// TestExtManagerDrawsTheToggleHint: la pista de la acción vive en el borde
+// inferior de la pestaña Instaladas —una acción de teclado invisible es una
+// acción perdida— y no aparece en las demás pestañas.
+func TestExtManagerDrawsTheToggleHint(t *testing.T) {
+	s := newTestScreen(t, 60, ExtManagerHeight())
+	m := extManagerFixture(t)
+	m.Draw(s)
+	s.Show()
+
+	bottom := screenLines(s)[ExtManagerHeight()-1]
+	if !strings.Contains(bottom, "espacio: activar/desactivar") {
+		t.Fatalf("borde inferior = %q, se esperaba la pista del toggle", bottom)
+	}
+
+	// En otra pestaña no hay pista de toggle: el borde vuelve a ser una línea.
+	m.HandleEvent(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone))
+	s2 := newTestScreen(t, 60, ExtManagerHeight())
+	m.Draw(s2)
+	s2.Show()
+	if got := screenLines(s2)[ExtManagerHeight()-1]; strings.Contains(got, "espacio") {
+		t.Fatalf("borde inferior = %q, no debe haber pista fuera de Instaladas", got)
+	}
+}

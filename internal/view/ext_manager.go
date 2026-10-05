@@ -43,6 +43,16 @@ var extTabEmpty = [extTabCount]string{
 	"sin extensiones disponibles",
 }
 
+// extTabHint es la pista de la acción propia de cada pestaña, escrita sobre el
+// borde inferior para que la acción no viva solo en la documentación. Vacía =
+// sin pista.
+var extTabHint = [extTabCount]string{
+	"espacio: activar/desactivar",
+	"",
+	"",
+	"",
+}
+
 // ExtItemKind es lo que Enter hace con una fila. La ventana NO decide qué
 // acción corresponde al tipo de pestaña: el controlador lo sabe por los datos
 // que cargó, y la vista solo declara qué fila se tocó.
@@ -87,6 +97,9 @@ const (
 	ExtIntentAction
 	// ExtIntentAddProvider propone el pedido de texto para agregar una fuente.
 	ExtIntentAddProvider
+	// ExtIntentToggle propone alternar el estado (activa/desactivada) de la
+	// extensión instalada del cursor.
+	ExtIntentToggle
 )
 
 // ExtIntent es la intención que HandleEvent devuelve: qué pidió la ventana y
@@ -339,9 +352,30 @@ func (m *ExtManager) HandleEvent(ev tcell.Event) (handled bool, intent ExtIntent
 			return true, ExtIntent{}
 		case tcell.KeyEnter, tcell.KeyLF:
 			return true, m.activate()
+		case tcell.KeyRune:
+			// Space alterna el estado de la extensión instalada del cursor. Es
+			// una tecla DE LA VENTANA (no la cierra): en otra pestaña no hace
+			// nada, pero sigue siendo suya.
+			if ev.Rune() == ' ' {
+				return true, m.toggleIntent()
+			}
 		}
 	}
 	return false, ExtIntent{}
+}
+
+// toggleIntent construye la intención de alternar el estado de la extensión
+// instalada del cursor. En otra pestaña (o sin filas) no hay nada que
+// alternar: se consume la tecla sin proponer nada.
+func (m *ExtManager) toggleIntent() ExtIntent {
+	if m.tab != ExtTabInstalled {
+		return ExtIntent{Tab: m.tab}
+	}
+	it := m.Selected()
+	if it.Kind != ExtItemRemove {
+		return ExtIntent{Tab: m.tab}
+	}
+	return ExtIntent{Kind: ExtIntentToggle, Tab: m.tab, Item: it}
 }
 
 // activate construye la intención de la fila del cursor: la de agregar
@@ -401,6 +435,12 @@ func (m *ExtManager) Draw(s Surface) {
 		}
 		advance := writeString(s, x, 0, label, style, m.width-1-x) + 1
 		x += advance
+	}
+
+	// Pista de la acción de la pestaña activa, escrita sobre el borde inferior:
+	// una acción de teclado invisible es una acción perdida.
+	if hint := extTabHint[m.tab]; hint != "" && displayWidth(hint)+4 < m.width {
+		writeString(s, 2, m.height-1, " "+hint+" ", th.Text, m.width-4)
 	}
 
 	// Filas visibles de la pestaña activa: interior desde la fila 1, una fila

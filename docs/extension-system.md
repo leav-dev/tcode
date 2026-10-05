@@ -280,7 +280,7 @@ instaladas. Listar un proveedor es E/S con git y no puede correr al abrir.
 
 | Pestaña | Qué muestra |
 | --- | --- |
-| **Instaladas** | Las extensiones instaladas, con su versión y su proveedor |
+| **Instaladas** | Las extensiones instaladas, con su versión; las **desactivadas** se marcan `(desactivada)` |
 | **Actualizables** | Las instaladas cuyo proveedor ofrece otra versión, con el salto `vieja → nueva` |
 | **Disponibles** | Las que los proveedores ofrecen y no están instaladas |
 | **Proveedores** | Las fuentes registradas, con la fila `+ Agregar proveedor` al final |
@@ -290,7 +290,15 @@ instaladas. Listar un proveedor es E/S con git y no puede correr al abrir.
 | `Left` / `Right` | Cambia de pestaña (con wrap) |
 | `Up` / `Down`, `PgUp` / `PgDn`, `Home` / `End` | Mueve el cursor en la pestaña |
 | `Enter` | Actúa **según la fila**: Disponible → instala; Actualizable → actualiza; Instalada → borra; `+ Agregar proveedor` → pide la URL o la carpeta |
+| `Space` | En **Instaladas**, alterna **activar/desactivar** la extensión del cursor. En las demás pestañas no hace nada (la tecla es de la ventana) |
 | `Escape` (o cualquier tecla ajena) | Cierra la ventana descartando |
+
+**Activar y desactivar.** Una extensión **desactivada no se carga**: no registra
+sus comandos, sus keybindings no resuelven y sus hooks no corren —es como si no
+estuviera instalada, pero sigue en disco y en la lista para reactivarla—. Al
+desactivarla se retiran sus rastros (las secciones de la barra y los diagnósticos
+que había depositado). El estado **persiste** en `~/.tcode/config.json`
+(`DisabledExtensions`), así que sobrevive al reinicio.
 
 Los tres actos que traen o borran código —**instalar, actualizar y borrar**— piden
 **confirmación sí/no** antes de tocar el disco (solo `s` confirma; el default es NO).

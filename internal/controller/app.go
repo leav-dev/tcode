@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"sort"
 	"strings"
 	"time"
 
@@ -53,6 +54,13 @@ type App struct {
 	// demás. La clave es el puntero del buffer: al cerrarlo, sus secciones se
 	// borran; al cambiar de buffer, syncStatus empuja las del activo.
 	sections map[*model.PieceTable]map[string]string
+
+	// disabledExts son las extensiones desactivadas por manifest id: no se
+	// cargan —sin comandos, sin keybindings, sin hooks— y el estado persiste
+	// en la config. extDiscovered guarda las descubiertas (incluidas las
+	// desactivadas) para poder retirar sus artefactos al desactivarlas.
+	disabledExts  map[string]bool
+	extDiscovered []ext.Extension
 
 	// editorSurf es la superficie recortada con la que se componen los dos
 	// panes del redibujo: el explorador y el editor activo. Se reusa entre
@@ -203,19 +211,20 @@ func NewAppWithScreen(s tcell.Screen, path string) (*App, error) {
 
 	ws := model.NewWorkspace()
 	app := &App{
-		screen:     s,
-		ws:         ws,
-		editors:    make(map[*model.PieceTable]*view.EditorView),
-		forceSave:  make(map[*model.PieceTable]bool),
-		sections:   make(map[*model.PieceTable]map[string]string),
-		statusBar:  view.NewStatusBar(),
-		tabBar:     view.NewTabBar(),
-		toast:      view.NewToast(),
-		explorer:   view.NewFileBrowser(),
-		menu:       view.NewTabMenu(),
-		configMenu: view.NewConfigMenu(),
-		extManager: view.NewExtManager(),
-		ext:        ext.NewManager(),
+		screen:       s,
+		ws:           ws,
+		editors:      make(map[*model.PieceTable]*view.EditorView),
+		forceSave:    make(map[*model.PieceTable]bool),
+		sections:     make(map[*model.PieceTable]map[string]string),
+		disabledExts: make(map[string]bool),
+		statusBar:    view.NewStatusBar(),
+		tabBar:       view.NewTabBar(),
+		toast:        view.NewToast(),
+		explorer:     view.NewFileBrowser(),
+		menu:         view.NewTabMenu(),
+		configMenu:   view.NewConfigMenu(),
+		extManager:   view.NewExtManager(),
+		ext:          ext.NewManager(),
 
 		// La sesión es el estado de los modos explorador; el modo archivo la
 		// apaga abajo.
@@ -284,6 +293,11 @@ func NewAppWithScreen(s tcell.Screen, path string) (*App, error) {
 	// eventos y el aviso aparece en la barra cuando llega; hasta entonces el
 	// editor ya está escribiendo.
 	app.prefetchExtensions()
+	// La configuración persistida (~/.tcode/config.json) se aplica ANTES de
+	// cargar extensiones: el conjunto de desactivadas decide cuáles se
+	// registran. También deja el indent, el wrap y el ancho del panel listos
+	// antes de que se use cualquier geometría.
+	app.loadConfig()
 	app.loadExtensions()
 	// El manager habla con el editor a través del App: los comandos con script
 	// corren Lua con la API tcode.* cableada a App (ScriptAPI).
@@ -292,11 +306,6 @@ func NewAppWithScreen(s tcell.Screen, path string) (*App, error) {
 	// El tema se aplica a todas las vistas en el arranque; los editores que se
 	// creen bajo demanda lo reciben en activeEditor.
 	app.loadTheme()
-
-	// La configuración persistida (~/.tcode/config.json) se aplica sobre las
-	// vars del paquete view ANTES de que se use cualquier geometría: panelWidth,
-	// el indent y el wrap ya quedan con lo del usuario al primer redibujo.
-	app.loadConfig()
 
 	// Los built-ins tcode.* se registran después de armar el App completo: los
 	// handlers cierran sobre el App ya construido.
@@ -471,14 +480,16 @@ var configFilePath = func() string {
 
 // configFile es el esquema persistido de la configuración: el tamaño de la
 // tabulación, el salto de palabra (puntero: ausencia = default), el ancho
-// máximo del panel lateral del explorador y el id del tema del selector ("" =
-// Custom; un id desconocido se ignora al cargar). El tema de theme.json vive
-// aparte: el config solo decide si el selector elige una paleta del registry.
+// máximo del panel lateral del explorador, el id del tema del selector ("" =
+// Custom; un id desconocido se ignora al cargar) y los manifest id de las
+// extensiones desactivadas. El tema de theme.json vive aparte: el config solo
+// decide si el selector elige una paleta del registry.
 type configFile struct {
-	IndentUnit    int
-	WordWrap      *bool
-	ExplorerWidth int
-	Theme         string
+	IndentUnit         int
+	WordWrap           *bool
+	ExplorerWidth      int
+	Theme              string
+	DisabledExtensions []string
 }
 
 // loadConfig lee ~/.tcode/config.json al arranque y aplica la configuración a
@@ -508,6 +519,12 @@ func (a *App) loadConfig() {
 					view.SetActiveThemeID(cfg.Theme)
 				}
 			}
+			// El conjunto de extensiones desactivadas se rearma entero: un
+			// archivo sin la clave deja el estado vacío (todas activas).
+			a.disabledExts = make(map[string]bool, len(cfg.DisabledExtensions))
+			for _, id := range cfg.DisabledExtensions {
+				a.disabledExts[id] = true
+			}
 		}
 	}
 	// El tema del config puede diferir del aplicado por loadTheme (que solo
@@ -527,6 +544,11 @@ func (a *App) saveConfig() {
 		ExplorerWidth: view.ExplorerWidth(),
 		Theme:         view.ActiveThemeID(),
 	}
+	// Orden estable: el archivo no cambia de forma por el orden del mapa.
+	for id := range a.disabledExts {
+		cfg.DisabledExtensions = append(cfg.DisabledExtensions, id)
+	}
+	sort.Strings(cfg.DisabledExtensions)
 	data, err := json.MarshalIndent(&cfg, "", "  ")
 	if err != nil {
 		a.statusBar.SetMessage("No se pudo guardar la config: " + err.Error())
@@ -723,7 +745,18 @@ func (a *App) loadExtensions() {
 			a.statusBar.SetMessage("Extensión ignorada: " + e.Error())
 		}
 	}
-	a.ext.Reload(exts)
+	// Las desactivadas no llegan al Manager: sin comandos, sin keybindings y
+	// sin hooks. La ventana las sigue listando (ext.List lee disco) para poder
+	// reactivarlas, así que el conjunto descubierto se guarda completo.
+	a.extDiscovered = exts
+	enabled := make([]ext.Extension, 0, len(exts))
+	for _, e := range exts {
+		if a.disabledExts[e.Manifest.ID] {
+			continue
+		}
+		enabled = append(enabled, e)
+	}
+	a.ext.Reload(enabled)
 }
 
 // reloadExtensions recarga las extensiones y vuelve a disparar la activación
@@ -2465,8 +2498,12 @@ func (a *App) buildExtItems() {
 		if label == "" {
 			label = i.ID
 		}
+		right := versionText(i.Version)
+		if a.disabledExts[i.ID] {
+			right = strings.TrimSpace(right + " (desactivada)")
+		}
 		installed = append(installed, view.ExtItem{
-			Kind: view.ExtItemRemove, Label: label, Right: versionText(i.Version),
+			Kind: view.ExtItemRemove, Label: label, Right: right,
 			ID: i.ID, Provider: i.Provider, Ref: i.Ref(),
 		})
 	}
@@ -2543,7 +2580,58 @@ func (a *App) handleExtIntent(intent view.ExtIntent) {
 		case view.ExtTabInstalled:
 			a.promptRemoveExtension(intent.Item)
 		}
+	case view.ExtIntentToggle:
+		a.toggleExtension(intent.Item.ID, intent.Item.Label)
 	}
+}
+
+// toggleExtension activa o desactiva la extensión por manifest id: invierte el
+// estado, lo persiste en la config, recarga las extensiones de la sesión —una
+// desactivada deja de estar registrada, con sus keybindings y hooks—, retira
+// los artefactos que ya no puede mantener y repinta la ventana. El toast avisa
+// el estado nuevo: la acción no pide confirmación (es reversible).
+func (a *App) toggleExtension(id, name string) {
+	if a.disabledExts[id] {
+		delete(a.disabledExts, id)
+	} else {
+		a.disabledExts[id] = true
+		a.clearExtArtifacts(id)
+	}
+	a.saveConfig()
+	a.reloadExtensions()
+	a.refreshExtData()
+
+	verb := "Desactivada: "
+	if !a.disabledExts[id] {
+		verb = "Activada: "
+	}
+	a.showToast(verb+name, view.ToastSuccess)
+}
+
+// clearExtArtifacts retira lo que la extensión dejó en pantalla y ya no puede
+// mantener al quedar desactivada: las secciones de la barra (clave = manifest
+// id) y los diagnósticos de todos los buffers (clave = dir::script). El
+// controlador los escribe por proveedor, así que se borran sin tocar a las
+// demás extensiones.
+func (a *App) clearExtArtifacts(id string) {
+	for _, secs := range a.sections {
+		delete(secs, id)
+	}
+	for _, e := range a.extDiscovered {
+		if e.Manifest.ID != id {
+			continue
+		}
+		for _, c := range e.Manifest.Contributes.Commands {
+			if c.Script == "" {
+				continue
+			}
+			source := e.Dir + "::" + c.Script
+			for _, ed := range a.editors {
+				ed.SetDiagnostics(source, nil)
+			}
+		}
+	}
+	a.syncStatus()
 }
 
 // promptInstallExtension pide confirmación antes de instalar la novedad de la
