@@ -18,8 +18,23 @@ resaltado de sintaxis, temas y configuración desde una ventana flotante.
 
 ## Instalación
 
-La vía recomendada (binarios precompilados en releases) está **próximamente
-disponible**. Hoy:
+### Homebrew (macOS / Linux)
+
+La vía recomendada para macOS y Linux con Homebrew:
+
+```bash
+brew tap leav-dev/tcode
+brew install tcode
+```
+
+Para actualizar:
+
+```bash
+brew update
+brew upgrade tcode
+```
+
+### Desde fuente
 
 ```bash
 # Requisito: Go 1.25+ (lo declara go.mod)

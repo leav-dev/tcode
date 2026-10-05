@@ -1,0 +1,81 @@
+# .goreleaser.yml
+# Documentación: https://goreleaser.com/customization/
+
+version: 2
+
+project_name: tcode
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: tcode
+    binary: tcode
+    main: .
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+
+archives:
+  - id: tcode
+    formats:
+      - tar.gz
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Os }}_
+      {{- .Arch }}
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+      - "^refactor:"
+      - "merge conflict"
+      - Merge pull request
+      - Merge remote-tracking branch
+      - Merge branch
+
+brews:
+  - name: tcode
+    repository:
+      owner: leav-dev
+      name: homebrew-tcode
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/leav-dev/tcode"
+    description: "A fast terminal text editor written in Go"
+    license: "MIT"
+    test: |
+      system "#{bin}/tcode", "--version"
+    install: |
+      bin.install "tcode"
+
+release:
+  github:
+    owner: leav-dev
+    name: tcode
+  draft: false
+  prerelease: false
+  mode: replace
+
+# snapshot:
+#   version_template: "{{ incpatch .Version }}-next"
