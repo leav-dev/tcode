@@ -75,10 +75,12 @@ func TestConfigMenuDrawsTheFloatingWindow(t *testing.T) {
 			t.Fatalf("fondo de la fila del cursor en x=%d = %v, se esperaba %v (TreeCursor)", x, bg, tcell.PaletteColor(24))
 		}
 	}
-	// Las demás filas van con el estilo por defecto: fondo default, sin la barra.
+	// Las demás filas van con el fondo del TEMA (th.Text lleva el fondo del
+	// documento, ya no el de la terminal): sin la barra, pero pintadas.
+	docBg := tcell.NewHexColor(0x1E1E1E) // el fondo del tema Dark+ por defecto
 	for _, pos := range [][2]int{{5, 2}, {5, 3}, {5, 4}} {
-		if bg := cellBg(s, pos[0], pos[1]); bg != tcell.ColorDefault {
-			t.Fatalf("las filas sin cursor no deben llevar la barra: fondo en (%d,%d) = %v", pos[0], pos[1], bg)
+		if bg := cellBg(s, pos[0], pos[1]); bg != docBg {
+			t.Fatalf("las filas sin cursor deben llevar el fondo del tema: fondo en (%d,%d) = %v, esperaba %v", pos[0], pos[1], bg, docBg)
 		}
 	}
 

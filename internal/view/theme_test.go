@@ -271,3 +271,52 @@ func TestThemesAreDistinct(t *testing.T) {
 		}
 	}
 }
+
+// TestThemesCarryTheirOwnDocumentBackground: cada paleta integrada lleva su
+// propio par de documento (frente y fondo EXPLÍCITOS en Text): el fondo ya no
+// depende de la terminal, el frente no se pierde sobre el fondo del tema y el
+// par no colapsa. StyleForRole propaga ese fondo a los roles de sintaxis (y el
+// default de StyleForRole también), así los tokens heredan el fondo del
+// documento y no asoma el emulador entre token y token. Los colores además
+// tienen que ser válidos para tcell (RGB codificado, no un cast crudo que la
+// terminal no sabría pintar).
+func TestThemesCarryTheirOwnDocumentBackground(t *testing.T) {
+	for _, id := range ThemeIDs() {
+		th, ok := ThemeByID(id)
+		if !ok {
+			t.Fatalf("ThemeByID(%q) debe existir en el registry", id)
+		}
+		fg, bg, _ := th.Text.Decompose()
+		if !fg.Valid() || !bg.Valid() {
+			t.Errorf("ThemeByID(%q): el par del documento debe ser un color tcell válido (NewHexColor), no un cast crudo: fg %v, bg %v", id, fg, bg)
+		}
+		if bg == tcell.ColorDefault {
+			t.Errorf("ThemeByID(%q): el fondo del documento debe ser explícito, es %v", id, bg)
+		}
+		if fg == tcell.ColorDefault {
+			t.Errorf("ThemeByID(%q): el frente del documento debe ser explícito, es %v", id, fg)
+		}
+		if bg == fg {
+			t.Errorf("ThemeByID(%q): frente y fondo del documento no pueden coincidir (%v)", id, fg)
+		}
+		if _, kb, _ := th.StyleForRole(RoleKeyword).Decompose(); kb != bg {
+			t.Errorf("ThemeByID(%q): el rol Keyword debe heredar el fondo del documento (%v), hereda %v", id, bg, kb)
+		}
+		if _, tb, _ := th.StyleForRole(RoleText).Decompose(); tb != bg {
+			t.Errorf("ThemeByID(%q): el default de StyleForRole debe llevar el fondo del documento (%v), lleva %v", id, bg, tb)
+		}
+	}
+}
+
+// TestThemeWithoutBackgroundKeepsTerminalDefault: un tema construido sin fondo
+// (Text = StyleDefault) sigue dependiendo de la terminal: los roles no
+// inventan un fondo. Es el contrato del Custom con "text": "default".
+func TestThemeWithoutBackgroundKeepsTerminalDefault(t *testing.T) {
+	th := Theme{
+		Text:    tcell.StyleDefault,
+		Keyword: tcell.StyleDefault.Foreground(tcell.PaletteColor(213)),
+	}
+	if _, bg, _ := th.StyleForRole(RoleKeyword).Decompose(); bg != tcell.ColorDefault {
+		t.Errorf("StyleForRole(RoleKeyword) bg = %v, se esperaba ColorDefault (el tema sin fondo depende de la terminal)", bg)
+	}
+}

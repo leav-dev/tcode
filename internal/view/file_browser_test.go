@@ -51,9 +51,10 @@ func TestFileBrowserDrawsIndentedWithPrefixes(t *testing.T) {
 
 // TestFileBrowserHighlightsTheCursorRow: la fila del cursor va con la barra de
 // selección (fondo de acento, TreeCursor) a todo el ancho y las demás con el
-// estilo por defecto; el cursor por defecto es el primer nodo. La barra se
-// verifica por fondo explícito —no por Reverse—: el fondo no depende de los
-// colores default de la terminal y es lo que hace visible la selección.
+// fondo del tema (Text ya pinta su propio fondo, ya no el de la terminal); el
+// cursor por defecto es el primer nodo. La barra se verifica por fondo
+// explícito —no por Reverse—: el fondo no depende de los colores default de la
+// terminal y es lo que hace visible la selección.
 func TestFileBrowserHighlightsTheCursorRow(t *testing.T) {
 	fb := NewFileBrowser()
 	fb.Resize(20, 5)
@@ -63,7 +64,8 @@ func TestFileBrowserHighlightsTheCursorRow(t *testing.T) {
 		{Name: "b.txt", Path: "/cwd/b.txt"},
 	})
 
-	bar := tcell.PaletteColor(24) // el fondo del TreeCursor por defecto
+	bar := tcell.PaletteColor(24)        // el fondo del TreeCursor por defecto
+	docBg := tcell.NewHexColor(0x1E1E1E) // el fondo del documento en Dark+ (Text)
 	s := newTestScreen(t, 20, 5)
 	fb.Draw(s)
 	s.Show()
@@ -76,8 +78,8 @@ func TestFileBrowserHighlightsTheCursorRow(t *testing.T) {
 	if cellBg(s, 10, 0) != bar {
 		t.Fatal("la fila del cursor debe resaltarse a todo el ancho del panel")
 	}
-	if cellBg(s, 0, 1) != tcell.ColorDefault {
-		t.Fatal("las demás filas deben ir con el fondo por defecto")
+	if cellBg(s, 0, 1) != docBg {
+		t.Fatal("las demás filas deben ir con el fondo del tema, ya no el de la terminal")
 	}
 
 	action, handled := fb.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
@@ -89,8 +91,8 @@ func TestFileBrowserHighlightsTheCursorRow(t *testing.T) {
 	if cellBg(s, 0, 1) != bar {
 		t.Fatal("tras Down, la fila 1 debe llevar la barra de selección")
 	}
-	if cellBg(s, 0, 0) != tcell.ColorDefault {
-		t.Fatal("tras Down, la fila 0 pierde la barra de selección")
+	if cellBg(s, 0, 0) != docBg {
+		t.Fatal("tras Down, la fila 0 pierde la barra de selección y queda con el fondo del tema")
 	}
 }
 

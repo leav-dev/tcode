@@ -22,6 +22,18 @@ los editores abiertos incluidos) y persisten en `~/.tcode/config.json`:
 La opción **Custom** aplica el `theme.json` del usuario (ver abajo); con el
 selector sin tocar, es el comportamiento original.
 
+## El fondo del documento es del tema, no de la terminal
+
+Cada paleta integrada pinta su **propio fondo de documento** (`Text` lleva su
+par fg/fondo, y `StyleForRole` lo propaga a la sintaxis; `TabIdle` comparte el
+par y el editor rellena su viewport): el tema `Light` se ve claro aunque tu
+terminal sea negra, y Tokyo Night/Dracula no dependen del fondo del emulador.
+
+Excepción documentada: el tema **Custom** —o cualquier tema sin fondo—
+heredan el par del tema base o, si tu `theme.json` define `"text":
+"default"`, vuelven a depender de los colores default de la terminal (el
+comportamiento original). El esquema `theme.json` no tiene clave de fondo.
+
 ## El archivo
 
 `~/.tcode/theme.json` mapea nombres de rol a colores:

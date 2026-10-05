@@ -576,6 +576,17 @@ func (v *EditorView) Draw(s Surface) {
 	th := v.themeOrDefault()
 	cursorLine := v.cursor.Line
 
+	// El fondo del documento es el del tema (Text lleva su propio fondo): se
+	// limpia el viewport completo para que la terminal no asome en las celdas
+	// sin texto. Mismo costo que ya paga el explorador por su panel.
+	if v.viewport.Width > 0 && v.viewport.Height > 0 {
+		for y := 0; y < v.viewport.Height; y++ {
+			for x := 0; x < v.viewport.Width; x++ {
+				s.SetContent(x, y, ' ', nil, th.Text)
+			}
+		}
+	}
+
 	row := 0 // fila física en pantalla
 	for line := v.viewport.TopLine; line < v.model.LineCount() && row < v.viewport.Height; line++ {
 		// COPIA obligatoria, no vista de mmap: tcell retiene el string que le
@@ -619,6 +630,7 @@ func (v *EditorView) drawSoftLine(s Surface, th Theme, hl *highlighter, text str
 		cl := g.Str()
 		from, _ := g.Positions()
 		if cl == "" {
+
 			col = 0 // retorno de carro aislado: vuelve al inicio de la misma fila
 			continue
 		}
@@ -649,6 +661,7 @@ func (v *EditorView) drawLineUnwrapped(s Surface, th Theme, hl *highlighter, tex
 		cl := g.Str()
 		from, _ := g.Positions()
 		if cl == "" {
+
 			col = 0 // retorno de carro aislado: vuelve al inicio de la misma fila
 			continue
 		}

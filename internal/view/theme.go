@@ -12,6 +12,9 @@ import (
 // el rol que le toca; ningún módulo hardcodea un color (salvo los defaults de
 // acá). Es la costura donde un día entra un tema de sintaxis real.
 type Theme struct {
+	// Text lleva el FONDO del documento: el tema pinta su propio fondo y la
+	// terminal deja de mandar; StyleForRole lo propaga a los roles de sintaxis;
+	// TabIdle comparte el par para que la fila de pestañas no desentone.
 	Text         tcell.Style // texto del documento sin resaltar
 	CursorLineBg tcell.Color // fondo de la línea del cursor
 	TabActive    tcell.Style // pestaña activa
@@ -44,40 +47,32 @@ func on(fg, bg tcell.Color) tcell.Style { return tcell.StyleDefault.Foreground(f
 // original y le suma un color de acento.
 func active(c tcell.Color) tcell.Style { return tcell.StyleDefault.Reverse(true).Foreground(c) }
 
+// docBg es el fondo del documento del tema: el que StyleForRole propaga a la
+// sintaxis.
+func (t Theme) docBg() tcell.Color {
+	_, bg, _ := t.Text.Decompose()
+	return bg
+}
+
 // DefaultTheme es la paleta de arranque y el fallback del tema Custom
 // (~/.tcode/theme.json): la misma paleta oscura tipo VSCode Dark+ de
 // DarkTheme. LoadTheme y themeOr dependen de ella (base del JSON del usuario y
-// valor del zero-check), por eso su cuerpo queda fijo y no es un alias: las
-// fábricas del registry comparten esta paleta con DarkTheme.
+// valor del zero-check), por eso vive en la única fábrica del par: su fondo ya
+// no es el de la terminal, es el de Dark+ (#1E1E1E).
 func DefaultTheme() Theme {
-	return Theme{
-		Text:         tcell.StyleDefault,
-		CursorLineBg: tcell.PaletteColor(236),
-		TabActive:    active(tcell.PaletteColor(45)),
-		TabIdle:      tcell.StyleDefault,
-		TreeCursor:   on(tcell.PaletteColor(15), tcell.PaletteColor(24)),
-		Status:       on(tcell.PaletteColor(15), tcell.PaletteColor(24)),
-		Message:      on(tcell.PaletteColor(220), tcell.PaletteColor(24)),
-		Modified:     fg(tcell.PaletteColor(208)),
-		Comment:      fg(tcell.PaletteColor(244)),
-		Keyword:      fg(tcell.PaletteColor(213)),
-		String:       fg(tcell.PaletteColor(173)),
-		Number:       fg(tcell.PaletteColor(114)),
-		Type:         fg(tcell.PaletteColor(79)),
-		Function:     fg(tcell.PaletteColor(187)),
-		Variable:     fg(tcell.PaletteColor(117)),
-		Punct:        fg(tcell.PaletteColor(250)),
-	}
+	return DarkTheme()
 }
 
 // DarkTheme es la paleta oscura tipo VSCode Dark+ del selector: la misma
-// paleta de DefaultTheme (el arranque y el fallback del Custom).
+// paleta de DefaultTheme (el arranque y el fallback del Custom). Text lleva el
+// par del documento Dark+ —frente #D4D4D4 sobre fondo #1E1E1E—, que TabIdle
+// comparte para que la fila de pestañas no desentone.
 func DarkTheme() Theme {
 	return Theme{
-		Text:         tcell.StyleDefault,
+		Text:         on(tcell.NewHexColor(0xD4D4D4), tcell.NewHexColor(0x1E1E1E)),
 		CursorLineBg: tcell.PaletteColor(236),
 		TabActive:    active(tcell.PaletteColor(45)),
-		TabIdle:      tcell.StyleDefault,
+		TabIdle:      on(tcell.NewHexColor(0xD4D4D4), tcell.NewHexColor(0x1E1E1E)),
 		TreeCursor:   on(tcell.PaletteColor(15), tcell.PaletteColor(24)),
 		Status:       on(tcell.PaletteColor(15), tcell.PaletteColor(24)),
 		Message:      on(tcell.PaletteColor(220), tcell.PaletteColor(24)),
@@ -97,12 +92,13 @@ func DarkTheme() Theme {
 // oscuro sobre terminal clara, con la barra de estado y la selección en azul
 // oscuro como la default. Modified y String coinciden a propósito (rojo
 // #A31515): es un empate aceptable de la paleta original, documentado acá.
+// Text lleva el par del documento claro: #000000 sobre #FFFFFF.
 func LightTheme() Theme {
 	return Theme{
-		Text:         tcell.StyleDefault,
+		Text:         on(tcell.NewHexColor(0x000000), tcell.NewHexColor(0xFFFFFF)),
 		CursorLineBg: tcell.NewHexColor(0xE7F4FD),
 		TabActive:    active(tcell.PaletteColor(21)),
-		TabIdle:      tcell.StyleDefault,
+		TabIdle:      on(tcell.NewHexColor(0x000000), tcell.NewHexColor(0xFFFFFF)),
 		TreeCursor:   on(tcell.PaletteColor(15), tcell.PaletteColor(21)),
 		Status:       on(tcell.PaletteColor(15), tcell.PaletteColor(24)),
 		Message:      on(tcell.PaletteColor(220), tcell.PaletteColor(24)),
@@ -123,10 +119,10 @@ func LightTheme() Theme {
 // saturación máxima sobre fondo claro.
 func LightHighContrastTheme() Theme {
 	return Theme{
-		Text:         tcell.StyleDefault,
+		Text:         on(tcell.NewHexColor(0x000000), tcell.NewHexColor(0xFFFFFF)),
 		CursorLineBg: tcell.NewHexColor(0xFFFF00),
 		TabActive:    active(tcell.PaletteColor(0)),
-		TabIdle:      tcell.StyleDefault,
+		TabIdle:      on(tcell.NewHexColor(0x000000), tcell.NewHexColor(0xFFFFFF)),
 		TreeCursor:   on(tcell.PaletteColor(0), tcell.PaletteColor(226)),
 		Status:       on(tcell.PaletteColor(255), tcell.PaletteColor(0)),
 		Message:      on(tcell.PaletteColor(0), tcell.PaletteColor(226)),
@@ -147,10 +143,10 @@ func LightHighContrastTheme() Theme {
 // con acentos cian y blanco.
 func DarkHighContrastTheme() Theme {
 	return Theme{
-		Text:         tcell.StyleDefault,
+		Text:         on(tcell.NewHexColor(0xFFFFFF), tcell.NewHexColor(0x000000)),
 		CursorLineBg: tcell.NewHexColor(0xFFFF00),
 		TabActive:    active(tcell.PaletteColor(226)),
-		TabIdle:      tcell.StyleDefault,
+		TabIdle:      on(tcell.NewHexColor(0xFFFFFF), tcell.NewHexColor(0x000000)),
 		TreeCursor:   on(tcell.PaletteColor(0), tcell.PaletteColor(226)),
 		Status:       on(tcell.PaletteColor(226), tcell.PaletteColor(0)),
 		Message:      on(tcell.PaletteColor(226), tcell.PaletteColor(0)),
@@ -170,10 +166,10 @@ func DarkHighContrastTheme() Theme {
 // fondo azul profundo, acentos violeta y cian, sintaxis saturada.
 func TokyoNightTheme() Theme {
 	return Theme{
-		Text:         tcell.StyleDefault,
+		Text:         on(tcell.NewHexColor(0xC0CAF5), tcell.NewHexColor(0x1A1B26)),
 		CursorLineBg: tcell.NewHexColor(0x16161E),
 		TabActive:    active(tcell.PaletteColor(69)),
-		TabIdle:      tcell.StyleDefault,
+		TabIdle:      on(tcell.NewHexColor(0xC0CAF5), tcell.NewHexColor(0x1A1B26)),
 		TreeCursor:   on(tcell.PaletteColor(15), tcell.PaletteColor(24)),
 		Status:       on(tcell.PaletteColor(15), tcell.PaletteColor(24)),
 		Message:      on(tcell.PaletteColor(215), tcell.PaletteColor(24)),
@@ -194,10 +190,10 @@ func TokyoNightTheme() Theme {
 // Punct comparten el blanco #F8F8F2, como en la paleta original.
 func DraculaTheme() Theme {
 	return Theme{
-		Text:         tcell.StyleDefault,
+		Text:         on(tcell.NewHexColor(0xF8F8F2), tcell.NewHexColor(0x282A36)),
 		CursorLineBg: tcell.NewHexColor(0x44475A),
 		TabActive:    active(tcell.PaletteColor(212)),
-		TabIdle:      tcell.StyleDefault,
+		TabIdle:      on(tcell.NewHexColor(0xF8F8F2), tcell.NewHexColor(0x282A36)),
 		TreeCursor:   on(tcell.PaletteColor(15), tcell.NewHexColor(0x44475A)),
 		Status:       on(tcell.PaletteColor(15), tcell.NewHexColor(0x44475A)),
 		Message:      on(tcell.PaletteColor(228), tcell.NewHexColor(0x44475A)),
@@ -287,7 +283,10 @@ func LoadTheme(data []byte) Theme {
 		if v := raw[key]; v != "" {
 			if c, ok := parseThemeColor(v); ok && c != tcell.ColorDefault {
 				*dst = tcell.StyleDefault.Foreground(c)
-			} else if ok {
+			} else if ok || v == "default" {
+				// "default" deja el texto en StyleDefault: el tema Custom deja
+				// de mandar sobre el par del documento (fondo, y por lo tanto los
+				// roles, vuelven a depender de la terminal).
 				*dst = tcell.StyleDefault
 			}
 		}
@@ -334,25 +333,29 @@ func themeOr(th Theme) Theme {
 }
 
 // StyleForRole mapea un rol de sintaxis al estilo del tema: es el único punto
-// donde los roles del highlighter se vuelven colores.
+// donde los roles del highlighter se vuelven colores. Cada caso propaga el
+// fondo del documento (docBg) sobre el rol: ningún otro consumidor usa los
+// roles directos, así los tokens heredan el fondo del tema —y con bg ==
+// ColorDefault (un tema Custom con "text": "default") el comportamiento queda
+// idéntico al actual, dependiendo de la terminal—.
 func (t Theme) StyleForRole(r Role) tcell.Style {
 	switch r {
 	case RoleComment:
-		return t.Comment
+		return t.Comment.Background(t.docBg())
 	case RoleKeyword:
-		return t.Keyword
+		return t.Keyword.Background(t.docBg())
 	case RoleString:
-		return t.String
+		return t.String.Background(t.docBg())
 	case RoleNumber:
-		return t.Number
+		return t.Number.Background(t.docBg())
 	case RoleType:
-		return t.Type
+		return t.Type.Background(t.docBg())
 	case RoleFunction:
-		return t.Function
+		return t.Function.Background(t.docBg())
 	case RoleVariable:
-		return t.Variable
+		return t.Variable.Background(t.docBg())
 	case RolePunct:
-		return t.Punct
+		return t.Punct.Background(t.docBg())
 	default:
 		return t.Text
 	}
