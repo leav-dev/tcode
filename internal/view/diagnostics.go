@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/gdamore/tcell/v2"
+	"github.com/rivo/uniseg"
 )
 
 // Severity es el nivel de un diagnóstico: lo que decide el color del marcador
@@ -145,4 +146,64 @@ func (v *EditorView) drawGutter(s Surface, th Theme, line, row int, firstRow boo
 		return
 	}
 	s.SetContent(gutter-1, row, ' ', nil, st)
+}
+
+// diagInlineStyle devuelve el estilo del mensaje inline de una línea anotada:
+// el color de su severidad (el mismo rol que el marcador del gutter) sobre el
+// fondo de la línea (doc o línea del cursor).
+func (v *EditorView) diagInlineStyle(th Theme, line int, cursorLine bool) (tcell.Style, bool) {
+	d, ok := v.diagAt(line)
+	if !ok {
+		return tcell.Style{}, false
+	}
+	st := th.DiagError
+	switch d.Severity {
+	case SeverityWarning:
+		st = th.DiagWarning
+	case SeverityInfo:
+		st = th.DiagInfo
+	}
+	bg := th.docBg()
+	if cursorLine {
+		bg = th.CursorLineBg
+	}
+	return st.Background(bg), true
+}
+
+// drawInlineDiag pinta el mensaje del diagnóstico a la derecha del texto de la
+// línea (endX = columna donde terminó el texto), con un separador de dos
+// espacios, truncado con "…" contra el borde derecho del área de texto. Se
+// omite si no quedan al menos dos celdas libres (el texto ya llena la línea).
+func (v *EditorView) drawInlineDiag(s Surface, th Theme, line, row, endX int, cursorLine bool) {
+	st, ok := v.diagInlineStyle(th, line, cursorLine)
+	if !ok {
+		return
+	}
+	d, _ := v.diagAt(line)
+	if d.Message == "" {
+		return
+	}
+	right := v.gutterWidth() + v.viewport.Width
+	// Separador de dos espacios; sin al menos dos celdas libres, se omite.
+	if endX+2 >= right {
+		return
+	}
+	x := endX
+	s.Put(x, row, "  ", st)
+	x += 2
+	g := uniseg.NewGraphemes(d.Message)
+	truncated := false
+	for g.Next() {
+		cl := g.Str()
+		w := clusterWidth(g, x)
+		if x+w > right-1 {
+			truncated = true
+			break
+		}
+		s.Put(x, row, cl, st)
+		x += w
+	}
+	if truncated && x < right {
+		s.Put(x, row, "…", st)
+	}
 }

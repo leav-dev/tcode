@@ -691,6 +691,12 @@ func (v *EditorView) drawSoftLine(s Surface, th Theme, hl *highlighter, line int
 		}
 		col += w
 	}
+
+	// El mensaje del diagnóstico se pinta a la derecha de la línea lógica:
+	// solo en su ÚLTIMA fila visual (con wrap, el texto termina ahí).
+	if sl.in+len(sl.text) == len(text) {
+		v.drawInlineDiag(s, th, line, row, col-v.viewport.LeftColumn+v.gutterWidth(), cursorLine)
+	}
 }
 
 // drawLineUnwrapped pinta la línea lógica completa en una fila física (sin
@@ -729,6 +735,9 @@ func (v *EditorView) drawLineUnwrapped(s Surface, th Theme, hl *highlighter, lin
 		}
 		col += w
 	}
+
+	// El mensaje del diagnóstico, a la derecha del texto de la línea.
+	v.drawInlineDiag(s, th, line, row, col-v.viewport.LeftColumn+v.gutterWidth(), cursorLine)
 }
 
 // drawCursor ubica el cursor del terminal en la celda que le corresponde.

@@ -2762,46 +2762,28 @@ func TestSaveAsPromptOwnsTheMouse(t *testing.T) {
 	}
 }
 
-// TestDiagMessageShowsInStatusBar: el diagnóstico de la línea del cursor se
-// refleja en la barra de estado al pasar por el path de teclas del editor, y
-// el mensaje se limpia al salir a una línea sin anotar.
-// TestDiagMessageShowsAllMessagesOnTheLine: una línea con VARIOS mensajes
-// informativos (nunca parte del archivo) los muestra TODOS en la barra de
-// estado, en orden de severidad, unidos con " · ".
-func TestDiagMessageShowsAllMessagesOnTheLine(t *testing.T) {
+// TestDiagMessageStaysOffStatusBar: el diagnóstico ya no vive en la barra de
+// estado (decisión de producto: se muestra inline, a la derecha de cada línea
+// anotada, para ver varias a la vez). Mover el cursor por una línea anotada
+// NO debe depositar el mensaje del diagnóstico en la barra.
+func TestDiagMessageStaysOffStatusBar(t *testing.T) {
 	app, _ := newTestApp(t, "uno\ndos\ntres")
 	ed := app.activeEditor()
 	ed.SetDiagnostics([]view.Diagnostic{
-		{Line: 0, Message: "nota", Severity: view.SeverityInfo},
-		{Line: 0, Message: "aviso", Severity: view.SeverityWarning},
 		{Line: 0, Message: "mal", Severity: view.SeverityError},
+		{Line: 0, Message: "aviso", Severity: view.SeverityWarning},
 	})
 
-	press(app, tcell.KeyRight) // mueve el cursor por el path que sincroniza la barra
-	msg := app.statusBar.Message()
-	for _, want := range []string{"línea 1", "mal (error)", "aviso (advertencia)", "nota (info)"} {
-		if !strings.Contains(msg, want) {
-			t.Fatalf("mensaje = %q, se esperaba que contuviera %q", msg, want)
-		}
-	}
-}
-
-func TestDiagMessageShowsInStatusBar(t *testing.T) {
-	app, _ := newTestApp(t, "uno\ndos\ntres")
-	ed := app.activeEditor()
-	ed.SetDiagnostics([]view.Diagnostic{{Line: 0, Message: "mal", Severity: view.SeverityError}})
-
-	// Una tecla que mueve el cursor (derecha) pasa por el path que sincroniza
-	// la barra: la línea 0 del cursor tiene el diagnóstico.
+	// Una tecla que mueve el cursor (derecha) pasa por el path de teclas del
+	// editor: la línea 0 del cursor tiene diagnóstico, pero la barra no lo
+	// muestra.
 	press(app, tcell.KeyRight)
-	msg := app.statusBar.Message()
-	if !strings.Contains(msg, "línea 1") || !strings.Contains(msg, "mal") || !strings.Contains(msg, "error") {
-		t.Fatalf("mensaje = %q, se esperaba la línea 1 con %q y severidad error", msg, "mal")
+	if got := app.statusBar.Message(); got != "" {
+		t.Fatalf("mensaje = %q, se esperaba la barra sin diagnóstico (el inline vive en el view)", got)
 	}
 
-	// Bajar a la línea 1 (sin diagnóstico) limpia el mensaje.
 	press(app, tcell.KeyDown)
 	if got := app.statusBar.Message(); got != "" {
-		t.Fatalf("mensaje = %q, se esperaba limpio al salir de la línea con diagnóstico", got)
+		t.Fatalf("mensaje = %q, la barra debe seguir sin diagnóstico", got)
 	}
 }

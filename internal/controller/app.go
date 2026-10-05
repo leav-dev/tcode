@@ -750,44 +750,10 @@ func (a *App) syncStatus() {
 	a.statusBar.SetFile(buf.Path(), buf.Modified())
 }
 
-// syncDiagStatus refleja el diagnóstico de la línea del cursor en la barra de
-// estado: "línea N: mensaje (severidad)". El diag comparte el canal de mensaje
-// transitorio —se muestra al mover el cursor y desaparece al salir de la línea
-// anotada—, por eso este path limpia el mensaje cuando la línea activa no tiene
-// diagnóstico. Se invoca después de cada tecla que el editor manejó (el mouse
-// del editor queda para un hito posterior).
-func (a *App) syncDiagStatus() {
-	ed := a.activeEditor()
-	if ed == nil {
-		return
-	}
-	// La línea del cursor puede tener VARIOS mensajes (solo informativos, nunca
-	// parte del archivo): la barra los muestra todos, en orden de severidad, con
-	// " · " entre medio; la barra de estado recorta con "…" si no entran.
-	diags := ed.DiagsAtCursor()
-	if len(diags) == 0 {
-		a.statusBar.ClearMessage()
-		return
-	}
-	parts := make([]string, 0, len(diags))
-	for _, d := range diags {
-		parts = append(parts, fmt.Sprintf("%s (%s)", d.Message, diagSeverityName(d.Severity)))
-	}
-	a.statusBar.SetMessage(fmt.Sprintf("línea %d: %s", diags[0].Line+1, strings.Join(parts, " · ")))
-}
-
-// diagSeverityName nombra la severidad de un diagnóstico para el mensaje de la
-// barra de estado.
-func diagSeverityName(sev view.Severity) string {
-	switch sev {
-	case view.SeverityError:
-		return "error"
-	case view.SeverityWarning:
-		return "advertencia"
-	default:
-		return "info"
-	}
-}
+// Los diagnósticos se muestran inline, a la derecha de cada línea anotada
+// (render del view), no en la barra de estado: así varias líneas con errores
+// se ven a la vez. La barra solo lleva los mensajes transitorios (guardado,
+// resúmenes de extensión, confirmaciones).
 
 // Run ejecuta el loop de eventos hasta que el usuario cierra el editor.
 func (a *App) Run() (err error) {
@@ -1119,7 +1085,6 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		a.statusBar.ClearMessage()
 		if ed := a.activeEditor(); ed != nil && ed.HandleEvent(ev) {
 			a.redraw()
-			a.syncDiagStatus()
 		}
 
 	case *tcell.EventMouse:

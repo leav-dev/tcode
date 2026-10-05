@@ -1,6 +1,7 @@
 package view
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
@@ -179,5 +180,81 @@ func TestGutterResizeKeepsTextAreaWide(t *testing.T) {
 	v.Resize(1, 2)
 	if w, _ := v.Size(); w < 1 {
 		t.Fatalf("área de texto = %d, se esperaba al menos 1 (guard del widget angosto)", w)
+	}
+}
+
+// --- INLINE: el mensaje del diagnóstico a la derecha de la línea ---
+
+// TestDrawInlineDiagnosticAfterText: el mensaje del diagnóstico se pinta a la
+// derecha del texto de la línea anotada, precedido por dos espacios; las
+// líneas sin diagnóstico no lo llevan.
+func TestDrawInlineDiagnosticAfterText(t *testing.T) {
+	s := newTestScreen(t, 40, 3)
+	v := newTestView(t, "uno\ndos\ntres", 40, 3)
+	v.SetDiagnostics([]Diagnostic{{Line: 1, Message: "'(' never closed", Severity: SeverityError}})
+	draw(v, s)
+
+	got := screenLines(s)
+	// La línea anotada lleva el marcador '!' en la última celda del gutter y
+	// el mensaje inline a la derecha del texto.
+	if got[1] != "2!dos  '(' never closed" {
+		t.Fatalf("fila 1 = %q, se esperaba %q", got[1], "2!dos  '(' never closed")
+	}
+	if strings.Contains(got[0], "never") || strings.Contains(got[2], "never") {
+		t.Fatalf("las líneas sin diagnóstico no deben llevar mensaje: %q", got)
+	}
+}
+
+// TestDrawInlineDiagnosticTruncates: un mensaje que no entra se trunca contra
+// el borde derecho del área de texto y la última celda útil lleva "…".
+func TestDrawInlineDiagnosticTruncates(t *testing.T) {
+	s := newTestScreen(t, 12, 2)
+	v := newTestView(t, "a\nb", 12, 2)
+	v.SetDiagnostics([]Diagnostic{{Line: 0, Message: "'(' never closed (long message here)", Severity: SeverityError}})
+	draw(v, s)
+
+	got := screenLines(s)[0]
+	if !strings.HasSuffix(got, "…") {
+		t.Fatalf("fila 0 = %q, se esperaba el mensaje truncado con '…' al final", got)
+	}
+	if len([]rune(got)) > 12 {
+		t.Fatalf("fila 0 = %q, no debe exceder el ancho de pantalla", got)
+	}
+}
+
+// TestDrawInlineDiagnosticSkipsWhenNoRoom: si el texto ya llena el área de
+// texto, el mensaje se omite (no queda espacio útil).
+func TestDrawInlineDiagnosticSkipsWhenNoRoom(t *testing.T) {
+	s := newTestScreen(t, 8, 2)
+	v := newTestView(t, "abcdef\nb", 8, 2)
+	v.SetDiagnostics([]Diagnostic{{Line: 0, Message: "error", Severity: SeverityError}})
+	draw(v, s)
+
+	// El marcador '!' del gutter sigue (la línea está anotada); el mensaje
+	// inline se omite porque el texto "abcdef" ya llena el área (8 - gutter).
+	if got := screenLines(s)[0]; got != "1!abcdef" {
+		t.Fatalf("fila 0 = %q, se esperaba %q (marcador sí, mensaje no: el texto llena)", got, "1!abcdef")
+	}
+}
+
+// TestDrawInlineDiagnosticWithWrapLastRow: con word-wrap, el mensaje de una
+// línea envuelta se pinta a la derecha de su ÚLTIMA fila visual (donde
+// termina el texto), no en la primera.
+func TestDrawInlineDiagnosticWithWrapLastRow(t *testing.T) {
+	old := wordWrapEnabled
+	wordWrapEnabled = true
+	defer func() { wordWrapEnabled = old }()
+
+	s := newTestScreen(t, 14, 4)
+	v := newTestView(t, "hola mundo ancho", 14, 4)
+	v.SetDiagnostics([]Diagnostic{{Line: 0, Message: "x", Severity: SeverityError}})
+	draw(v, s)
+
+	got := screenLines(s)
+	if !strings.Contains(got[1], "ancho  x") {
+		t.Fatalf("fila 1 = %q, se esperaba el mensaje al final del texto (%q)", got[1], "ancho  x")
+	}
+	if strings.Contains(got[0], "  x") {
+		t.Fatalf("fila 0 = %q, el mensaje no debe ir en la primera fila visual", got[0])
 	}
 }
