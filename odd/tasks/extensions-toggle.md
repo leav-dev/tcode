@@ -41,4 +41,4 @@ borrar, pero no **activar/desactivar** una extensión instalada. Se agrega:
   marca de fila, limpieza de artefactos).
 
 ## Commit
-`eddee53` (rama `feat/extensions-toggle`).
+`ca249e7` (rama `feat/extensions-toggle`).
