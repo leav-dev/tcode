@@ -841,8 +841,11 @@ func TestSaveAsTargetsTheBufferCapturedAtPromptOpen(t *testing.T) {
 
 	// El pedido se abre con el buffer 0 activo.
 	pressSaveAs(app)
-	if app.promptTarget != bufferAt(app, 0) {
-		t.Fatal("el pedido debe capturar el buffer activo al abrirse")
+	if !app.promptActive || app.promptAction == nil {
+		t.Fatal("el pedido debe abrirse armado con la acción que captura el buffer")
+	}
+	if app.promptBuf != bufferAt(app, 0).Path() {
+		t.Fatalf("prefill = %q, se esperaba la ruta del buffer 0", app.promptBuf)
 	}
 
 	// Cambiar de pestaña MIENTRAS el pedido está abierto.
@@ -2785,5 +2788,349 @@ func TestDiagMessageStaysOffStatusBar(t *testing.T) {
 	press(app, tcell.KeyDown)
 	if got := app.statusBar.Message(); got != "" {
 		t.Fatalf("mensaje = %q, la barra debe seguir sin diagnóstico", got)
+	}
+}
+
+// --- crear archivos y carpetas ---
+
+// newCreateApp arranca el editor sobre un directorio temporal como ARGUMENTO (el
+// modo "sin buffers"): el workspace queda vacío, la raíz de la sesión es ese
+// directorio y el explorador visible y enfocado —el estado real donde se crea un
+// archivo por primera vez—. Devuelve la app y la raíz: crear SIEMPRE apunta a un
+// temporal, nunca al directorio de trabajo del proceso de test.
+func newCreateApp(t *testing.T) (*App, string) {
+	t.Helper()
+
+	dir := t.TempDir()
+	s := tcell.NewSimulationScreen("UTF-8")
+	if err := s.Init(); err != nil {
+		t.Fatalf("no se pudo inicializar la pantalla simulada: %v", err)
+	}
+	s.SetSize(40, 10)
+
+	app, err := NewAppWithScreen(s, dir)
+	if err != nil {
+		t.Fatalf("NewAppWithScreen falló: %v", err)
+	}
+	t.Cleanup(func() {
+		app.ws.CloseAll()
+		s.Fini()
+	})
+	if got := app.ws.Root(); got != dir {
+		t.Fatalf("Root() = %q, se esperaba el temporal %q", got, dir)
+	}
+	return app, dir
+}
+
+// pressCtrlN dispara Ctrl+N (código KeyCtrlN sin modificadores).
+func pressCtrlN(app *App) {
+	app.handleEvent(tcell.NewEventKey(tcell.KeyCtrlN, 0, tcell.ModNone))
+}
+
+// pressCtrlShiftN dispara Ctrl+Shift+N, que tcell entrega como KeyRune con
+// ModCtrl y ModShift.
+func pressCtrlShiftN(app *App) {
+	app.handleEvent(tcell.NewEventKey(tcell.KeyRune, 'N', tcell.ModCtrl|tcell.ModShift))
+}
+
+// TestCtrlNCreatesFileInRootAndOpensIt: con el workspace vacío y sin nodos en el
+// árbol, Ctrl+N abre el pedido con el destino contextual (la raíz de la sesión),
+// el archivo creado existe en disco, entra al árbol y queda ABIERTO y activo en
+// el editor —que es el punto de la feature: crear es la primera acción de una
+// sesión sin buffers.
+func TestCtrlNCreatesFileInRootAndOpensIt(t *testing.T) {
+	app, root := newCreateApp(t)
+
+	pressCtrlN(app)
+	if !app.promptActive {
+		t.Fatal("Ctrl+N debe abrir el pedido incluso con el workspace vacío")
+	}
+	if !strings.Contains(app.statusBar.Label(), "Nuevo archivo") {
+		t.Fatalf("etiqueta del pedido = %q, se esperaba el rótulo de creación", app.statusBar.Label())
+	}
+	typeString(app, "nuevo.txt")
+	press(app, tcell.KeyEnter)
+
+	path := filepath.Join(root, "nuevo.txt")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("el archivo no se creó en %q: %v", path, err)
+	}
+	buf := app.ws.Active()
+	if buf == nil {
+		t.Fatal("el archivo creado debe quedar abierto en el editor")
+	}
+	if buf.Path() != path {
+		t.Fatalf("buffer activo = %q, se esperaba %q", buf.Path(), path)
+	}
+	if !treeHasPath(app, path) {
+		t.Fatalf("el nodo nuevo no entró al árbol del explorador")
+	}
+	if !strings.Contains(app.statusBar.Message(), "nuevo.txt") {
+		t.Fatalf("mensaje = %q, se esperaba el nombre del archivo creado", app.statusBar.Message())
+	}
+}
+
+// treeHasPath recorre el árbol visible del explorador con la tecla de abajo y
+// dice si el nodo de esa ruta está en él: el test necesita saber si el nodo
+// entró al árbol, no en qué fila quedó.
+func treeHasPath(app *App, path string) bool {
+	for range 50 {
+		if app.explorer.CursorPath() == path {
+			return true
+		}
+		app.explorer.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
+	}
+	return false
+}
+
+// TestCtrlShiftNCreatesFolderInsideTheCursorDirectory: el destino es contextual
+// —con el cursor sobre una carpeta, el nuevo nodo va DENTRO de ella— y una
+// carpeta no se abre: el workspace sigue como estaba.
+func TestCtrlShiftNCreatesFolderInsideTheCursorDirectory(t *testing.T) {
+	app, root := newCreateApp(t)
+	if err := os.Mkdir(filepath.Join(root, "docs"), 0o755); err != nil {
+		t.Fatalf("no se pudo crear el dir de prueba: %v", err)
+	}
+	app.explorer.SetRootEntries([]view.Entry{
+		{Name: "docs", Path: filepath.Join(root, "docs"), IsDir: true},
+	})
+
+	pressCtrlShiftN(app)
+	if !app.promptActive || !strings.Contains(app.statusBar.Label(), "Nueva carpeta") {
+		t.Fatalf("Ctrl+Shift+N debe abrir el pedido de carpeta (etiqueta %q)", app.statusBar.Label())
+	}
+	typeString(app, "borradores")
+	press(app, tcell.KeyEnter)
+
+	info, err := os.Stat(filepath.Join(root, "docs", "borradores"))
+	if err != nil {
+		t.Fatalf("la carpeta no se creó dentro de docs: %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatal("lo creado debe ser un directorio")
+	}
+	if app.ws.Len() != 0 {
+		t.Fatalf("Len() = %d, se esperaba 0: una carpeta no abre buffer", app.ws.Len())
+	}
+}
+
+// TestCreateDestinationFollowsTheCursorFile: con el cursor sobre un archivo, el
+// destino es el directorio que lo contiene, no la raíz.
+func TestCreateDestinationFollowsTheCursorFile(t *testing.T) {
+	app, root := newCreateApp(t)
+	sub := filepath.Join(root, "docs")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatalf("no se pudo crear el dir de prueba: %v", err)
+	}
+	inside := filepath.Join(sub, "notas.txt")
+	if err := os.WriteFile(inside, []byte("x"), 0o644); err != nil {
+		t.Fatalf("no se pudo crear el archivo de prueba: %v", err)
+	}
+	app.explorer.SetRootEntries([]view.Entry{
+		{Name: "docs", Path: sub, IsDir: true},
+		{Name: "notas.txt", Path: filepath.Join(root, "notas.txt")},
+	})
+	app.explorer.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone)) // cursor al archivo
+	if got := app.explorer.CursorDir(); got != root {
+		t.Fatalf("CursorDir() = %q, se esperaba la raíz %q", got, root)
+	}
+
+	pressCtrlN(app)
+	typeString(app, "hermano.txt")
+	press(app, tcell.KeyEnter)
+
+	if _, err := os.Stat(filepath.Join(root, "hermano.txt")); err != nil {
+		t.Fatalf("el archivo no se creó junto al del cursor: %v", err)
+	}
+}
+
+// TestCreateRejectsInvalidNames: nombre vacío, separadores de ruta, ".." y un
+// nombre que ya existe se rechazan con un mensaje legible, sin crear nada en
+// disco ni tocar el árbol.
+func TestCreateRejectsInvalidNames(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+	}{
+		{"vacío", ""},
+		{"solo espacios", "   "},
+		{"separador unix", "a/b.txt"},
+		{"separador windows", `a\b.txt`},
+		{"salida del árbol", "../fuera.txt"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			app, root := newCreateApp(t)
+			pressCtrlN(app)
+			typeString(app, tc.input)
+			press(app, tcell.KeyEnter)
+
+			if app.ws.Len() != 0 {
+				t.Fatalf("un nombre inválido no puede abrir un buffer: Len() = %d", app.ws.Len())
+			}
+			entries, err := os.ReadDir(root)
+			if err != nil {
+				t.Fatalf("no se pudo leer la raíz: %v", err)
+			}
+			if len(entries) != 0 {
+				t.Fatalf("la raíz quedó con %d entradas, se esperaba ninguna", len(entries))
+			}
+			if !strings.Contains(app.statusBar.Message(), "no puede") {
+				t.Fatalf("mensaje = %q, se esperaba el aviso de nombre inválido", app.statusBar.Message())
+			}
+		})
+	}
+}
+
+// TestCreateRejectsAnExistingName: crear sobre un nombre que ya existe no pisa el
+// archivo ni duplica el nodo —el error es legible y el contenido sigue siendo el
+// de antes.
+func TestCreateRejectsAnExistingName(t *testing.T) {
+	app, root := newCreateApp(t)
+	existente := filepath.Join(root, "notas.txt")
+	if err := os.WriteFile(existente, []byte("contenido viejo"), 0o644); err != nil {
+		t.Fatalf("no se pudo crear el archivo de prueba: %v", err)
+	}
+	app.explorer.SetRootEntries([]view.Entry{{Name: "notas.txt", Path: existente}})
+
+	pressCtrlN(app)
+	typeString(app, "notas.txt")
+	press(app, tcell.KeyEnter)
+
+	if got := readFile(t, existente); got != "contenido viejo" {
+		t.Fatalf("el archivo existente cambió a %q: crear no pisa nada", got)
+	}
+	if app.ws.Len() != 0 {
+		t.Fatalf("Len() = %d, se esperaba 0: no se abrió nada", app.ws.Len())
+	}
+	if !strings.Contains(app.statusBar.Message(), "ya existe") {
+		t.Fatalf("mensaje = %q, se esperaba el aviso de nombre repetido", app.statusBar.Message())
+	}
+}
+
+// TestCreateCommandsAreRegistered: los comandos tcode.createFile y
+// tcode.createFolder existen en el registro —una extensión puede invocarlos— y
+// abren el pedido con el rótulo que corresponde.
+func TestCreateCommandsAreRegistered(t *testing.T) {
+	app, _ := newCreateApp(t)
+
+	for _, tc := range []struct{ id, label string }{
+		{"tcode.createFile", "Nuevo archivo"},
+		{"tcode.createFolder", "Nueva carpeta"},
+	} {
+		if err := app.ext.RunCommand(tc.id); err != nil {
+			t.Fatalf("%s falló: %v", tc.id, err)
+		}
+		if !app.promptActive {
+			t.Fatalf("%s debe abrir el pedido", tc.id)
+		}
+		if !strings.Contains(app.statusBar.Label(), tc.label) {
+			t.Fatalf("%s abrió el pedido %q, se esperaba el rótulo %q", tc.id, app.statusBar.Label(), tc.label)
+		}
+		press(app, tcell.KeyEscape)
+	}
+}
+
+// TestCreateWorksWithTheExplorerFocused: el atajo funciona con el foco en el
+// panel (donde cae al entrar) y también con el foco en el editor.
+func TestCreateWorksWithTheExplorerFocused(t *testing.T) {
+	app, root := newCreateApp(t)
+
+	if !app.explorerFocused {
+		t.Fatal("el arranque sin argumentos enfoca el explorador")
+	}
+	pressCtrlN(app)
+	typeString(app, "uno.txt")
+	press(app, tcell.KeyEnter)
+
+	app.explorerFocused = false
+	pressCtrlN(app)
+	typeString(app, "dos.txt")
+	press(app, tcell.KeyEnter)
+
+	for _, name := range []string{"uno.txt", "dos.txt"} {
+		if _, err := os.Stat(filepath.Join(root, name)); err != nil {
+			t.Fatalf("%s no se creó: %v", name, err)
+		}
+	}
+}
+
+// TestPromptCancelClearsTheRequest: Escape cierra el pedido Generalized sin
+// ejecutar la acción: el prompt queda apagado, la barra vuelve al estado normal
+// y no se crea nada.
+func TestPromptCancelClearsTheRequest(t *testing.T) {
+	app, root := newCreateApp(t)
+
+	pressCtrlN(app)
+	typeString(app, "nuevo.txt")
+	press(app, tcell.KeyEscape)
+
+	if app.promptActive || app.promptBuf != "" || app.promptAction != nil {
+		t.Fatalf("Escape debe apagar el pedido (buf %q, acción nil: %v)", app.promptBuf, app.promptAction == nil)
+	}
+	if !strings.Contains(app.statusBar.Label(), "") || app.statusBar.Message() != "Cancelado" {
+		t.Fatalf("mensaje = %q, se esperaba el aviso de cancelación", app.statusBar.Message())
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("no se pudo leer la raíz: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("cancelar no puede crear nada: la raíz tiene %d entradas", len(entries))
+	}
+}
+
+// TestSaveAsPromptOpensWithoutABuffer: el prompt Generalized no desreferencia el
+// buffer activo —crear con el workspace vacío es justamente el caso de uso—: sin
+// buffers, abrir el pedido de Save As no entra en pánico, muestra el rótulo con
+// el prefill vacío y, al confirmar sin documento, responde con el error legible
+// en vez de escribir sobre la nada.
+func TestSaveAsPromptOpensWithoutABuffer(t *testing.T) {
+	app, _ := newCreateApp(t)
+
+	app.startPrompt()
+	if !app.promptActive {
+		t.Fatal("el pedido de Save As debe abrirse aunque no haya buffer activo")
+	}
+	if app.promptBuf != "" {
+		t.Fatalf("prefill = %q, se esperaba vacío sin buffer activo", app.promptBuf)
+	}
+	if !strings.Contains(app.statusBar.Label(), "Guardar como") {
+		t.Fatalf("etiqueta = %q, se esperaba el rótulo de Save As", app.statusBar.Label())
+	}
+
+	// Confirmar sin buffer no puede inventarse un documento: error legible.
+	typeString(app, filepath.Join(t.TempDir(), "x.txt"))
+	press(app, tcell.KeyEnter)
+	if app.ws.Len() != 0 {
+		t.Fatalf("Len() = %d, se esperaba 0: nada que guardar", app.ws.Len())
+	}
+	if !strings.Contains(app.statusBar.Message(), "sin buffer abierto") {
+		t.Fatalf("mensaje = %q, se esperaba el error de buffer faltante", app.statusBar.Message())
+	}
+}
+
+// TestCreateEntryValidatesTheNameWithoutTheKeyboard: la acción es pública
+// (command tcode.createFile), así que valida el nombre aunque no venga del
+// prompt.
+func TestCreateEntryValidatesTheNameWithoutTheKeyboard(t *testing.T) {
+	app, root := newCreateApp(t)
+
+	if err := app.createEntry(root, "", false); err == nil {
+		t.Fatal("un nombre vacío debe rechazarse")
+	}
+	if err := app.createEntry(root, "a/b", false); err == nil {
+		t.Fatal("un nombre con separador debe rechazarse")
+	}
+	if err := app.createEntry("", "x.txt", false); err == nil {
+		t.Fatal("sin directorio destino no hay dónde crear")
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("no se pudo leer la raíz: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("la raíz quedó con %d entradas, se esperaba ninguna", len(entries))
 	}
 }

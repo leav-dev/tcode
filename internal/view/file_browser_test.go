@@ -944,3 +944,98 @@ func TestFileBrowserRevealStopsWhenTheAncestorCannotContainIt(t *testing.T) {
 		t.Fatalf("CursorPath() = %q, no debía moverse (ni siquiera a la fila del dir)", got)
 	}
 }
+
+// TestFileBrowserAddChildInsertsSorted: AddChild mete el nodo nuevo entre los
+// hijos de su padre con el MISMO orden que un relist del directorio —dirs
+// primero, luego archivos, ambos alfabéticos— y reconstruye el aplanado con el
+// cursor intacto.
+func TestFileBrowserAddChildInsertsSorted(t *testing.T) {
+	fb := NewFileBrowser()
+	fb.Resize(20, 6)
+	fb.SetRoot("/cwd")
+	fb.SetRootEntries([]Entry{{Name: "docs", Path: "/cwd/docs", IsDir: true}})
+	fb.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone)) // expande docs
+	fb.SetChildren([]Entry{
+		{Name: "b.txt", Path: "/cwd/docs/b.txt"},
+		{Name: "c.txt", Path: "/cwd/docs/c.txt"},
+	})
+
+	if ok := fb.AddChild("/cwd/docs", Entry{Name: "a.txt", Path: "/cwd/docs/a.txt"}); !ok {
+		t.Fatal("AddChild debe insertar bajo un padre visible")
+	}
+
+	var names []string
+	for _, n := range fb.nodes {
+		if n.path != "/cwd/docs" {
+			names = append(names, n.name)
+		}
+	}
+	want := []string{"a.txt", "b.txt", "c.txt"}
+	if len(names) != len(want) {
+		t.Fatalf("hijos = %v, se esperaba %v", names, want)
+	}
+	for i := range want {
+		if names[i] != want[i] {
+			t.Fatalf("hijos = %v, se esperaba %v", names, want)
+		}
+	}
+
+	// Un dir nuevo va antes que los archivos, como en readEntries.
+	if ok := fb.AddChild("/cwd/docs", Entry{Name: "sub", Path: "/cwd/docs/sub", IsDir: true}); !ok {
+		t.Fatal("AddChild debe insertar un dir nuevo")
+	}
+	if got := fb.nodes[1].name; got != "sub" {
+		t.Fatalf("nodo 1 = %q, se esperaba el dir nuevo antes de los archivos", got)
+	}
+}
+
+// TestFileBrowserAddChildIsDefensive: un padre ausente, vacío o que no es un
+// directorio hace que AddChild devuelva false sin tocar el árbol —la vista no
+// expande ni lee por la espalda—.
+func TestFileBrowserAddChildIsDefensive(t *testing.T) {
+	fb := NewFileBrowser()
+	fb.Resize(20, 6)
+	fb.SetRoot("/cwd")
+	fb.SetRootEntries([]Entry{
+		{Name: "docs", Path: "/cwd/docs", IsDir: true},
+		{Name: "a.txt", Path: "/cwd/a.txt"},
+	})
+
+	if fb.AddChild("/cwd/ausente", Entry{Name: "x", Path: "/cwd/ausente/x"}) {
+		t.Fatal("un padre que no está en el árbol no puede recibir hijos")
+	}
+	if fb.AddChild("", Entry{Name: "x", Path: "/x"}) {
+		t.Fatal("un padre vacío no puede recibir hijos")
+	}
+	if fb.AddChild("/cwd/a.txt", Entry{Name: "x", Path: "/cwd/a.txt/x"}) {
+		t.Fatal("un archivo no puede recibir hijos")
+	}
+	if n := len(fb.nodes); n != 2 {
+		t.Fatalf("aplanado = %d nodos, se esperaba 2 (el árbol no se tocó)", n)
+	}
+}
+
+// TestFileBrowserCursorDirIsContextual: el destino de una creación es la carpeta
+// del cursor, el directorio que contiene el archivo del cursor, o "" si el árbol
+// está vacío (el controlador cae a la raíz de la sesión).
+func TestFileBrowserCursorDirIsContextual(t *testing.T) {
+	fb := NewFileBrowser()
+	fb.Resize(20, 6)
+	fb.SetRoot("/cwd")
+	if got := fb.CursorDir(); got != "" {
+		t.Fatalf("CursorDir() con árbol vacío = %q, se esperaba \"\"", got)
+	}
+
+	fb.SetRootEntries([]Entry{
+		{Name: "docs", Path: "/cwd/docs", IsDir: true},
+		{Name: "a.txt", Path: "/cwd/a.txt"},
+	})
+	if got := fb.CursorDir(); got != "/cwd/docs" {
+		t.Fatalf("CursorDir() sobre un dir = %q, se esperaba la ruta del dir", got)
+	}
+
+	fb.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone)) // baja al archivo
+	if got := fb.CursorDir(); got != "/cwd" {
+		t.Fatalf("CursorDir() sobre un archivo = %q, se esperaba su directorio", got)
+	}
+}

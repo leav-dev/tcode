@@ -1,6 +1,7 @@
 package view
 
 import (
+	"path/filepath"
 	"strings"
 
 	"github.com/gdamore/tcell/v2"
@@ -338,6 +339,102 @@ func (fb *FileBrowser) CursorPath() string {
 		return ""
 	}
 	return fb.nodes[fb.cursor].path
+}
+
+// CursorDir devuelve el DIRECTORIO destino de una creación contextual: la ruta
+// del nodo activo si es un directorio, el directorio que lo contiene si es un
+// archivo, o "" si no hay nodos (el controlador cae al root de la sesión). Es la
+// contraparte de CursorPath para el controlador, que decide dónde crear el
+// archivo o la carpeta nueva.
+//
+// La vista solo devuelve la ruta calculada: no toca el filesystem ni el estado
+// del workspace, como el resto del panel.
+func (fb *FileBrowser) CursorDir() string {
+	if len(fb.nodes) == 0 {
+		return ""
+	}
+	n := fb.nodes[fb.cursor]
+	if n.isDir {
+		return n.path
+	}
+	return filepath.Dir(n.path)
+}
+
+// AddChild inserta e como hijo del directorio con ruta parentPath y devuelve si
+// la inserción ocurrió: es la tercera puerta de entrada de datos a la vista (con
+// SetRootEntries y SetChildren), la que usa el controlador después de crear un
+// archivo o una carpeta en disco para que el nodo nuevo aparezca sin re-leer el
+// directorio.
+//
+// Es defensiva: si el padre no está VISIBLE en el árbol (dentro de un nivel que
+// nunca se expandió, o en otra rama) devuelve false y no toca nada —el
+// controlador no expande por la espalda; el nodo aparecerá al expandir el
+// padre—. Un padre que no es un directorio, o una ruta vacía, también la
+// rechazan. parentPath igual al root inserta en el primer nivel, que es donde
+// vive el root como cima implícita. La inserción respeta el orden de
+// readEntries (directorios primero, luego archivos, ambos alfabéticos) y
+// reconstruye el aplanado manteniendo el cursor visible.
+func (fb *FileBrowser) AddChild(parentPath string, e Entry) bool {
+	if parentPath == "" {
+		return false
+	}
+	child := &treeNode{name: e.Name, path: e.Path, isDir: e.IsDir}
+
+	if parentPath == fb.root {
+		// El root es la cima implícita: no hay un nodo que lo represente, así que
+		// el hijo nuevo entra en el primer nivel, entre los nodos de profundidad 0
+		// del aplanado.
+		child.depth = 0
+		var roots, rest []*treeNode
+		for _, n := range fb.nodes {
+			if n.depth == 0 {
+				roots = append(roots, n)
+			} else {
+				rest = append(rest, n)
+			}
+		}
+		fb.nodes = append(insertSorted(roots, child), rest...)
+	} else {
+		var parent *treeNode
+		for _, n := range fb.nodes {
+			if n.path == parentPath {
+				parent = n
+				break
+			}
+		}
+		if parent == nil || !parent.isDir {
+			return false
+		}
+		child.depth = parent.depth + 1
+		parent.children = insertSorted(parent.children, child)
+	}
+
+	fb.flatten()
+	fb.ensureCursorVisible()
+	return true
+}
+
+// insertSorted devuelve list con child insertado en la posición que le
+// corresponde en un listado de directorio: los directorios antes que los
+// archivos, y dentro de cada grupo por orden alfabético —el mismo criterio de
+// readEntries, para que un nodo creado no quede al final de su nivel hasta el
+// próximo relist—.
+func insertSorted(list []*treeNode, child *treeNode) []*treeNode {
+	pos := len(list)
+	for i, c := range list {
+		if child.isDir && !c.isDir {
+			pos = i
+			break
+		}
+		if child.isDir == c.isDir && child.name < c.name {
+			pos = i
+			break
+		}
+	}
+	list = append(list, nil)
+	copy(list[pos+1:], list[pos:])
+	list[pos] = child
+	return list
 }
 
 // activateOrExpand decide la acción de Enter/→ sobre el nodo del cursor: un

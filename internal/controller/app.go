@@ -75,14 +75,20 @@ type App struct {
 	// sobrescribir UN archivo no tiene que valer para otro.
 	forceSave map[*model.PieceTable]bool
 
-	// promptActive, promptBuf y promptTarget sostienen el pedido de texto de
-	// Save As. Mientras está activo, el teclado alimenta el pedido y no el
-	// documento. El buffer destino se captura al ABRIR el pedido: el texto que
-	// alguien escribe pertenece al documento que estaba mirando cuando empezó,
-	// no al que esté activo cuando aprieta Enter.
+	// promptActive, promptBuf, promptLabel y promptAction sostienen el pedido
+	// de texto de la barra de estado. Mientras está activo, el teclado alimenta
+	// el pedido y no el documento. El pedido es GENERALIZADO: label dice qué se
+	// está pidiendo ("Guardar como: ", "Nuevo archivo: "…), prefill es el texto
+	// con el que arranca (la ruta actual en Save As, vacío al crear) y action
+	// es lo que corre al confirmar con Enter —el trabajo pesado vive en el
+	// closure del controlador, y lo que se necesita para él (el buffer destino
+	// de Save As, el directorio destino de una creación) queda capturado al
+	// ABRIR el pedido: el texto que alguien escribe pertenece a la acción que
+	// empezó, no a la que esté activa cuando aprieta Enter.
 	promptActive bool
 	promptBuf    string
-	promptTarget *model.PieceTable
+	promptLabel  string
+	promptAction func(path string) error
 
 	// menu es el superpuesto transitorio de pestañas (Ctrl+T) y menuActive dice
 	// si está abierto. Mientras está activo, el menú posee el teclado y el mouse
@@ -292,6 +298,14 @@ func (a *App) registerBuiltins() {
 	})
 	register("tcode.toggleExplorer", func() error {
 		a.toggleExplorer()
+		return nil
+	})
+	register("tcode.createFile", func() error {
+		a.promptCreateEntry(false)
+		return nil
+	})
+	register("tcode.createFolder", func() error {
+		a.promptCreateEntry(true)
 		return nil
 	})
 	register("tcode.undo", func() error {
@@ -984,6 +998,21 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 			return false
 		}
 
+		// Ctrl+N crea un archivo y Ctrl+Shift+N una carpeta —también con el
+		// workspace vacío: crear es justamente la acción del arranque sin
+		// buffers—, y ANTES del guard por la misma razón que Ctrl+B/Ctrl+P. El
+		// destino es contextual (promptCreateEntry) y el prompt abre el
+		// teclado; Enter hace el resto.
+		if isCreateFileKey(ev) {
+			a.promptCreateEntry(false)
+			return false
+		}
+
+		if isCreateFolderKey(ev) {
+			a.promptCreateEntry(true)
+			return false
+		}
+
 		// Workspace vacío: no hay nada que editar, guardar ni deshacer. Salir
 		// sigue funcionando, y sin buffers no hay nada que perder.
 		buf := a.activeBuffer()
@@ -1090,7 +1119,7 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 	case *tcell.EventMouse:
 		// Con el menú abierto el mouse es del menú como el teclado, con la
 		// ventana de configuración abierta es de la ventana, y con un pedido
-		// activo (Save As) es del pedido: se ignora por completo —el controlador
+		// activo (Save As o creación) es del pedido: se ignora por completo —el controlador
 		// no traduce nada ni redibuja— y el clic no puede cambiar de pestaña,
 		// seleccionar un archivo ni raspar el documento por debajo de lo que el
 		// usuario está escribiendo.
@@ -1232,28 +1261,57 @@ func isSaveAsKey(ev *tcell.EventKey) bool {
 		(ev.Rune() == 's' || ev.Rune() == 'S')
 }
 
-// startPrompt abre el pedido de Save As, prellenado con la ruta actual para poder
-// editarla en lugar de reescribirla entera. El buffer destino queda capturado
-// acá: no depende de qué pestaña esté activa cuando se termine de tipear.
+// startPrompt abre el pedido de Save As, prellenado con la ruta actual para
+// poder editarla en lugar de reescribirla entera. Sin buffer activo (workspace
+// vacío) el pedido igual puede abrirse —lo que se pide es una ruta nueva, no el
+// documento activo—, con el prefill vacío.
 func (a *App) startPrompt() {
+	buf := a.activeBuffer()
+	prefill := ""
+	if buf != nil {
+		prefill = buf.Path()
+	}
+	// El buffer destino se captura ACÁ, en el closure, no al confirmar: el
+	// texto que alguien escribe pertenece al documento que estaba mirando
+	// cuando abrió el pedido, no al que esté activo cuando aprieta Enter. Sin
+	// buffer activo el closure responde con el error legible de requireBuffer en
+	// vez de desreferenciar nil: crear es justamente la acción del workspace
+	// vacío, y el pedido tiene que poder abrirse sin él.
+	a.openPrompt("Guardar como: ", prefill, func(path string) error {
+		if buf == nil {
+			return errors.New("sin buffer abierto")
+		}
+		a.saveAs(buf, path)
+		return nil
+	})
+}
+
+// openPrompt arma el pedido generalizado: label + prefill + action. Es el
+// núcleo que startPrompt (Save As) y promptCreateEntry (archivo/carpeta)
+// comparten: arma el estado, refresca la barra y redibuja. Ningún llamador
+// necesita un buffer activo —crear un archivo es justamente lo que se hace sin
+// buffers—, así que esta función no toca el workspace.
+func (a *App) openPrompt(label, prefill string, action func(path string) error) {
 	a.confirmQuit = false
 	a.confirmClose = false
 	a.clearForceSave()
 	a.promptActive = true
-	a.promptBuf = a.activeBuffer().Path()
-	a.promptTarget = a.activeBuffer()
+	a.promptBuf = prefill
+	a.promptLabel = label
+	a.promptAction = action
 	a.refreshPrompt()
 	a.redraw()
 }
 
 func (a *App) refreshPrompt() {
-	a.statusBar.SetPrompt("Guardar como: " + a.promptBuf)
+	a.statusBar.SetPrompt(a.promptLabel + a.promptBuf)
 }
 
 func (a *App) endPrompt() {
 	a.promptActive = false
 	a.promptBuf = ""
-	a.promptTarget = nil
+	a.promptLabel = ""
+	a.promptAction = nil
 	a.statusBar.SetPrompt("")
 }
 
@@ -1270,20 +1328,30 @@ func (a *App) activeForceSave() bool { return a.forceSave[a.activeBuffer()] }
 func (a *App) saveAsFor(buf *model.PieceTable) { a.forceSave[buf] = true }
 
 // handlePromptKey alimenta el pedido de texto. El borrado va por runa y no por
-// grapheme cluster: alcanza para rutas, que son ASCII en la práctica.
+// grapheme cluster: alcanza para rutas, que son ASCII en la práctica. Al
+// confirmar (Enter) el pedido se cierra PRIMERO y después corre la acción
+// captured: la acción ya no necesita el estado del pedido, y un error suyo se
+// muestra en la barra como mensaje normal.
 func (a *App) handlePromptKey(ev *tcell.EventKey) {
 	switch ev.Key() {
 	case tcell.KeyEscape, tcell.KeyCtrlC:
 		a.endPrompt()
-		a.statusBar.SetMessage("Save As cancelado")
+		a.statusBar.SetMessage("Cancelado")
 		a.redraw()
 		return
 
 	case tcell.KeyEnter:
 		path := strings.TrimSpace(a.promptBuf)
-		target := a.promptTarget
+		action := a.promptAction
 		a.endPrompt()
-		a.saveAs(target, path)
+		if action == nil {
+			a.redraw()
+			return
+		}
+		if err := action(path); err != nil {
+			a.statusBar.SetMessage(err.Error())
+		}
+		a.redraw()
 		return
 
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
@@ -1615,6 +1683,116 @@ func (a *App) explorerExpand() {
 		return
 	}
 	a.explorer.SetChildren(entries)
+}
+
+// isCreateFileKey reconoce Ctrl+N sin Shift: nuevo archivo. Ctrl+N llega como
+// código KeyCtrl* cuando no hay modificadores, como el resto de los Ctrl.
+func isCreateFileKey(ev *tcell.EventKey) bool {
+	return ev.Key() == tcell.KeyCtrlN && ev.Modifiers()&tcell.ModShift == 0
+}
+
+// isCreateFolderKey reconoce Ctrl+Shift+N: nueva carpeta. Como en Ctrl+Shift+S
+// y Ctrl+Shift+Z, tcell entrega los control con Shift como KeyRune en lugar del
+// código KeyCtrl*.
+func isCreateFolderKey(ev *tcell.EventKey) bool {
+	return ev.Key() == tcell.KeyRune &&
+		ev.Modifiers()&tcell.ModCtrl != 0 &&
+		ev.Modifiers()&tcell.ModShift != 0 &&
+		(ev.Rune() == 'n' || ev.Rune() == 'N')
+}
+
+// promptCreateEntry abre el pedido de nombre para crear un archivo (folder
+// false) o una carpeta (folder true) en el destino CONTEXTUAL: el directorio
+// del cursor del explorador si está sobre una carpeta, el directorio que
+// contiene el archivo del cursor, o la raíz de la sesión si el árbol no tiene
+// nodos. El destino se resuelve y captura acá, antes de que se escriba el
+// nombre: el prompt no depende del estado del árbol mientras se tipea.
+//
+// El pedido arranca vacío (no hay un nombre que prellenar) y no necesita buffer
+// activo: crear es justamente la acción del workspace vacío.
+func (a *App) promptCreateEntry(folder bool) {
+	dir := a.explorer.CursorDir()
+	if dir == "" {
+		dir = a.ws.Root()
+	}
+	label := "Nuevo archivo: "
+	if folder {
+		label = "Nueva carpeta: "
+	}
+	a.openPrompt(label, "", func(name string) error {
+		return a.createEntry(dir, name, folder)
+	})
+}
+
+// validateNewName aplica las reglas de nombre de la creación contextual: no
+// vacío, sin separadores de ruta y sin "..". El nombre va dentro de la
+// carpeta del cursor o de la raíz de la sesión —no a una ruta arbitraria—, así
+// que un separador o un ".." no significan "subcarpeta" sino una salida del
+// árbol.
+func validateNewName(name string) error {
+	switch {
+	case strings.TrimSpace(name) == "":
+		return errors.New("el nombre no puede estar vacío")
+	case strings.ContainsAny(name, `/\`):
+		return errors.New("el nombre no puede contener / ni \\")
+	case strings.Contains(name, ".."):
+		return errors.New("el nombre no puede contener ..")
+	}
+	return nil
+}
+
+// createEntry crea el archivo o la carpeta pedido en dir y lo refleja en la
+// composición: el nodo nuevo entra al árbol (AddChild) y, si es un archivo,
+// queda abierto y activo en el editor. El prompt ya pasó la validación del
+// nombre; acá se valida de nuevo porque la acción es pública (command
+// tcode.createFile) y puede llegar sin pasar por el teclado.
+//
+// No pisa nada existente: si la ruta ya está en disco, error legible y el árbol
+// y el workspace quedan como estaban. El nodo del árbol se inserta solo si el
+// padre está visible; si no (un nivel que nunca se expandió), el archivo existe
+// igual y aparecerá al expandir —el contenido en disco es la fuente de verdad—.
+func (a *App) createEntry(dir, name string, folder bool) error {
+	if err := validateNewName(name); err != nil {
+		return err
+	}
+	if dir == "" {
+		return errors.New("no hay directorio destino")
+	}
+	path := filepath.Join(dir, name)
+	if _, err := os.Lstat(path); err == nil {
+		return errors.New("ya existe: " + name)
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
+	if folder {
+		if err := os.Mkdir(path, 0o755); err != nil {
+			return err
+		}
+		a.explorer.AddChild(dir, view.Entry{Name: name, Path: path, IsDir: true})
+		a.statusBar.SetMessage("Carpeta creada: " + name)
+		return nil
+	}
+
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	f.Close()
+
+	// El archivo se abre primero: si el workspace lo rechaza, el árbol no
+	// muestra un nodo que no se puede editar. Con el buffer abierto, el foco
+	// pasa al editor (como al activar un archivo del árbol) y el nuevo nodo
+	// entra con el orden de lectura de un relist.
+	if _, err := a.ws.Open(path); err != nil {
+		return err
+	}
+	a.emitEvent(ext.EventDidOpenBuffer)
+	a.explorerFocused = false
+	a.explorer.AddChild(dir, view.Entry{Name: name, Path: path})
+	a.syncStatus()
+	a.statusBar.SetMessage("Archivo creado: " + name)
+	return nil
 }
 
 // switchTab cambia de pestaña (adelante o atrás, con wrap) y deja la
