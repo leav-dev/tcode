@@ -26,6 +26,30 @@ Este archivo registra las decisiones arquitectónicas clave, cambios estructural
   checkout de rama choca con el mmap de tcode corriendo.
 
 ## 3. Registro de Cambios (Changelog de Memoria)
+
+- *2026-10-04 (sesión 8):* **Tanda reciente — todos en `main`, sin push.**
+  - **Instalador de extensiones por CLI** (`ad116df`): `tcode --install-extension
+    <url-git>` clona (`--depth 1`), valida `extension.json` con `ext.Load` y
+    despliega a `~/.tcode/extensions/<id>/` (reinstalar reemplaza; sin `.git`);
+    `--list-extensions` y `--remove-extension` (id saneado). Modelo de
+    confianza: repos del propio autor = confiados, sin marketplace ni firmas;
+    la barrera es estructural. Cloner inyectable para tests (test de
+    integración con git real vía `file://`).
+  - **README.md** (`400617a`): escaneable, español, con la vía de instalación
+    actual (compilar) y el instalador multi-SO como "próximamente".
+  - **Salida solo con doble Escape rápido** (`cbdfefa`): `quitEscapeWindow`
+    (500 ms, reloj inyectable `clockNow`); un solo Escape nunca cierra; tecla
+    intermedia invalida el primer press; **Ctrl+C dejó de ser salida**.
+  - **Dotfiles fuera del árbol** (`8ae6008`): `readEntries` filtra nombres que
+    arrancan con "."; además `TestMain` en controller aísla la suite del
+    `~/.tcode/config.json` y `theme.json` REALES del usuario (el config real
+    con ExplorerWidth/IndentUnit/Theme propios rompía los tests de geometría
+    — la contaminación global que el verifier anticipó).
+  - **Estado Engram:** el estado completo del proyecto quedó guardado en
+    Engram (memoria #3 del proyecto tcode), incluidos pendientes:
+    `feat/installer` sin mergear (instalador multi-SO + CI de releases; hace
+    falta el tag `v0.1.0`) y pushes acumulados.
+
 - **Ventana flotante de configuración** (`odd/tasks/floating-config.md`, rama `feat/floating-config`, `docs/config.md`): el usuario pidió manejar configuraciones básicas en un overlay. `Ctrl+,` abre/cierra una ventana flotante (34x5 centrada sobre el editor, patrón del menú de pestañas) con Tab size (1–8), Word wrap (on/off) y Panel width (16–48, paso 2); los cambios aplican EN VIVO (resize de vistas como un resize de terminal) y persisten en `~/.tcode/config.json` (leído al arranque junto a `theme.json`; `*bool` distingue ausencia de false; JSON roto → defaults, jamás rompe). Arquitectura: la config vive en `view/settings.go` (vars `explorerWidth` movida de controller + `IndentSize`/`SetIndentSize`/`SetWordWrapEnabled`/setters y getters exportados), el `ConfigMenu` (view) muta las vars y el controller persiste; el documento `docs/config.md` documenta las keys. Implementación test-first delegada a gentle-ai-worker; verificación via gentle-ai-verify (build/vet/view ok, controller solo los 3 ambientales de Windows preexistentes).
   - **Lección de layout:** el overlay se compone con la MISMA `OffsetSurface` del menú de pestañas (`configRegion` compartida entre `toggleConfig` y `redraw`), como dicta la Screen Architecture: la vista dibuja en su cuadrícula propia y el compositor la posiciona.
   - **Nota de terminal:** `Ctrl+,` (KeyRune ',' con ModCtrl) funciona en Windows Terminal; en terminales Unix la combinación con signos puede no llegar. `Ctrl+Shift+,` se excluye a propósito (no se puede distinguir igual porque tcell entrega el mismo KeyRune).
