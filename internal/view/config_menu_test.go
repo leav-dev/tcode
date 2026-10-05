@@ -15,10 +15,12 @@ func resetConfigDefaults(t *testing.T) {
 	SetIndentSize(4)
 	SetWordWrapEnabled(true)
 	SetExplorerWidth(24)
+	SetActiveThemeID("")
 	t.Cleanup(func() {
 		SetIndentSize(4)
 		SetWordWrapEnabled(true)
 		SetExplorerWidth(24)
+		SetActiveThemeID("")
 	})
 }
 
@@ -33,16 +35,17 @@ func drawConfigMenu(m *ConfigMenu, s tcell.SimulationScreen) {
 // borde superior (con el título centrado) y el inferior, la fila del cursor va
 // con la barra de selección (TreeCursor) a todo el ancho interior y cada fila
 // muestra su etiqueta con el valor alineado a la derecha: el entero de Tab
-// size, "on"/"off" del Word wrap y el entero de Panel width.
+// size, "on"/"off" del Word wrap, el entero de Panel width y el nombre del
+// tema del selector (con defaults, "Custom").
 func TestConfigMenuDrawsTheFloatingWindow(t *testing.T) {
 	resetConfigDefaults(t)
 	m := NewConfigMenu()
-	m.Resize(30, 5)
+	m.Resize(30, 6)
 
-	s := newTestScreen(t, 30, 5)
+	s := newTestScreen(t, 30, 6)
 	drawConfigMenu(m, s)
 
-	// Marco: ┌ en (0,0) y └ en (0,4), con las esquinas derechas y la pared
+	// Marco: ┌ en (0,0) y └ en (0,5), con las esquinas derechas y la pared
 	// lateral.
 	if got := cellRuneAt(s, 0, 0); got != '┌' {
 		t.Fatalf("(0,0) = %q, se esperaba la esquina del marco '┌'", got)
@@ -50,11 +53,11 @@ func TestConfigMenuDrawsTheFloatingWindow(t *testing.T) {
 	if got := cellRuneAt(s, 29, 0); got != '┐' {
 		t.Fatalf("(29,0) = %q, se esperaba la esquina del marco '┐'", got)
 	}
-	if got := cellRuneAt(s, 0, 4); got != '└' {
-		t.Fatalf("(0,4) = %q, se esperaba la esquina del marco '└'", got)
+	if got := cellRuneAt(s, 0, 5); got != '└' {
+		t.Fatalf("(0,5) = %q, se esperaba la esquina del marco '└'", got)
 	}
-	if got := cellRuneAt(s, 29, 4); got != '┘' {
-		t.Fatalf("(29,4) = %q, se esperaba la esquina del marco '┘'", got)
+	if got := cellRuneAt(s, 29, 5); got != '┘' {
+		t.Fatalf("(29,5) = %q, se esperaba la esquina del marco '┘'", got)
 	}
 	if got := cellRuneAt(s, 0, 1); got != '│' {
 		t.Fatalf("(0,1) = %q, se esperaba la pared lateral del marco '│'", got)
@@ -73,7 +76,7 @@ func TestConfigMenuDrawsTheFloatingWindow(t *testing.T) {
 		}
 	}
 	// Las demás filas van con el estilo por defecto: fondo default, sin la barra.
-	for _, pos := range [][2]int{{5, 2}, {5, 3}} {
+	for _, pos := range [][2]int{{5, 2}, {5, 3}, {5, 4}} {
 		if bg := cellBg(s, pos[0], pos[1]); bg != tcell.ColorDefault {
 			t.Fatalf("las filas sin cursor no deben llevar la barra: fondo en (%d,%d) = %v", pos[0], pos[1], bg)
 		}
@@ -89,6 +92,7 @@ func TestConfigMenuDrawsTheFloatingWindow(t *testing.T) {
 		{"Tab size", "4"},
 		{"Word wrap", "on"},
 		{"Panel width", "24"},
+		{"Theme", "Custom"},
 	}
 	for i, w := range want {
 		line := lines[i+1]
@@ -251,5 +255,95 @@ func TestConfigMenuClampsValues(t *testing.T) {
 	SetIndentSize(0)
 	if got := IndentSize(); got != 1 {
 		t.Fatalf("SetIndentSize(0) dejó IndentSize() = %d, se esperaba 1", got)
+	}
+}
+
+// TestConfigMenuThemeCyclesThroughPalettes: la fila Theme recorre el registry
+// con Right y el ciclo hace wrap: al salir por "Custom" (que limpia el id
+// activo) se vuelve a "light". El valor dibujado de la fila muestra el nombre
+// de la paleta, no un número.
+func TestConfigMenuThemeCyclesThroughPalettes(t *testing.T) {
+	resetConfigDefaults(t)
+	m := NewConfigMenu()
+	m.Resize(30, 6)
+
+	if got := ActiveThemeID(); got != "" {
+		t.Fatalf("con defaults el tema activo debe ser \"\" (Custom), got %q", got)
+	}
+	// Navegar hasta la fila Theme (índice 3).
+	for range 3 {
+		m.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
+	}
+	// Right desde "Custom" (cola del ciclo): wrap hasta "light".
+	if handled, changed := m.HandleEvent(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone)); !handled || !changed {
+		t.Fatalf("Right en Theme devolvió (handled=%v, changed=%v), se esperaba (true, true)", handled, changed)
+	}
+	if got := ActiveThemeID(); got != "light" {
+		t.Fatalf("ActiveThemeID() = %q tras Right, se esperaba \"light\"", got)
+	}
+
+	// Opcional según el spec: el valor dibujado muestra el nombre ("Light").
+	s := newTestScreen(t, 30, 6)
+	drawConfigMenu(m, s)
+	if line := screenLines(s)[4]; !strings.Contains(line, "Light") {
+		t.Fatalf("fila Theme = %q, debe mostrar el nombre \"Light\"", line)
+	}
+
+	// Right seguido recorre el resto del registry hasta "dracula"...
+	for _, id := range []string{"dark", "light-hc", "dark-hc", "tokyo-night", "dracula"} {
+		m.HandleEvent(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone))
+		if got := ActiveThemeID(); got != id {
+			t.Fatalf("ActiveThemeID() = %q tras el ciclo, se esperaba %q", got, id)
+		}
+	}
+	// ...y el siguiente Right entra por el otro extremo: "Custom" limpia el id.
+	if handled, changed := m.HandleEvent(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone)); !handled || !changed {
+		t.Fatalf("Right hacia \"Custom\" devolvió (handled=%v, changed=%v), se esperaba (true, true)", handled, changed)
+	}
+	if got := ActiveThemeID(); got != "" {
+		t.Fatalf("ActiveThemeID() = %q al volver a Custom, se esperaba \"\"", got)
+	}
+}
+
+// TestConfigMenuThemeCustomClearsTheID: Left desde "Custom" desanda el ciclo
+// (Left y Right son reversibles): "" → dracula → tokyo-night, y el ciclo
+// cierra por ambos extremos (Right desde Custom vuelve a light; Left desde
+// light vuelve a Custom).
+func TestConfigMenuThemeCustomClearsTheID(t *testing.T) {
+	resetConfigDefaults(t)
+	m := NewConfigMenu()
+	m.Resize(30, 6)
+
+	for range 3 {
+		m.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
+	}
+	// Desde "" (Custom, índice 6): Left → dracula (índice 5).
+	if handled, changed := m.HandleEvent(tcell.NewEventKey(tcell.KeyLeft, 0, tcell.ModNone)); !handled || !changed {
+		t.Fatalf("Left en Theme devolvió (handled=%v, changed=%v), se esperaba (true, true)", handled, changed)
+	}
+	if got := ActiveThemeID(); got != "dracula" {
+		t.Fatalf("ActiveThemeID() = %q tras Left, se esperaba \"dracula\"", got)
+	}
+	// Left de nuevo → tokyo-night.
+	if handled, changed := m.HandleEvent(tcell.NewEventKey(tcell.KeyLeft, 0, tcell.ModNone)); !handled || !changed {
+		t.Fatalf("el segundo Left devolvió (handled=%v, changed=%v), se esperaba (true, true)", handled, changed)
+	}
+	if got := ActiveThemeID(); got != "tokyo-night" {
+		t.Fatalf("ActiveThemeID() = %q tras el segundo Left, se esperaba \"tokyo-night\"", got)
+	}
+	// Reversibilidad: Right devuelve a dracula.
+	if handled, changed := m.HandleEvent(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone)); !handled || !changed {
+		t.Fatalf("Right tras los Left devolvió (handled=%v, changed=%v), se esperaba (true, true)", handled, changed)
+	}
+	if got := ActiveThemeID(); got != "dracula" {
+		t.Fatalf("ActiveThemeID() = %q tras Right, se esperaba \"dracula\"", got)
+	}
+	// Enter sobre el enum no hace nada (delta 0), como en los enteros, pero la
+	// tecla sigue siendo de la ventana: (true, false) y el id no cambia.
+	if handled, changed := m.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone)); !handled || changed {
+		t.Fatalf("Enter en Theme devolvió (handled=%v, changed=%v), se esperaba (true, false)", handled, changed)
+	}
+	if got := ActiveThemeID(); got != "dracula" {
+		t.Fatalf("Enter debe dejar el tema intacto: ActiveThemeID() = %q, se esperaba \"dracula\"", got)
 	}
 }

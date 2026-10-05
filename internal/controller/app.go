@@ -108,9 +108,16 @@ type App struct {
 	// núcleo; los hooks se emiten desde open/save/close.
 	ext *ext.Manager
 
-	// theme es la paleta por rol del editor, cargada de ~/.tcode/theme.json o
-	// la default; se aplica a las vistas (y a cada editor bajo demanda).
+	// theme es la paleta por rol del editor, resuelta por applyTheme desde el
+	// selector (ActiveThemeID) o el Custom; se aplica a las vistas (y a cada
+	// editor, también a los ya abiertos).
 	theme view.Theme
+
+	// customTheme es el tema del usuario (~/.tcode/theme.json): el fallback del
+	// selector cuando el id activo es "" (Custom). loadTheme lo lee al arranque
+	// y themeFor lo devuelve mientras el selector no elija una paleta del
+	// registry.
+	customTheme view.Theme
 
 	// extensionRoots son los directorios donde se buscan extensiones, en orden
 	// de precedencia: el primero gana en caso de ids duplicados. Por defecto,
@@ -324,21 +331,45 @@ var themeFilePath = func() string {
 	return filepath.Join(home, ".tcode", "theme.json")
 }
 
-// loadTheme lee ~/.tcode/theme.json al arranque y aplica la paleta a todas las
-// vistas. Si el archivo falta o el JSON está roto, se usa la default: el tema
-// del usuario jamás rompe el editor.
+// loadTheme lee ~/.tcode/theme.json al arranque como tema Custom (a.customTheme)
+// y aplica la paleta resultante a todas las vistas. Si el archivo falta o el
+// JSON está roto, el Custom es la default: el tema del usuario jamás rompe el
+// editor.
 func (a *App) loadTheme() {
-	a.theme = view.DefaultTheme()
+	a.customTheme = view.DefaultTheme()
 	if path := themeFilePath(); path != "" {
 		if data, err := os.ReadFile(path); err == nil {
-			a.theme = view.LoadTheme(data)
+			a.customTheme = view.LoadTheme(data)
 		}
 	}
+	a.applyTheme()
+}
+
+// themeFor resuelve el tema a aplicar: la paleta del registry si el selector
+// tiene un id activo, o el Custom (a.customTheme) cuando el id es "".
+func (a *App) themeFor() view.Theme {
+	if id := view.ActiveThemeID(); id != "" {
+		if th, ok := view.ThemeByID(id); ok {
+			return th
+		}
+	}
+	return a.customTheme
+}
+
+// applyTheme aplica el tema activo a TODAS las vistas, incluidos los editores
+// YA abiertos: el selector en vivo (fila Theme de la ventana de configuración)
+// necesita que un cambio de paleta se vea de inmediato, y hoy los editores
+// solo recibían el tema al crearse (activeEditor).
+func (a *App) applyTheme() {
+	a.theme = a.themeFor()
 	a.statusBar.SetTheme(a.theme)
 	a.tabBar.SetTheme(a.theme)
 	a.explorer.SetTheme(a.theme)
 	a.menu.SetTheme(a.theme)
 	a.configMenu.SetTheme(a.theme)
+	for _, ed := range a.editors {
+		ed.SetTheme(a.theme)
+	}
 }
 
 // configFilePath resuelve el archivo de configuración del usuario; es variable
@@ -352,12 +383,15 @@ var configFilePath = func() string {
 }
 
 // configFile es el esquema persistido de la configuración: el tamaño de la
-// tabulación, el salto de palabra (puntero: ausencia = default) y el ancho
-// máximo del panel lateral del explorador.
+// tabulación, el salto de palabra (puntero: ausencia = default), el ancho
+// máximo del panel lateral del explorador y el id del tema del selector ("" =
+// Custom; un id desconocido se ignora al cargar). El tema de theme.json vive
+// aparte: el config solo decide si el selector elige una paleta del registry.
 type configFile struct {
 	IndentUnit    int
 	WordWrap      *bool
 	ExplorerWidth int
+	Theme         string
 }
 
 // loadConfig lee ~/.tcode/config.json al arranque y aplica la configuración a
@@ -380,19 +414,31 @@ func (a *App) loadConfig() {
 			if cfg.ExplorerWidth > 0 {
 				view.SetExplorerWidth(cfg.ExplorerWidth)
 			}
+			// El id del tema persistido gana sobre el Custom de theme.json: el
+			// config decidió que el selector elija una paleta del registry.
+			if cfg.Theme != "" {
+				if _, ok := view.ThemeByID(cfg.Theme); ok {
+					view.SetActiveThemeID(cfg.Theme)
+				}
+			}
 		}
 	}
+	// El tema del config puede diferir del aplicado por loadTheme (que solo
+	// conocía el Custom): re-aplicar acá deja la paleta del id activo.
+	a.applyTheme()
 }
 
 // saveConfig persiste la configuración actual de las vars del paquete view en
-// ~/.tcode/config.json. Un fallo de escritura no rompe la edición: se avisa en
-// la barra de estado.
+// ~/.tcode/config.json, incluido el id del tema activo del selector ("" =
+// Custom). Un fallo de escritura no rompe la edición: se avisa en la barra de
+// estado.
 func (a *App) saveConfig() {
 	wrap := view.WordWrapEnabled()
 	cfg := configFile{
 		IndentUnit:    view.IndentSize(),
 		WordWrap:      &wrap,
 		ExplorerWidth: view.ExplorerWidth(),
+		Theme:         view.ActiveThemeID(),
 	}
 	data, err := json.MarshalIndent(&cfg, "", "  ")
 	if err != nil {
@@ -1471,11 +1517,12 @@ func (a *App) switchTab(move func() *model.PieceTable) {
 }
 
 // configRegion devuelve la región de la ventana flotante de configuración:
-// 34x5 centrada en el área del editor (columna según el panel, fila tras la de
-// pestañas), recortada si la terminal es chica (nunca más ancha que el editor
-// ni más alta que su área). Comparte la geometría entre toggleConfig (que solo
-// usa el tamaño para Resize) y redraw (que reencuadra la superficie con la
-// posición).
+// 34x(ConfigMenuHeight) centrada en el área del editor (columna según el
+// panel, fila tras la de pestañas), recortada si la terminal es chica (nunca
+// más ancha que el editor ni más alta que su área). El alto lo decide la
+// ventana (marco + todas sus filas), no un número fijo: cada fila nueva la
+// agranda sola. Comparte la geometría entre toggleConfig (que solo usa el
+// tamaño para Resize) y redraw (que reencuadra la superficie con la posición).
 func (a *App) configRegion() (x, y, w, h int) {
 	width, height := a.screen.Size()
 	editorW := width - a.explorerColumn()
@@ -1483,7 +1530,7 @@ func (a *App) configRegion() (x, y, w, h int) {
 	if menuW > editorW {
 		menuW = editorW
 	}
-	menuH := 5
+	menuH := view.ConfigMenuHeight()
 	if menuH > editorHeight(height) {
 		menuH = editorHeight(height)
 	}
@@ -1511,11 +1558,15 @@ func (a *App) toggleConfig() {
 	a.redraw()
 }
 
-// configChanged aplica en vivo un cambio de la ventana de configuración: lo
-// persiste y reencuadra la composición —el tamaño del indent y el salto de
-// palabra afectan a todas las vistas, y el ancho del panel cambia el del
-// editor— con el mismo tratamiento que un resize. El caller redibuja.
+// configChanged aplica en vivo un cambio de la ventana de configuración: el
+// cambio pudo venir de la fila Theme, así que PRIMERO se aplica el tema con el
+// id nuevo (y se re-themean los editores abiertos) y después se persiste y se
+// reencuadra la composición —el tamaño del indent y el salto de palabra
+// afectan a todas las vistas, y el ancho del panel cambia el del editor— con
+// el mismo tratamiento que un resize. Si el cambio no fue del tema, re-aplicar
+// es inofensivo. El caller redibuja.
 func (a *App) configChanged() {
+	a.applyTheme()
 	a.saveConfig()
 	a.resizeEditors()
 	width, height := a.screen.Size()

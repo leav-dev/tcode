@@ -182,3 +182,92 @@ func TestLoadThemeParsesNewSyntaxRoles(t *testing.T) {
 		t.Errorf("variable = %v, esperaba índice 117", fgOf(th.Variable))
 	}
 }
+
+// TestThemeRegistryIsStableAndValid: el registry expone los seis temas en un
+// orden fijo (el del selector), cada id existe con un tema válido (CursorLineBg
+// real y barra de estado diferenciada del texto) y un id ajeno no existe.
+func TestThemeRegistryIsStableAndValid(t *testing.T) {
+	wantIDs := [...]string{"light", "dark", "light-hc", "dark-hc", "tokyo-night", "dracula"}
+	ids := ThemeIDs()
+	if len(ids) != len(wantIDs) {
+		t.Fatalf("ThemeIDs() = %v, se esperaban %d ids", ids, len(wantIDs))
+	}
+	for i, want := range wantIDs {
+		if ids[i] != want {
+			t.Fatalf("ThemeIDs()[%d] = %q, se esperaba %q (orden estable del selector)", i, ids[i], want)
+		}
+	}
+
+	wantNames := [...]string{"Light", "Dark", "Light HC", "Dark HC", "Tokyo Night", "Dracula"}
+	names := ThemeNames()
+	if len(names) != len(wantNames) {
+		t.Fatalf("ThemeNames() = %v, se esperaban %d nombres", names, len(wantNames))
+	}
+	for i, want := range wantNames {
+		if names[i] != want {
+			t.Fatalf("ThemeNames()[%d] = %q, se esperaba %q", i, names[i], want)
+		}
+	}
+
+	for _, id := range ids {
+		th, ok := ThemeByID(id)
+		if !ok {
+			t.Fatalf("ThemeByID(%q) debe existir en el registry", id)
+		}
+		if !th.CursorLineBg.Valid() {
+			t.Fatalf("ThemeByID(%q): CursorLineBg debe ser un color válido", id)
+		}
+		if th.Status == th.Text {
+			t.Fatalf("ThemeByID(%q): la barra de estado debe diferenciarse del texto", id)
+		}
+	}
+	if _, ok := ThemeByID("noexiste"); ok {
+		t.Fatal("ThemeByID con un id ajeno al registry debe devolver false")
+	}
+}
+
+// TestThemesAreDistinct: las seis paletas se distinguen entre sí —el selector
+// tiene que ofrecer opciones que se noten— y el fondo de la línea del cursor
+// fija las expectativas reales de cada paleta, con claras (Light, Light HC) y
+// oscuras (Dark, Tokyo Night, Dracula, Dark HC).
+func TestThemesAreDistinct(t *testing.T) {
+	dark := DarkTheme()
+	light := LightTheme()
+	lasthc := LightHighContrastTheme()
+	darkhc := DarkHighContrastTheme()
+	tokyo := TokyoNightTheme()
+	dracula := DraculaTheme()
+
+	// Keyword: el rol con más peso visual diferencia las paletas por pares clave.
+	pairs := [][2]tcell.Color{
+		{fgOf(dark.Keyword), fgOf(light.Keyword)},
+		{fgOf(light.Keyword), fgOf(tokyo.Keyword)},
+		{fgOf(tokyo.Keyword), fgOf(dracula.Keyword)},
+		{fgOf(dark.Keyword), fgOf(lasthc.Keyword)},
+		{fgOf(lasthc.Keyword), fgOf(darkhc.Keyword)},
+	}
+	for _, p := range pairs {
+		if p[0] == p[1] {
+			t.Fatalf("el Keyword de dos paletas no se distingue: %v vs %v", p[0], p[1])
+		}
+	}
+
+	// CursorLineBg: el valor real de cada paleta, claro u oscuro por diseño.
+	cases := []struct {
+		name string
+		got  tcell.Color
+		want tcell.Color
+	}{
+		{"light", light.CursorLineBg, tcell.NewHexColor(0xE7F4FD)},
+		{"light-hc", lasthc.CursorLineBg, tcell.NewHexColor(0xFFFF00)},
+		{"dark", dark.CursorLineBg, tcell.PaletteColor(236)},
+		{"dark-hc", darkhc.CursorLineBg, tcell.NewHexColor(0xFFFF00)},
+		{"tokyo-night", tokyo.CursorLineBg, tcell.NewHexColor(0x16161E)},
+		{"dracula", dracula.CursorLineBg, tcell.NewHexColor(0x44475A)},
+	}
+	for _, tc := range cases {
+		if tc.got != tc.want {
+			t.Errorf("CursorLineBg de %s = %v, se esperaba %v", tc.name, tc.got, tc.want)
+		}
+	}
+}

@@ -7,19 +7,22 @@ import (
 	"github.com/gdamore/tcell/v2"
 )
 
-// ConfigKind distingue los dos tipos de ajuste de la ventana de configuración:
-// un entero con rango y paso (Tab size, Panel width) o un booleano (Word wrap).
+// ConfigKind distingue los tres tipos de ajuste de la ventana de
+// configuración: un entero con rango y paso (Tab size, Panel width), un
+// booleano (Word wrap) o un enum de opciones con nombre (Theme).
 type ConfigKind int
 
 const (
 	ConfigBool ConfigKind = iota
 	ConfigInt
+	ConfigEnum
 )
 
 // configItem es una fila de la ventana de configuración: la etiqueta, el tipo
-// de ajuste, el rango y paso (solo los enteros) y las puertas get/set sobre la
-// var del paquete. get devuelve el valor NORMALIZADO (el booleano como 0/1) y
-// set lo aplica. Las filas se construyen SIEMPRE con closures sobre las vars
+// de ajuste, el rango y paso (solo los enteros), las opciones con nombre
+// (solo el enum) y las puertas get/set sobre la var del paquete. get devuelve
+// el valor NORMALIZADO (el booleano como 0/1, el enum como índice) y set lo
+// aplica. Las filas se construyen SIEMPRE con closures sobre las vars
 // globales de view: la ventana edita la configuración viva del editor.
 type configItem struct {
 	label string
@@ -27,13 +30,15 @@ type configItem struct {
 	min   int
 	max   int
 	step  int
+	names []string // opciones del enum, en orden (Theme: registry + "Custom")
 	get   func() int
 	set   func(int)
 }
 
-// configItems construye las tres filas fijas de la ventana de configuración,
-// con sus rangos: Tab size de 1 a 8, Word wrap sin rango (booleano) y Panel
-// width de 16 a 48 en pasos de 2.
+// configItems construye las cuatro filas fijas de la ventana de configuración,
+// con sus rangos: Tab size de 1 a 8, Word wrap sin rango (booleano), Panel
+// width de 16 a 48 en pasos de 2 y Theme con las paletas del registry más
+// "Custom" al final (el tema del usuario o el default, id activo "").
 func configItems() []configItem {
 	return []configItem{
 		{label: "Tab size", kind: ConfigInt, min: 1, max: 8, step: 1, get: IndentSize, set: SetIndentSize},
@@ -49,17 +54,45 @@ func configItems() []configItem {
 			set: func(v int) { SetWordWrapEnabled(v == 1) },
 		},
 		{label: "Panel width", kind: ConfigInt, min: 16, max: 48, step: 2, get: ExplorerWidth, set: SetExplorerWidth},
+		{
+			label: "Theme",
+			kind:  ConfigEnum,
+			names: append(ThemeNames(), "Custom"),
+			get: func() int {
+				// El índice del id activo dentro del registry; "" (Custom, o un
+				// id que ya no esté registrado) cae en la cola, "Custom".
+				for i, id := range ThemeIDs() {
+					if id == ActiveThemeID() {
+						return i
+					}
+				}
+				return len(ThemeNames())
+			},
+			set: func(i int) {
+				if i >= len(ThemeNames()) {
+					SetActiveThemeID("")
+					return
+				}
+				SetActiveThemeID(ThemeIDs()[i])
+			},
+		},
 	}
 }
 
-// ConfigMenu es la ventana flotante de configuración (Ctrl+,): una lista de
-// tres filas con cursor (la mecánica exacta del menú de pestañas —cursor/top
+// ConfigMenuHeight es el alto que la ventana necesita para mostrar TODAS sus
+// filas: el marco de arriba y el de abajo más las cuatro filas. El controlador
+// lo usa para dimensionar la región flotante (configRegion).
+func ConfigMenuHeight() int { return len(configItems()) + 2 }
+
+// ConfigMenu es la ventana flotante de configuración (Ctrl+P): una lista de
+// cuatro filas con cursor (la mecánica exacta del menú de pestañas —cursor/top
 // y su scroll mínimo—) dentro de un marco centrado sobre el área del editor.
 // Left/Right mutan la fila del cursor (y Enter alterna el booleano); Up/Down y
-// el resto de la navegación mueven el cursor. Escape, Ctrl+C y toda tecla
-// ajena devuelven (false, false) y el controlador cierra la ventana
-// descartando; mientras está abierta posee el teclado y el mouse, así que el
-// documento no recibe nada por accidente.
+// el resto de la navegación mueven el cursor. En el enum, Left/Right circulan
+// por las opciones (wrap por los extremos) y Enter no hace nada, como en los
+// enteros. Escape, Ctrl+C y toda tecla ajena devuelven (false, false) y el
+// controlador cierra la ventana descartando; mientras está abierta posee el
+// teclado y el mouse, así que el documento no recibe nada por accidente.
 type ConfigMenu struct {
 	cursor int // índice de la fila del cursor
 	top    int // primera fila visible
@@ -164,12 +197,23 @@ func (m *ConfigMenu) Resize(width, height int) {
 // paso de -1/+1 viene de Left/Right y 0 de Enter: en un booleano cualquier
 // paso (Enter incluido) alterna el valor; en un entero el nuevo valor se
 // clampea a [min, max] con el paso y delta 0 no cambia nada (get()+0*step es
-// el valor actual).
+// el valor actual). El enum CIRCULA en vez de clampear: el paso sale por un
+// extremo y entra por el otro (Right desde "Custom" vuelve a "light", Left
+// desde "light" vuelve a "Custom"), con el ciclo reversible.
 func (m *ConfigMenu) mutate(delta int) bool {
 	it := configItems()[m.cursor]
 	var nuevo int
 	if it.kind == ConfigBool {
 		nuevo = 1 - it.get()
+	} else if it.kind == ConfigEnum {
+		n := len(it.names)
+		if n == 0 {
+			return false
+		}
+		nuevo = (it.get() + delta) % n
+		if nuevo < 0 {
+			nuevo += n
+		}
 	} else {
 		nuevo = min(max(it.get()+delta*it.step, it.min), it.max)
 	}
@@ -228,22 +272,28 @@ func (m *ConfigMenu) HandleEvent(ev tcell.Event) (handled, changed bool) {
 		case tcell.KeyRight:
 			return true, m.mutate(1)
 		case tcell.KeyEnter, tcell.KeyLF:
-			// Enter en un entero no hace nada (delta 0); en un booleano
-			// alterna. Siempre es de la ventana.
+			// Enter en un entero y en el enum no hace nada (delta 0); en un
+			// booleano alterna. Siempre es de la ventana.
 			return true, m.mutate(0)
 		}
 	}
 	return false, false
 }
 
-// configValueText es el valor de la fila como texto: el entero con sus dígitos
-// o "off"/"on" para el booleano.
+// configValueText es el valor de la fila como texto: el entero con sus dígitos,
+// "off"/"on" para el booleano o el NOMBRE de la opción para el enum.
 func configValueText(it configItem) string {
 	if it.kind == ConfigBool {
 		if it.get() == 1 {
 			return "on"
 		}
 		return "off"
+	}
+	if it.kind == ConfigEnum {
+		if i := it.get(); i >= 0 && i < len(it.names) {
+			return it.names[i]
+		}
+		return ""
 	}
 	return strconv.Itoa(it.get())
 }

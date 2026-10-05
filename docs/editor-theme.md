@@ -4,6 +4,24 @@ tcode dibuja con una **paleta por rol** (un `Theme`). La paleta por defecto es
 estilo oscuro tipo VSCode Dark+; un archivo JSON del usuario la reemplaza sin
 tocar código.
 
+## Paletas integradas (selector de la ventana de configuración)
+
+Desde la ventana flotante de configuración (**`Ctrl+P`**, fila *Theme*) se
+cicla entre seis paletas; los cambios aplican **en vivo** (todas las vistas,
+los editores abiertos incluidos) y persisten en `~/.tcode/config.json`:
+
+| id | Nombre en el selector | Estilo |
+| --- | --- | --- |
+| `dark` | Dark | El default actual (VSCode Dark+) |
+| `light` | Light | Claro tipo VSCode Light |
+| `light-hc` | Light HC | Claro de alto contraste (estilo High Contrast) |
+| `dark-hc` | Dark HC | Oscuro de alto contraste |
+| `tokyo-night` | Tokyo Night | Paleta Tokyo Night |
+| `dracula` | Dracula | Paleta Dracula |
+
+La opción **Custom** aplica el `theme.json` del usuario (ver abajo); con el
+selector sin tocar, es el comportamiento original.
+
 ## El archivo
 
 `~/.tcode/theme.json` mapea nombres de rol a colores:

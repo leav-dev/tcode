@@ -30,16 +30,26 @@ type Theme struct {
 	Punct        tcell.Style // puntuación/otros (sintaxis)
 }
 
-// DefaultTheme es la paleta por defecto: estilo oscuro, tipo VSCode Dark+.
-// La pestaña activa conserva el atributo Reverse del diseño original y le suma
-// un color de acento. La fila activa del árbol (TreeCursor) va con un fondo
-// EXPLÍCITO —blanco sobre azul oscuro, el acento de la barra de estado—: la
-// selección no depende de los colores "default" de la terminal, que es lo que
-// hacía difícil ver el nodo activo.
+// fg tiñe el frente de un estilo sobre el default: el rol de color de la
+// mayoría de las marcas de texto y de los roles de sintaxis.
+func fg(c tcell.Color) tcell.Style { return tcell.StyleDefault.Foreground(c) }
+
+// on compone un frente y un fondo EXPLÍCITOS: la barra de selección y los
+// acentos de la barra de estado llevan los dos, así la selección no depende de
+// los colores "default" de la terminal, que es lo que hacía difícil ver el
+// nodo activo.
+func on(fg, bg tcell.Color) tcell.Style { return tcell.StyleDefault.Foreground(fg).Background(bg) }
+
+// active es la pestaña activa: conserva el atributo Reverse del diseño
+// original y le suma un color de acento.
+func active(c tcell.Color) tcell.Style { return tcell.StyleDefault.Reverse(true).Foreground(c) }
+
+// DefaultTheme es la paleta de arranque y el fallback del tema Custom
+// (~/.tcode/theme.json): la misma paleta oscura tipo VSCode Dark+ de
+// DarkTheme. LoadTheme y themeOr dependen de ella (base del JSON del usuario y
+// valor del zero-check), por eso su cuerpo queda fijo y no es un alias: las
+// fábricas del registry comparten esta paleta con DarkTheme.
 func DefaultTheme() Theme {
-	fg := func(c tcell.Color) tcell.Style { return tcell.StyleDefault.Foreground(c) }
-	on := func(fg, bg tcell.Color) tcell.Style { return tcell.StyleDefault.Foreground(fg).Background(bg) }
-	active := func(c tcell.Color) tcell.Style { return tcell.StyleDefault.Reverse(true).Foreground(c) }
 	return Theme{
 		Text:         tcell.StyleDefault,
 		CursorLineBg: tcell.PaletteColor(236),
@@ -58,6 +68,199 @@ func DefaultTheme() Theme {
 		Variable:     fg(tcell.PaletteColor(117)),
 		Punct:        fg(tcell.PaletteColor(250)),
 	}
+}
+
+// DarkTheme es la paleta oscura tipo VSCode Dark+ del selector: la misma
+// paleta de DefaultTheme (el arranque y el fallback del Custom).
+func DarkTheme() Theme {
+	return Theme{
+		Text:         tcell.StyleDefault,
+		CursorLineBg: tcell.PaletteColor(236),
+		TabActive:    active(tcell.PaletteColor(45)),
+		TabIdle:      tcell.StyleDefault,
+		TreeCursor:   on(tcell.PaletteColor(15), tcell.PaletteColor(24)),
+		Status:       on(tcell.PaletteColor(15), tcell.PaletteColor(24)),
+		Message:      on(tcell.PaletteColor(220), tcell.PaletteColor(24)),
+		Modified:     fg(tcell.PaletteColor(208)),
+		Comment:      fg(tcell.PaletteColor(244)),
+		Keyword:      fg(tcell.PaletteColor(213)),
+		String:       fg(tcell.PaletteColor(173)),
+		Number:       fg(tcell.PaletteColor(114)),
+		Type:         fg(tcell.PaletteColor(79)),
+		Function:     fg(tcell.PaletteColor(187)),
+		Variable:     fg(tcell.PaletteColor(117)),
+		Punct:        fg(tcell.PaletteColor(250)),
+	}
+}
+
+// LightTheme es la paleta clara del selector (tipo VSCode Light): texto
+// oscuro sobre terminal clara, con la barra de estado y la selección en azul
+// oscuro como la default. Modified y String coinciden a propósito (rojo
+// #A31515): es un empate aceptable de la paleta original, documentado acá.
+func LightTheme() Theme {
+	return Theme{
+		Text:         tcell.StyleDefault,
+		CursorLineBg: tcell.NewHexColor(0xE7F4FD),
+		TabActive:    active(tcell.PaletteColor(21)),
+		TabIdle:      tcell.StyleDefault,
+		TreeCursor:   on(tcell.PaletteColor(15), tcell.PaletteColor(21)),
+		Status:       on(tcell.PaletteColor(15), tcell.PaletteColor(24)),
+		Message:      on(tcell.PaletteColor(220), tcell.PaletteColor(24)),
+		Modified:     fg(tcell.NewHexColor(0xA31515)),
+		Comment:      fg(tcell.NewHexColor(0x008000)),
+		Keyword:      fg(tcell.NewHexColor(0x0000FF)),
+		String:       fg(tcell.NewHexColor(0xA31515)),
+		Number:       fg(tcell.NewHexColor(0x098658)),
+		Type:         fg(tcell.NewHexColor(0x267F99)),
+		Function:     fg(tcell.NewHexColor(0x795E26)),
+		Variable:     fg(tcell.NewHexColor(0x001080)),
+		Punct:        fg(tcell.NewHexColor(0x000000)),
+	}
+}
+
+// LightHighContrastTheme (id "light-hc") es la paleta clara de alto contraste:
+// línea del cursor amarilla, selección negra sobre amarillo y sintaxis con
+// saturación máxima sobre fondo claro.
+func LightHighContrastTheme() Theme {
+	return Theme{
+		Text:         tcell.StyleDefault,
+		CursorLineBg: tcell.NewHexColor(0xFFFF00),
+		TabActive:    active(tcell.PaletteColor(0)),
+		TabIdle:      tcell.StyleDefault,
+		TreeCursor:   on(tcell.PaletteColor(0), tcell.PaletteColor(226)),
+		Status:       on(tcell.PaletteColor(255), tcell.PaletteColor(0)),
+		Message:      on(tcell.PaletteColor(0), tcell.PaletteColor(226)),
+		Modified:     fg(tcell.PaletteColor(1)),
+		Comment:      fg(tcell.NewHexColor(0x808080)),
+		Keyword:      fg(tcell.NewHexColor(0x0000CC)),
+		String:       fg(tcell.NewHexColor(0xCC0000)),
+		Number:       fg(tcell.NewHexColor(0x098658)),
+		Type:         fg(tcell.NewHexColor(0x000080)),
+		Function:     fg(tcell.NewHexColor(0x804000)),
+		Variable:     fg(tcell.NewHexColor(0x000000)),
+		Punct:        fg(tcell.NewHexColor(0x000000)),
+	}
+}
+
+// DarkHighContrastTheme (id "dark-hc") es la paleta oscura de alto contraste:
+// misma línea del cursor amarilla que la clara, sintaxis de saturación máxima
+// con acentos cian y blanco.
+func DarkHighContrastTheme() Theme {
+	return Theme{
+		Text:         tcell.StyleDefault,
+		CursorLineBg: tcell.NewHexColor(0xFFFF00),
+		TabActive:    active(tcell.PaletteColor(226)),
+		TabIdle:      tcell.StyleDefault,
+		TreeCursor:   on(tcell.PaletteColor(0), tcell.PaletteColor(226)),
+		Status:       on(tcell.PaletteColor(226), tcell.PaletteColor(0)),
+		Message:      on(tcell.PaletteColor(226), tcell.PaletteColor(0)),
+		Modified:     fg(tcell.PaletteColor(9)),
+		Comment:      fg(tcell.NewHexColor(0xCCCCCC)),
+		Keyword:      fg(tcell.NewHexColor(0xFFFF00)),
+		String:       fg(tcell.NewHexColor(0x00FF00)),
+		Number:       fg(tcell.NewHexColor(0x00FFFF)),
+		Type:         fg(tcell.NewHexColor(0x00FFFF)),
+		Function:     fg(tcell.NewHexColor(0xFFFFFF)),
+		Variable:     fg(tcell.NewHexColor(0xFFFFFF)),
+		Punct:        fg(tcell.NewHexColor(0xFFFFFF)),
+	}
+}
+
+// TokyoNightTheme (id "tokyo-night") es la paleta inspirada en Tokyo Night:
+// fondo azul profundo, acentos violeta y cian, sintaxis saturada.
+func TokyoNightTheme() Theme {
+	return Theme{
+		Text:         tcell.StyleDefault,
+		CursorLineBg: tcell.NewHexColor(0x16161E),
+		TabActive:    active(tcell.PaletteColor(69)),
+		TabIdle:      tcell.StyleDefault,
+		TreeCursor:   on(tcell.PaletteColor(15), tcell.PaletteColor(24)),
+		Status:       on(tcell.PaletteColor(15), tcell.PaletteColor(24)),
+		Message:      on(tcell.PaletteColor(215), tcell.PaletteColor(24)),
+		Modified:     fg(tcell.NewHexColor(0xF7768E)),
+		Comment:      fg(tcell.NewHexColor(0x565F89)),
+		Keyword:      fg(tcell.NewHexColor(0xBB9AF7)),
+		String:       fg(tcell.NewHexColor(0x9ECE6A)),
+		Number:       fg(tcell.NewHexColor(0xFF9E64)),
+		Type:         fg(tcell.NewHexColor(0x2AC3DE)),
+		Function:     fg(tcell.NewHexColor(0x7AA2F7)),
+		Variable:     fg(tcell.NewHexColor(0xC0CAF5)),
+		Punct:        fg(tcell.NewHexColor(0x89DDFF)),
+	}
+}
+
+// DraculaTheme (id "dracula") es la paleta inspirada en Dracula: fondo gris
+// pizarra para la selección y la barra, sintaxis pastel saturada. Variable y
+// Punct comparten el blanco #F8F8F2, como en la paleta original.
+func DraculaTheme() Theme {
+	return Theme{
+		Text:         tcell.StyleDefault,
+		CursorLineBg: tcell.NewHexColor(0x44475A),
+		TabActive:    active(tcell.PaletteColor(212)),
+		TabIdle:      tcell.StyleDefault,
+		TreeCursor:   on(tcell.PaletteColor(15), tcell.NewHexColor(0x44475A)),
+		Status:       on(tcell.PaletteColor(15), tcell.NewHexColor(0x44475A)),
+		Message:      on(tcell.PaletteColor(228), tcell.NewHexColor(0x44475A)),
+		Modified:     fg(tcell.NewHexColor(0xFF5555)),
+		Comment:      fg(tcell.NewHexColor(0x6272A4)),
+		Keyword:      fg(tcell.NewHexColor(0xFF79C6)),
+		String:       fg(tcell.NewHexColor(0xF1FA8C)),
+		Number:       fg(tcell.NewHexColor(0xBD93F9)),
+		Type:         fg(tcell.NewHexColor(0x8BE9FD)),
+		Function:     fg(tcell.NewHexColor(0x50FA7B)),
+		Variable:     fg(tcell.NewHexColor(0xF8F8F2)),
+		Punct:        fg(tcell.NewHexColor(0xF8F8F2)),
+	}
+}
+
+// namedTheme es una entrada del registry: el id y el nombre del selector más
+// la fábrica que construye la paleta. El orden del registry ES el orden del
+// selector; los getters construyen sus slices a partir de él.
+type namedTheme struct {
+	id    string
+	name  string
+	build func() Theme
+}
+
+// themeRegistry lista las paletas del selector de la ventana de configuración,
+// en orden estable (el orden del selector). No incluye al Custom (que no es
+// una paleta fija, sino el tema del usuario o el default).
+var themeRegistry = []namedTheme{
+	{"light", "Light", LightTheme},
+	{"dark", "Dark", DarkTheme},
+	{"light-hc", "Light HC", LightHighContrastTheme},
+	{"dark-hc", "Dark HC", DarkHighContrastTheme},
+	{"tokyo-night", "Tokyo Night", TokyoNightTheme},
+	{"dracula", "Dracula", DraculaTheme},
+}
+
+// ThemeIDs devuelve los ids del registry en el orden del selector.
+func ThemeIDs() []string {
+	ids := make([]string, len(themeRegistry))
+	for i, nt := range themeRegistry {
+		ids[i] = nt.id
+	}
+	return ids
+}
+
+// ThemeNames devuelve los nombres del registry en el orden del selector.
+func ThemeNames() []string {
+	names := make([]string, len(themeRegistry))
+	for i, nt := range themeRegistry {
+		names[i] = nt.name
+	}
+	return names
+}
+
+// ThemeByID devuelve el tema del id dado y true, o el tema cero y false si el
+// id no está en el registry (los callers distinguen el Custom por el id vacío).
+func ThemeByID(id string) (Theme, bool) {
+	for _, nt := range themeRegistry {
+		if nt.id == id {
+			return nt.build(), true
+		}
+	}
+	return Theme{}, false
 }
 
 // LoadTheme construye un tema desde el JSON de configuración del usuario

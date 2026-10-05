@@ -18,10 +18,12 @@ func resetConfigVars(t *testing.T) {
 	view.SetIndentSize(4)
 	view.SetWordWrapEnabled(true)
 	view.SetExplorerWidth(24)
+	view.SetActiveThemeID("")
 	t.Cleanup(func() {
 		view.SetIndentSize(4)
 		view.SetWordWrapEnabled(true)
 		view.SetExplorerWidth(24)
+		view.SetActiveThemeID("")
 	})
 }
 
@@ -170,4 +172,98 @@ func TestLoadConfigAppliesAtStartup(t *testing.T) {
 		t.Fatal("JSON roto: el arranque debe quedar con los defaults")
 	}
 	_ = app2
+}
+
+// TestConfigThemeAppliesAtStartup: un config.json con "Theme" se aplica al
+// arrancar: el id queda en la var del selector y el tema aplicado al App es
+// exactamente la paleta del registry (comparar con == vale: Theme solo lleva
+// estilos y colores).
+func TestConfigThemeAppliesAtStartup(t *testing.T) {
+	resetConfigVars(t)
+	path := tmpConfigFile(t)
+	if err := os.WriteFile(path, []byte(`{"IndentUnit":4,"WordWrap":true,"ExplorerWidth":24,"Theme":"dracula"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	app, _ := newTestApp(t, "uno")
+	if got := view.ActiveThemeID(); got != "dracula" {
+		t.Fatalf("ActiveThemeID() = %q al arrancar con config, se esperaba \"dracula\"", got)
+	}
+	if app.theme != view.DraculaTheme() {
+		t.Fatal("el tema aplicado debe ser exactamente la paleta Dracula")
+	}
+}
+
+// TestConfigThemePersistsWhenCycled: ciclar la fila Theme aplica la paleta en
+// vivo y persiste el id en config.json (solo con "Theme": "light" porque el
+// resto de las filas no se tocó).
+func TestConfigThemePersistsWhenCycled(t *testing.T) {
+	resetConfigVars(t)
+	path := tmpConfigFile(t)
+	app, _ := newTestApp(t, "uno")
+
+	app.handleEvent(tcell.NewEventKey(tcell.KeyCtrlP, 0, tcell.ModNone))
+	if !app.configActive {
+		t.Fatal("Ctrl+P debe abrir la ventana de configuración")
+	}
+	// Navegar hasta la fila Theme (Down×3) y ciclar un paso.
+	app.handleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
+	app.handleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
+	app.handleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
+	if quit := app.handleEvent(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone)); quit {
+		t.Fatal("Right dentro de la ventana no debe cerrar el editor")
+	}
+	if got := view.ActiveThemeID(); got != "light" {
+		t.Fatalf("ActiveThemeID() = %q tras Right en Theme, se esperaba \"light\"", got)
+	}
+	if !app.configActive {
+		t.Fatal("mutar la fila Theme no debe cerrar la ventana de configuración")
+	}
+
+	// El cambio se persiste en config.json, con el resto de los ajustes
+	// intactos (los defaults de resetConfigVars).
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("no se pudo leer config.json: %v", err)
+	}
+	var cfg configFile
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("config.json no parsea: %v", err)
+	}
+	if cfg.Theme != "light" {
+		t.Fatalf("Theme en disco = %q, se esperaba \"light\"", cfg.Theme)
+	}
+	if cfg.IndentUnit != 4 || cfg.ExplorerWidth != 24 {
+		t.Fatalf("ciclar el tema no debe tocar los demás ajustes: indent=%d width=%d", cfg.IndentUnit, cfg.ExplorerWidth)
+	}
+}
+
+// TestConfigWithoutThemeKeepsCustom: un config.json sin "Theme" no toca el
+// selector (queda "", Custom) y el tema aplicado sigue siendo el Custom de
+// theme.json —el id del config solo decide si el selector elige una paleta del
+// registry, y el fallback Custom sobrevive.
+func TestConfigWithoutThemeKeepsCustom(t *testing.T) {
+	resetConfigVars(t)
+	cpath := tmpConfigFile(t)
+	if err := os.WriteFile(cpath, []byte(`{"IndentUnit":4}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Un theme.json válido para el Custom, con el mismo patrón de remapeo que
+	// los tests de tema.
+	dir := t.TempDir()
+	old := themeFilePath
+	themeFilePath = func() string { return filepath.Join(dir, "theme.json") }
+	defer func() { themeFilePath = old }()
+	content := []byte(`{"keyword": "#123456"}`)
+	if err := os.WriteFile(filepath.Join(dir, "theme.json"), content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app, _ := newTestApp(t, "uno")
+	if got := view.ActiveThemeID(); got != "" {
+		t.Fatalf("ActiveThemeID() = %q, se esperaba \"\" (Custom sin config Theme)", got)
+	}
+	if app.theme != view.LoadTheme(content) {
+		t.Fatal("sin Theme en el config, el tema aplicado debe ser el Custom de theme.json")
+	}
 }
