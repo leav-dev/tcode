@@ -2,6 +2,8 @@ package ext
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/gdamore/tcell/v2"
@@ -18,12 +20,33 @@ type Manager struct {
 	registry *Registry
 	keymap   *Keymap
 	states   []*extState
+
+	// editor es el puente hacia el editor (ScriptAPI): lo inyecta el
+	// controlador con SetEditor al arrancar. Sin editor, los comandos con
+	// script fallan con un error claro en lugar de tocar un nil.
+	editor ScriptAPI
+	// scriptHosts cachea un ScriptHost por script de extensión (key =
+	// e.Dir + "::" + cmd.Script): el estado Lua sobrevive entre invocaciones
+	// del comando y el archivo se lee de disco una sola vez.
+	scriptHosts map[string]*ScriptHost
+	// scriptDepth es el guard de reentrancia del scripting: un script que
+	// invoca tcode.command sobre un comando con script no puede recurrir
+	// hasta el stack overflow. Como el dispatch es de una sola goroutine, no
+	// necesita sincronización (igual que emitting).
+	scriptDepth int
+
 	// emitting es el guard de reentrancia de Emit: el bucle de eventos es una
 	// sola goroutine, y un hook cuyo comando vuelve a emitir el mismo evento
 	// (p. ej. tcode.closeTab en onDidCloseBuffer) debe cortarse, no recurrir
 	// hasta el stack overflow.
 	emitting bool
 }
+
+// SetEditor inyecta el puente hacia el editor (ScriptAPI) que los scripts de
+// extensión usan vía tcode.*. El controlador lo llama con el App al arrancar;
+// hasta entonces, un comando con script falla con "backend de scripting sin
+// editor" en lugar de tocar un nil.
+func (m *Manager) SetEditor(api ScriptAPI) { m.editor = api }
 
 // extState es una extensión descubierta con su estado de activación. En el
 // milestone declarativo, activarse habilita sus hooks; es también la costura
@@ -37,7 +60,7 @@ type extState struct {
 // registra los built-ins vía Registry(), agrega las extensiones descubiertas
 // con AddExtensions y cierra el arranque con ActivateEvent(onStartup).
 func NewManager() *Manager {
-	return &Manager{registry: NewRegistry()}
+	return &Manager{registry: NewRegistry(), scriptHosts: make(map[string]*ScriptHost)}
 }
 
 // Registry expone el registro de comandos compartido.
@@ -54,12 +77,21 @@ func (m *Manager) AddExtensions(exts []Extension) {
 		m.states = append(m.states, e)
 		mid := e.ext.Manifest.ID
 		for _, c := range e.ext.Manifest.Contributes.Commands {
-			cmdID := c.ID
+			cmd := c // copia local: el closure no captura la variable del rango
+			if cmd.Script != "" {
+				// Con scripting, el comando delega en la función Lua del
+				// script de la extensión (el host se cachea por script).
+				m.registry.Register(cmd.ID, func() error {
+					m.activateIfDeclared(mid, ActivateCommand+cmd.ID)
+					return m.runScriptCommand(e.ext, cmd)
+				})
+				continue
+			}
 			// El stub activa la extensión si ella lo declara, luego informa la
 			// ausencia de backend: es la verdad observable de este milestone.
-			m.registry.Register(cmdID, func() error {
-				m.activateIfDeclared(mid, ActivateCommand+cmdID)
-				return fmt.Errorf("%s: comando declarado sin implementación (roadmap: backend de scripting)", cmdID)
+			m.registry.Register(cmd.ID, func() error {
+				m.activateIfDeclared(mid, ActivateCommand+cmd.ID)
+				return fmt.Errorf("%s: comando declarado sin implementación (roadmap: backend de scripting)", cmd.ID)
 			})
 		}
 		bindings = append(bindings, e.ext.Manifest.Contributes.Keybindings...)
@@ -86,6 +118,41 @@ func (m *Manager) RunCommand(id string) error {
 		}
 	}
 	return m.registry.Run(id)
+}
+
+// runScriptCommand ejecuta un comando declarado con scripting: consigue (o
+// crea, cacheando) el ScriptHost del script de la extensión y llama a la
+// función Lua que implementa el comando. El guard de profundidad corta la
+// recursión de un script que se invoca vía tcode.command; un host solo se
+// construye con el editor presente (el puente al App), y todo error se
+// envuelve nombrando el comando.
+func (m *Manager) runScriptCommand(e Extension, cmd Command) error {
+	if m.scriptDepth >= 8 {
+		return fmt.Errorf("script: recursión excedida ejecutando %s (límite 8)", cmd.ID)
+	}
+	m.scriptDepth++
+	defer func() { m.scriptDepth-- }()
+
+	key := e.Dir + "::" + cmd.Script
+	h, ok := m.scriptHosts[key]
+	if !ok {
+		if m.editor == nil {
+			return fmt.Errorf("%s: backend de scripting sin editor", cmd.ID)
+		}
+		code, err := os.ReadFile(filepath.Join(e.Dir, cmd.Script))
+		if err != nil {
+			return fmt.Errorf("%s: script: %w", cmd.ID, err)
+		}
+		h, err = NewScriptHost(string(code), m.editor)
+		if err != nil {
+			return fmt.Errorf("%s: %w", cmd.ID, err)
+		}
+		m.scriptHosts[key] = h
+	}
+	if err := h.Call(cmd.Fn); err != nil {
+		return fmt.Errorf("%s: %v", cmd.ID, err)
+	}
+	return nil
 }
 
 // ActivateEvent activa todas las extensiones inactivas que declaran el evento

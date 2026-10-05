@@ -226,6 +226,9 @@ func NewAppWithScreen(s tcell.Screen, path string) (*App, error) {
 	// declarados no pueden piser a tcode.*.
 	app.extensionRoots = defaultExtensionRoots(app.ws.Root())
 	app.loadExtensions()
+	// El manager habla con el editor a través del App: los comandos con script
+	// corren Lua con la API tcode.* cableada a App (ScriptAPI).
+	app.ext.SetEditor(app)
 
 	// El tema se aplica a todas las vistas en el arranque; los editores que se
 	// creen bajo demanda lo reciben en activeEditor.
@@ -609,6 +612,39 @@ func (a *App) runExtensionCommand(cmd string) {
 	}
 	a.redraw()
 }
+
+// --- ScriptAPI: el puente que los scripts de extensión usan para tocar el ---
+// --- editor (tcode.*), cableado al Manager con SetEditor en el arranque. ---
+
+// RunCommand ejecuta un comando registrado por id (ScriptAPI). Los scripts la
+// invocan vía tcode.command para llamar built-ins tcode.* u otros comandos.
+func (a *App) RunCommand(id string) error { return a.ext.RunCommand(id) }
+
+// ActiveBuffer devuelve la ruta y el contenido completo del buffer activo
+// (ScriptAPI); sin buffer activo, ok=false. Límite del hito 1: devuelve el
+// documento entero (GetContent); un backend maduro pediría rangos al Model
+// para no copiar archivos grandes al host Lua.
+func (a *App) ActiveBuffer() (path, content string, ok bool) {
+	buf := a.activeBuffer()
+	if buf == nil {
+		return "", "", false
+	}
+	return buf.Path(), buf.GetContent(), true
+}
+
+// InsertAtCursor inserta text en la posición del cursor del editor activo
+// (ScriptAPI). Sin buffer activo no hay cursor: error legible, igual que los
+// comandos del núcleo que requieren buffer.
+func (a *App) InsertAtCursor(text string) error {
+	ed := a.activeEditor()
+	if ed == nil {
+		return errors.New("sin buffer activo")
+	}
+	return a.activeBuffer().Insert(ed.CursorOffset(), text)
+}
+
+// StatusMessage muestra msg en la barra de estado (ScriptAPI).
+func (a *App) StatusMessage(msg string) { a.statusBar.SetMessage(msg) }
 
 // emitEvent despacha un evento de buffer al manager de extensiones y muestra
 // el último error de hook en la barra de estado. Un hook roto nunca rompe el

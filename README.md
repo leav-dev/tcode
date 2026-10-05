@@ -13,7 +13,7 @@ resaltado de sintaxis, temas y configuración desde una ventana flotante.
 | Pestañas | Fila de pestañas, menú (`Ctrl+T`), cambio rápido desde teclado, reabrir y deduplicar rutas |
 | Apariencia | 6 paletas (Light, Dark, Light/Dark HC, Tokyo Night, Dracula) con fondo propio, resaltado por rol para Go, Python, JS/TS, C-like y JSON, tema del usuario por JSON |
 | Configuración | Ventana flotante (`Ctrl+P`): tamaño de tab, salto de palabra, ancho del panel, tema — cambios en vivo y persistidos en `~/.tcode/config.json` |
-| Extensiones | Manifiestos JSON declarativos (comandos, keybindings, hooks) e **instalación por CLI** de tus repos: `tcode --install-extension <url-git>` (`docs/extension-system.md`) |
+| Extensiones | Manifiestos JSON declarativos (comandos, keybindings, hooks) con **backend de scripting Lua** (comandos con implementación propia), instalación por CLI de tus repos: `tcode --install-extension <url-git>` (`docs/extension-system.md`) |
 | Portabilidad | Go puro (`tcell`), sin dependencias nativas; instalador multi-SO en camino |
 
 ## Instalación

@@ -27,6 +27,46 @@ Una carpeta sin `extension.json` se ignora en silencio. Una extensión rota
 (JSON inválido o manifest que no valida) **nunca impide el arranque**: su error
 se avisa una vez en la barra de estado y el resto se carga igual.
 
+## Backend de scripting (Lua)
+
+Desde el hito 1, un comando declarado puede delegar su implementación a una
+**función Lua** del script de la extensión (gopher-lua embebido, sin cgo). El
+manifest agrega `script` (ruta relativa al dir de la extensión) y `fn` (función
+global) — los dos juntos:
+
+```json
+"contributes": {
+  "commands": [
+    { "id": "autor.mi-ext.hola", "title": "Hola", "script": "main.lua", "fn": "hola" }
+  ]
+}
+```
+
+```lua
+function hola()
+  tcode.insert("HOLA")
+  tcode.message("hola desde Lua")
+end
+```
+
+El comando se sigue declarando igual (keybindings y hooks lo referencian de
+siempre); solo cambia la implementación. El host expone la tabla global
+`tcode`:
+
+| Función | Qué hace |
+| --- | --- |
+| `tcode.command(id)` | Ejecuta un comando registrado (`tcode.*` u otros). Un script que se llama a sí mismo corta con un guard de recursión (máx 8). |
+| `tcode.buffer()` | Devuelve `{path, content, ok}` del buffer activo (`ok=false` sin buffer). `content` es el documento completo (límite del hito 1). |
+| `tcode.insert(text)` | Inserta `text` en la posición del cursor del buffer activo. |
+| `tcode.message(msg)` | Muestra un mensaje en la barra de estado. |
+
+Errores del script (Lua o del puente) → mensaje en la barra de estado, nunca
+rompen el editor. El runtime solo abre las librerías base/tabla/string/math
+(nada de `os` ni `io` del host): el repositorio del autor es confiado, pero el
+host no se expone más de lo necesario. Sin `onDidChangeText` por diseño
+(deuda de rendimiento ya documentada); los hooks (`onDidSaveBuffer`, …) ya
+fluyen al comando con `fn`.
+
 ## Instalar extensiones
 
 Las extensiones del **autor** (repositorios propios, considerados confiados) se
@@ -35,6 +75,9 @@ instalan desde la línea de comandos, sin abrir el editor:
 | Comando | Efecto |
 | --- | --- |
 | `tcode --install-extension <url-git>` | Clona el repo (`git clone --depth 1`), valida su `extension.json` y lo despliega en `~/.tcode/extensions/<id>/`. Reinstalar reemplaza. |
+
+> El comando clásico sin `script`/`fn` sigue siendo un stub "sin implementación":
+> dale lógica declarándole la función Lua (sección de arriba).
 | `tcode --list-extensions` | Lista las instaladas del usuario (id, nombre, versión). |
 | `tcode --remove-extension <id>` | Borra `~/.tcode/extensions/<id>`. |
 

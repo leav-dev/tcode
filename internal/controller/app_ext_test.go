@@ -293,6 +293,48 @@ func writeExtensionDir(t *testing.T, root string, entries map[string]string) str
 	return root
 }
 
+// TestExtensionScriptInsertsAtCursor: integración del backend de scripting —
+// una extensión de disco con main.lua y un comando que declara (script, fn)
+// se dispara desde su keybinding; la función Lua inserta texto en el cursor
+// vía tcode.insert y el buffer queda editado.
+func TestExtensionScriptInsertsAtCursor(t *testing.T) {
+	resetConfigVars(t)
+	app, _ := newTestApp(t, "uno")
+
+	root := writeExtensionDir(t, "", map[string]string{
+		"escritor": `{
+			"id": "escritor",
+			"name": "Escritor",
+			"version": "1.0.0",
+			"activation": ["onStartup"],
+			"contributes": {
+				"commands": [
+					{ "id": "escritor.hola", "title": "Hola", "script": "main.lua", "fn": "hola" }
+				],
+				"keybindings": [
+					{ "key": "ctrl+shift+h", "command": "escritor.hola" }
+				]
+			}
+		}`,
+	})
+	luaSrc := `function hola()
+  tcode.insert("HOLA")
+end
+`
+	if err := os.WriteFile(filepath.Join(root, "escritor", "main.lua"), []byte(luaSrc), 0o644); err != nil {
+		t.Fatalf("main.lua: %v", err)
+	}
+	app.extensionRoots = []string{root}
+	app.loadExtensions()
+	app.ext.ActivateEvent(ext.ActivateStartup)
+
+	// La tecla del keybinding resuelve el comando declarado con script.
+	app.handleEvent(tcell.NewEventKey(tcell.KeyRune, 'H', tcell.ModCtrl|tcell.ModShift))
+	if got := app.ws.Active().GetContent(); got != "HOLAuno" {
+		t.Fatalf("contenido = %q, se esperaba %q (la fn Lua insertó en el cursor 0)", got, "HOLAuno")
+	}
+}
+
 // TestLoadExtensionsFromDisk: el cargador descubre las extensiones de las
 // raíces configuradas, registra sus stubs, deja sus keybindings activos y
 // avisa (sin romper) por cada extensión rota.

@@ -266,6 +266,13 @@ func (v *EditorView) cursorOffset() int {
 	return v.model.LineStart(v.cursor.Line) + v.cursor.ByteCol
 }
 
+// CursorOffset devuelve el offset de documento del cursor. Lo usa el backend
+// de scripting (ScriptAPI.InsertAtCursor) para insertar texto en la posición
+// exacta del cursor activo.
+func (v *EditorView) CursorOffset() int {
+	return v.model.LineStart(v.cursor.Line) + v.cursor.ByteCol
+}
+
 // ClampCursor recorta el cursor y el viewport al documento después de una
 // recarga: el archivo pudo quedarse más corto y un cursor fuera de rango
 // paniquearía en el próximo dibujo (LineContent fuera). Un documento vacío cae
