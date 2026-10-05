@@ -50,6 +50,7 @@ const (
 	ActionMove                   // solo redibujar (movimiento, colapso interno, click)
 	ActionActivate               // abrir el archivo del nodo del cursor
 	ActionExpand                 // leer los hijos del dir del cursor y depositarlos
+	ActionDelete                 // borrar el nodo del cursor (el controlador confirma)
 )
 
 // treeNode es el nodo del árbol: el dato mutable que conserva la jerarquía
@@ -414,6 +415,64 @@ func (fb *FileBrowser) AddChild(parentPath string, e Entry) bool {
 	return true
 }
 
+// RemoveNode saca del árbol el nodo con la ruta dada —el reverso de AddChild—
+// y devuelve si lo encontró: es la cuarta puerta de entrada de datos a la
+// vista, la que usa el controlador después de borrar un archivo o una carpeta
+// para que el nodo desaparezca sin re-leer el directorio.
+//
+// Busca en el aplanado —como Reveal y ExpandDir—, así que solo quita nodos
+// VISIBLES: uno escondido en un nivel que nunca se expandió no está, y un
+// archivo borrado ahí aparecerá igual cuando se expanda el padre (el contenido
+// en disco es la fuente de verdad). Si el nodo es un directorio se van sus
+// descendientes con él, sin E/S. El cursor queda clampeado y visible: al
+// borrarse la fila activa, el cursor queda en la posición equivalente del
+// listado nuevo.
+func (fb *FileBrowser) RemoveNode(path string) bool {
+	idx, ok := fb.findNodeIndex(path)
+	if !ok {
+		return false
+	}
+	target := fb.nodes[idx]
+
+	if target.depth == 0 {
+		// Nivel raíz: no hay nodo padre, el que se va es una raíz. Los
+		// descendientes que quedaran en el aplanado desaparecen con ella al
+		// re-aplanar.
+		roots := make([]*treeNode, 0, len(fb.nodes))
+		for _, n := range fb.nodes {
+			if n != target {
+				roots = append(roots, n)
+			}
+		}
+		fb.nodes = roots
+	} else {
+		// El padre es el último nodo anterior del aplanado con un nivel menos
+		// —el DFS deja al dir expandido justo antes de sus descendientes—.
+		var parent *treeNode
+		for j := idx - 1; j >= 0; j-- {
+			if fb.nodes[j].depth == target.depth-1 {
+				parent = fb.nodes[j]
+				break
+			}
+		}
+		if parent == nil {
+			return false
+		}
+		kept := make([]*treeNode, 0, len(parent.children))
+		for _, c := range parent.children {
+			if c != target {
+				kept = append(kept, c)
+			}
+		}
+		parent.children = kept
+	}
+
+	fb.flatten()
+	fb.clamp()
+	fb.ensureCursorVisible()
+	return true
+}
+
 // insertSorted devuelve list con child insertado en la posición que le
 // corresponde en un listado de directorio: los directorios antes que los
 // archivos, y dentro de cada grupo por orden alfabético —el mismo criterio de
@@ -504,7 +563,8 @@ func (fb *FileBrowser) selectParentAtCursor() bool {
 // teclas son del panel y no del documento. Enter/KeyLF y → sobre un archivo
 // devuelven (ActionActivate, true) y sobre un dir colapsado (ActionExpand,
 // true); ← colapsa el dir expandido del cursor internamente y devuelve
-// (ActionMove, true). El mouse selecciona con Button1 (ActionMove) y scrollea
+// (ActionMove, true). Delete/Backspace sobre el nodo activo devuelven
+// (ActionDelete, true). El mouse selecciona con Button1 (ActionMove) y scrollea
 // con la rueda. Toda otra tecla o evento devuelve (ActionNone, false) y cae al
 // flujo normal del controlador (atajos, documento, salida).
 func (fb *FileBrowser) HandleEvent(ev tcell.Event) (Action, bool) {
@@ -557,6 +617,13 @@ func (fb *FileBrowser) HandleEvent(ev tcell.Event) (Action, bool) {
 				fb.selectParentAtCursor()
 			}
 			return ActionMove, true
+		case tcell.KeyDelete, tcell.KeyBackspace, tcell.KeyBackspace2:
+			// Borrar el nodo del cursor. La vista no borra nada ni toca el
+			// filesystem: avisa (ActionDelete) y el controlador pide
+			// confirmación y borra. Se consume siempre, incluso con el árbol
+			// vacío —donde el controlador no tiene nada que borrar— para que la
+			// tecla nunca caiga al documento y borre una letra por sorpresa.
+			return ActionDelete, true
 		}
 
 	case *tcell.EventMouse:

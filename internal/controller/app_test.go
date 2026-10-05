@@ -3458,3 +3458,236 @@ func TestStartupPromptKeepsUnapprovedNewsPending(t *testing.T) {
 		t.Errorf("mensaje = %q, se esperaba la novedad pendiente nombrada", msg)
 	}
 }
+
+// --- borrar archivo o carpeta desde el explorador ---
+
+// newDeleteApp arranca una sesión sobre un directorio temporal con archivos ya
+// escritos, para que el explorador tenga nodos desde el arranque (el primer
+// nivel se lee siempre) y el cursor caiga en el primero.
+func newDeleteApp(t *testing.T, files map[string]string) (*App, string) {
+	t.Helper()
+
+	dir := t.TempDir()
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatalf("no se pudo crear %s: %v", name, err)
+		}
+	}
+	s := tcell.NewSimulationScreen("UTF-8")
+	if err := s.Init(); err != nil {
+		t.Fatalf("no se pudo inicializar la pantalla simulada: %v", err)
+	}
+	s.SetSize(40, 10)
+
+	app, err := NewAppWithScreen(s, dir)
+	if err != nil {
+		t.Fatalf("NewAppWithScreen falló: %v", err)
+	}
+	t.Cleanup(func() {
+		app.ws.CloseAll()
+		s.Fini()
+	})
+	if !app.explorerVisible || !app.explorerFocused {
+		t.Fatal("una sesión sobre un directorio arranca con el explorador visible y enfocado")
+	}
+	return app, dir
+}
+
+// TestDeleteKeyConfirmsAndRemovesTheFile: Delete sobre el nodo del cursor abre
+// el pedido sí/no con el nombre del archivo, y al confirmar con "s" el archivo
+// desaparece de disco y del árbol, con un mensaje en la barra.
+func TestDeleteKeyConfirmsAndRemovesTheFile(t *testing.T) {
+	app, dir := newDeleteApp(t, map[string]string{"a.txt": "uno", "b.txt": "dos"})
+	path := filepath.Join(dir, "a.txt")
+
+	press(app, tcell.KeyDelete)
+	if !app.promptActive {
+		t.Fatal("Delete debe abrir el pedido de confirmación")
+	}
+	label := app.statusBar.Label()
+	if !strings.Contains(label, "¿Borrar a.txt?") || !strings.Contains(label, "[s/N]") {
+		t.Fatalf("rótulo = %q, se esperaba \"¿Borrar a.txt? [s/N]\"", label)
+	}
+
+	typeString(app, "s")
+	press(app, tcell.KeyEnter)
+
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("el archivo sigue en disco (err=%v), se esperaba borrado permanente", err)
+	}
+	if got := app.explorer.CursorPath(); got == path {
+		t.Fatalf("CursorPath() = %q, el nodo borrado no puede seguir en el árbol", got)
+	}
+	if !strings.Contains(app.statusBar.Message(), "Borrado: a.txt") {
+		t.Fatalf("mensaje = %q, se esperaba el aviso de borrado", app.statusBar.Message())
+	}
+	// El hermano que no estaba bajo el cursor sobrevive.
+	if _, err := os.Stat(filepath.Join(dir, "b.txt")); err != nil {
+		t.Fatalf("b.txt no debía tocarse: %v", err)
+	}
+}
+
+// TestDeleteDefaultsToNo: el pedido es [s/N] —Enter sin escribir nada NO borra—,
+// y tampoco lo borra una respuesta que no sea "s". El archivo y su nodo quedan.
+func TestDeleteDefaultsToNo(t *testing.T) {
+	for _, answer := range []string{"", "n", "no", "x"} {
+		app, dir := newDeleteApp(t, map[string]string{"a.txt": "uno"})
+		path := filepath.Join(dir, "a.txt")
+
+		press(app, tcell.KeyDelete)
+		typeString(app, answer)
+		press(app, tcell.KeyEnter)
+
+		if app.promptActive {
+			t.Fatalf("respuesta %q: el pedido debió cerrarse al confirmar", answer)
+		}
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("respuesta %q: el archivo no debía borrarse: %v", answer, err)
+		}
+		if got := app.explorer.CursorPath(); got != path {
+			t.Fatalf("respuesta %q: CursorPath() = %q, el nodo debía seguir", answer, got)
+		}
+		if !strings.Contains(app.statusBar.Message(), "Cancelado") {
+			t.Fatalf("respuesta %q: mensaje = %q, se esperaba el aviso de cancelación", answer, app.statusBar.Message())
+		}
+	}
+}
+
+// TestDeleteFolderRemovesItRecursively: borrar un directorio se lleva todo su
+// contenido, y el nodo desaparece del árbol junto con sus descendientes
+// expandidos.
+func TestDeleteFolderRemovesItRecursively(t *testing.T) {
+	app, dir := newDeleteApp(t, map[string]string{"notas.txt": "notas"})
+	sub := filepath.Join(dir, "docs")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatalf("no se pudo crear la carpeta: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "dentro.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("no se pudo crear el archivo interno: %v", err)
+	}
+	// El árbol arrancó sin la carpeta (se creó después): se recarga el primer
+	// nivel por la misma puerta que usa el arranque.
+	entries, err := readEntries(dir)
+	if err != nil {
+		t.Fatalf("no se pudo leer la raíz: %v", err)
+	}
+	app.explorer.SetRootEntries(entries)
+	// El cursor cae en docs (los directorios se listan primero) y se expande.
+	if got := app.explorer.CursorPath(); got != sub {
+		t.Fatalf("CursorPath() = %q, se esperaba la carpeta", got)
+	}
+	app.explorerExpand()
+
+	press(app, tcell.KeyDelete)
+	typeString(app, "s")
+	press(app, tcell.KeyEnter)
+
+	if _, err := os.Stat(sub); !os.IsNotExist(err) {
+		t.Fatalf("la carpeta sigue en disco (err=%v), se esperaba el borrado recursivo", err)
+	}
+	if got := app.explorer.CursorPath(); got == sub {
+		t.Fatal("el nodo del directorio borrado no puede seguir en el árbol")
+	}
+	if !strings.Contains(app.statusBar.Message(), "Borrado: docs") {
+		t.Fatalf("mensaje = %q, se esperaba el aviso de borrado", app.statusBar.Message())
+	}
+}
+
+// TestDeleteClosesTheOpenBufferOfTheDeletedPath: un buffer abierto sobre el
+// archivo borrado (o sobre uno dentro de la carpeta borrada) se cierra con
+// CloseForce —sin él, guardar recrearía el archivo que acaba de desaparecer—
+// y las pestañas que no estaban bajo la ruta sobreviven.
+func TestDeleteClosesTheOpenBufferOfTheDeletedPath(t *testing.T) {
+	app, dir := newDeleteApp(t, map[string]string{"a.txt": "uno", "b.txt": "dos"})
+
+	if _, err := app.ws.Open(filepath.Join(dir, "a.txt")); err != nil {
+		t.Fatalf("no se pudo abrir a.txt: %v", err)
+	}
+	if _, err := app.ws.Open(filepath.Join(dir, "b.txt")); err != nil {
+		t.Fatalf("no se pudo abrir b.txt: %v", err)
+	}
+	if app.ws.Len() != 2 {
+		t.Fatalf("Len() = %d, se esperaban 2 buffers", app.ws.Len())
+	}
+	if got := app.explorer.CursorPath(); got != filepath.Join(dir, "a.txt") {
+		t.Fatalf("CursorPath() = %q, se esperaba a.txt", got)
+	}
+
+	press(app, tcell.KeyDelete)
+	typeString(app, "s")
+	press(app, tcell.KeyEnter)
+
+	if app.ws.Len() != 1 {
+		t.Fatalf("Len() = %d, se esperaba 1: el buffer del archivo borrado se cierra", app.ws.Len())
+	}
+	if got := app.ws.Active().Path(); got != filepath.Join(dir, "b.txt") {
+		t.Fatalf("buffer activo = %q, se esperaba b.txt", got)
+	}
+}
+
+// TestDeletePathClosesBuffersUnderTheDeletedFolder: borrar una carpeta cierra
+// los buffers de los archivos que estaban DENTRO de ella, no solo uno con la
+// ruta exacta.
+func TestDeletePathClosesBuffersUnderTheDeletedFolder(t *testing.T) {
+	app, dir := newDeleteApp(t, map[string]string{"a.txt": "uno"})
+	sub := filepath.Join(dir, "docs")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatalf("no se pudo crear la carpeta: %v", err)
+	}
+	inside := filepath.Join(sub, "dentro.txt")
+	if err := os.WriteFile(inside, []byte("x"), 0o644); err != nil {
+		t.Fatalf("no se pudo crear el archivo interno: %v", err)
+	}
+	if _, err := app.ws.Open(inside); err != nil {
+		t.Fatalf("no se pudo abrir el archivo interno: %v", err)
+	}
+	if _, err := app.ws.Open(filepath.Join(dir, "a.txt")); err != nil {
+		t.Fatalf("no se pudo abrir a.txt: %v", err)
+	}
+
+	if err := app.deletePath(sub); err != nil {
+		t.Fatalf("deletePath falló: %v", err)
+	}
+	if _, err := os.Stat(sub); !os.IsNotExist(err) {
+		t.Fatalf("la carpeta sigue en disco (err=%v)", err)
+	}
+	if app.ws.Len() != 1 {
+		t.Fatalf("Len() = %d, se esperaba 1: el buffer interno se cerró", app.ws.Len())
+	}
+	if got := app.ws.Active().Path(); got != filepath.Join(dir, "a.txt") {
+		t.Fatalf("buffer activo = %q, se esperaba a.txt", got)
+	}
+}
+
+// TestDeletePathRefusesAnEmptyPath: la acción es pública (command
+// tcode.deleteFile), así que una ruta vacía no borra nada.
+func TestDeletePathRefusesAnEmptyPath(t *testing.T) {
+	app, dir := newDeleteApp(t, map[string]string{"a.txt": "uno"})
+	if err := app.deletePath(""); err == nil {
+		t.Fatal("una ruta vacía no se puede borrar")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "a.txt")); err != nil {
+		t.Fatalf("a.txt no debía tocarse: %v", err)
+	}
+}
+
+// TestDeleteFileCommandIsRegistered: el command tcode.deleteFile existe (por
+// simetría con tcode.createFile) y borra el nodo del cursor pasando por la
+// misma confirmación.
+func TestDeleteFileCommandIsRegistered(t *testing.T) {
+	app, dir := newDeleteApp(t, map[string]string{"a.txt": "uno"})
+	path := filepath.Join(dir, "a.txt")
+
+	if err := app.ext.Registry().Run("tcode.deleteFile"); err != nil {
+		t.Fatalf("tcode.deleteFile falló: %v", err)
+	}
+	if !app.promptActive {
+		t.Fatal("el command debe abrir la confirmación")
+	}
+	typeString(app, "s")
+	press(app, tcell.KeyEnter)
+
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("el archivo sigue en disco (err=%v), se esperaba borrado", err)
+	}
+}

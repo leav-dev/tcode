@@ -9,7 +9,7 @@ resaltado de sintaxis, temas y configuración desde una ventana flotante.
 | Área | Qué incluye |
 | --- | --- |
 | Edición | Undo/redo, auto-indent, salto de palabra visual, guardado con detección de cambios externos y recarga segura, `Ctrl+S` con confirmación de pisado |
-| Explorador de archivos | Árbol lateral con lazy loading (los directorios se leen al expandir), reveal del archivo activo, creación de archivos y carpetas (`Ctrl+N` / `Ctrl+Shift+N`), archivos ocultos fuera del árbol |
+| Explorador de archivos | Árbol lateral con lazy loading (los directorios se leen al expandir), reveal del archivo activo, creación de archivos y carpetas (`Ctrl+N` / `Ctrl+Shift+N`) y borrado del nodo del cursor (`Delete`, con confirmación), archivos ocultos fuera del árbol |
 | Pestañas | Fila de pestañas, menú (`Ctrl+T`), cambio rápido desde teclado, reabrir y deduplicar rutas |
 | Apariencia | 6 paletas (Light, Dark, Light/Dark HC, Tokyo Night, Dracula) con fondo propio, resaltado por rol para Go, Python, JS/TS, C-like y JSON, tema del usuario por JSON |
 | Configuración | Ventana flotante (`Ctrl+P`): tamaño de tab, salto de palabra, ancho del panel, tema — cambios en vivo y persistidos en `~/.tcode/config.json` |
@@ -150,6 +150,7 @@ Los binarios de otro SO **no** se pueden ejecutar ni testear en el anfitrión:
 | Abrir archivo | `tcode main.go` · abrir dir: `tcode ./proyecto` |
 | Guardar / Guardar como | `Ctrl+S` / `Ctrl+Shift+S` |
 | Crear archivo / carpeta | `Ctrl+N` / `Ctrl+Shift+N` (en la carpeta del cursor, o en la raíz) |
+| Borrar archivo / carpeta | `Delete` o `Backspace` sobre el nodo del cursor, con confirmación (`s` = sí, `N` por omisión); una carpeta se borra con todo su contenido, sin papelera |
 | Mostrar el explorador | `Ctrl+B` |
 | Cerrar el editor | Doble `Esc` rápido (la única salida; `Ctrl+C` no cierra) |
 | Cambiar pestaña | `Ctrl+PageDown` / `Ctrl+PageUp` · `Ctrl+K` (siguiente) / `Ctrl+L` (anterior) |

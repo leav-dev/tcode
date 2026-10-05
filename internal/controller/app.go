@@ -321,6 +321,10 @@ func (a *App) registerBuiltins() {
 		a.promptCreateEntry(true)
 		return nil
 	})
+	register("tcode.deleteFile", func() error {
+		a.promptDeleteEntry()
+		return nil
+	})
 	register("tcode.undo", func() error {
 		buf, err := a.requireBuffer()
 		if err != nil {
@@ -1133,7 +1137,8 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		// ningún buffer abierto —el arranque sobre un directorio no abre
 		// buffers y el foco ya está en el panel—. ActionMove solo redibuja;
 		// ActionActivate abre el archivo del nodo; ActionExpand pide los hijos
-		// del dir del cursor (SetChildren es la única E/S de expansión). Lo no
+		// del dir del cursor (SetChildren es la única E/S de expansión) y
+		// ActionDelete pide confirmación para borrar el nodo del cursor. Lo no
 		// consumido cae al flujo normal: atajos, documento y salida.
 		if a.explorerVisible && a.explorerFocused {
 			action, handled := a.explorer.HandleEvent(ev)
@@ -1153,6 +1158,8 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 					a.activateExplorerEntry()
 				case view.ActionExpand:
 					a.explorerExpand()
+				case view.ActionDelete:
+					a.promptDeleteEntry()
 				}
 				a.redraw()
 				return false
@@ -1901,6 +1908,135 @@ func (a *App) explorerExpand() {
 		return
 	}
 	a.explorer.SetChildren(entries)
+}
+
+// promptDeleteEntry pide confirmación para borrar el nodo bajo el cursor del
+// explorador —la rama ActionDelete y el command tcode.deleteFile—. El pedido
+// es el mismo de siempre (openPrompt), con el rótulo "¿Borrar <nombre>? [s/N]"
+// y la respuesta por omisión es NO: Enter sin escribir nada cancela, solo una
+// "s" confirma. La ruta se captura acá, antes de que se responda: el prompt no
+// depende del estado del árbol mientras se escribe.
+//
+// Sin nodo bajo el cursor (árbol vacío) no hay nada que borrar: no-op silencioso.
+func (a *App) promptDeleteEntry() {
+	path := a.explorer.CursorPath()
+	if path == "" {
+		return
+	}
+	name := filepath.Base(path)
+	a.openPrompt("¿Borrar "+name+"? [s/N] ", "", func(answer string) error {
+		if !isYesAnswer(answer) {
+			a.statusBar.SetMessage("Cancelado")
+			return nil
+		}
+		return a.deletePath(path)
+	})
+}
+
+// isYesAnswer interpreta la respuesta del pedido de borrado: solo "s" (o "S")
+// confirma —el rótulo anuncia [s/N], con N por omisión—. Cualquier otra cosa,
+// incluido el Enter vacío, cancela.
+func isYesAnswer(answer string) bool {
+	s := strings.TrimSpace(answer)
+	return s == "s" || s == "S"
+}
+
+// deletePath borra la ruta de forma PERMANENTE (os.RemoveAll: una carpeta se va
+// con todo su contenido, no hay papelera) y deja la composición consistente:
+//
+//  1. borra en disco; si falla, el árbol y los buffers quedan como estaban;
+//  2. cierra con CloseForce los buffers que apuntan a esa ruta o a algo dentro
+//     de ella —un buffer sobre un archivo que ya no existe no debe quedar vivo:
+//     guardarlo lo recrearía—;
+//  3. saca el nodo del árbol con RemoveNode, para que desaparezca sin re-leer
+//     el directorio.
+//
+// Es la acción pública detrás del prompt (command tcode.deleteFile): no depende
+// del teclado, solo de que la ruta exista.
+func (a *App) deletePath(path string) error {
+	if path == "" {
+		return errors.New("no hay nada que borrar")
+	}
+	// Las claves se calculan ANTES de borrar: después la ruta ya no existe y
+	// resolver symlinks falla.
+	keys := pathKeys(path)
+	if err := os.RemoveAll(path); err != nil {
+		return err
+	}
+	a.closeBuffersUnder(keys)
+	a.explorer.RemoveNode(path)
+	a.tabBar.EnsureActive(a.ws, a.tabBarWidth())
+	if a.ws.Len() == 0 {
+		a.explorerVisible = true
+		a.explorerFocused = true
+	}
+	a.syncStatus()
+	a.statusBar.SetMessage("Borrado: " + filepath.Base(path))
+	return nil
+}
+
+// pathKeys devuelve las formas normalizadas de una ruta para compararla contra
+// las de los buffers —que llegan absolutas, limpias y con symlinks resueltos
+// desde Workspace.Open—: la limpia y, si el sistema la puede resolver, la con
+// symlinks. Comparar contra las dos cubre los dos casos sin depender de dónde
+// se armó cada ruta.
+func pathKeys(path string) []string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		abs = path
+	}
+	keys := []string{filepath.Clean(abs)}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		keys = append(keys, resolved)
+	}
+	return keys
+}
+
+// closeBuffersUnder cierra con CloseForce toda pestaña cuya ruta es una de keys
+// o está dentro de una de ellas. Se recorre de atrás hacia adelante porque cada
+// cierre corre la lista hacia la izquierda, y el cierre es forzado a propósito:
+// el humano ya confirmó borrar el archivo, así que sus cambios sin guardar no
+// sobreviven al borrado —guardar recrearía el archivo que acaba de desaparecer—.
+func (a *App) closeBuffersUnder(keys []string) {
+	for i := a.ws.Len() - 1; i >= 0; i-- {
+		buf := a.ws.BufferAt(i)
+		if buf == nil || !matchesAnyPath(keys, buf.Path()) {
+			continue
+		}
+		if err := a.ws.CloseForce(i); err != nil {
+			continue
+		}
+		delete(a.editors, buf)
+		delete(a.forceSave, buf)
+		a.emitEvent(ext.EventDidCloseBuffer)
+	}
+}
+
+// matchesAnyPath dice si la ruta de un buffer es alguna de las claves o está
+// dentro de ella. El prefijo a secas no alcanza: con dir "/a", "/ab" no es
+// descendiente —el carácter tras el prefijo tiene que ser un separador—.
+func matchesAnyPath(keys []string, path string) bool {
+	if path == "" {
+		return false
+	}
+	for _, key := range keys {
+		if path == key || isPathUnder(key, path) {
+			return true
+		}
+	}
+	return false
+}
+
+// isPathUnder dice si child está estrictamente dentro de dir.
+func isPathUnder(dir, child string) bool {
+	if !strings.HasPrefix(child, dir) || len(child) <= len(dir) {
+		return false
+	}
+	switch child[len(dir)] {
+	case '/', '\\':
+		return true
+	}
+	return false
 }
 
 // isCreateFileKey reconoce Ctrl+N sin Shift: nuevo archivo. Ctrl+N llega como
