@@ -32,6 +32,35 @@ También crudo para probar: `go run . [archivo-o-directorio]`.
 Para armarte tus propios binarios de Linux y macOS sin depender de un release,
 ver [Compilar para Linux y macOS](#compilar-para-linux-y-macos).
 
+### Dejarlo disponible como `tcode`
+
+El shell resuelve un nombre suelto (`tcode`) buscándolo en los directorios de
+`$PATH`, de izquierda a derecha. Para invocarlo desde cualquier carpeta, el
+binario tiene que estar en uno de esos directorios (o llegar por un enlace
+desde uno).
+
+En Ubuntu/Debian `~/.local/bin` ya viene en el `PATH` del usuario, así que
+alcanza con un enlace simbólico: sin `sudo` y sin editar ningún archivo de
+configuración.
+
+```bash
+mkdir -p ~/.local/bin
+ln -sfn "$PWD/dist/tcode-linux-amd64" ~/.local/bin/tcode
+
+command -v tcode            # /home/<usuario>/.local/bin/tcode
+tcode --list-extensions     # verifica que resuelve y ejecuta
+```
+
+Es un **enlace y no una copia** a propósito: cada `go build ... -o
+dist/tcode-linux-amd64` queda activo al instante, sin reinstalar nada. El precio
+es que el comando depende de que el repo siga en su lugar; si lo movés, volvé a
+correr el `ln -sfn`. Si preferís una versión congelada e independiente del repo,
+copiá el binario en vez de enlazarlo (`cp dist/tcode-linux-amd64
+~/.local/bin/tcode`), a costa de repetir la copia en cada recompilación.
+
+En otros SO vale la misma idea: `~/.local/bin` es la convención XDG, y en macOS
+lo habitual es `/usr/local/bin`.
+
 ## Compilar para Linux y macOS
 
 tcode es Go puro (`tcell`, sin `import "C"` ni build tags por plataforma), así
