@@ -27,6 +27,27 @@ Una carpeta sin `extension.json` se ignora en silencio. Una extensión rota
 (JSON inválido o manifest que no valida) **nunca impide el arranque**: su error
 se avisa una vez en la barra de estado y el resto se carga igual.
 
+## Instalar extensiones
+
+Las extensiones del **autor** (repositorios propios, considerados confiados) se
+instalan desde la línea de comandos, sin abrir el editor:
+
+| Comando | Efecto |
+| --- | --- |
+| `tcode --install-extension <url-git>` | Clona el repo (`git clone --depth 1`), valida su `extension.json` y lo despliega en `~/.tcode/extensions/<id>/`. Reinstalar reemplaza. |
+| `tcode --list-extensions` | Lista las instaladas del usuario (id, nombre, versión). |
+| `tcode --remove-extension <id>` | Borra `~/.tcode/extensions/<id>`. |
+
+El repositorio de la extensión debe tener **`extension.json` en su raíz** (la
+misma estructura de carpeta de arriba). Un manifest inválido se rechaza sin
+tocar nada; el `id` del manifest da nombre a la carpeta instalada. La
+extensión queda disponible en la **próxima sesión** (no hay recarga en
+caliente).
+
+**Modelo de confianza:** los repositorios del propio autor se consideran
+seguros por definición — no hay marketplace, checksum ni firma; la barrera es
+estructural (el manifest valida).
+
 ## El manifest (`extension.json`)
 
 ```json
