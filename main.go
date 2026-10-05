@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"tcode/internal/controller"
@@ -48,10 +49,16 @@ func main() {
 	}
 }
 
-// updateExtensionsAtStartup revisa las extensiones instaladas y actualiza las
-// que el proveedor ya no tiene en la versión instalada. Corre ANTES de abrir la
-// UI: así el editor arranca con la versión nueva ya en disco, sin recargar
-// extensiones a mitad del arranque.
+// updateExtensionsAtStartup deja las extensiones al día antes de abrir la UI:
+// primero actualiza las instaladas que el proveedor ya no tiene en la versión
+// local, y después detecta las NOVEDADES (lo que un proveedor ofrece y no está
+// instalado), auto-instala las de proveedores aprobados y reporta las de los
+// no aprobados. Corre ANTES de abrir la UI: así el editor arranca con la
+// versión nueva ya en disco, sin recargar extensiones a mitad del arranque.
+//
+// El diff de novedades va DESPUÉS de la actualización a propósito: comparar
+// contra el conjunto ya refrescado evita anunciar como novedad algo que se
+// acaba de instalar.
 //
 // Nunca impide arrancar: si no se puede resolver el home, leer los
 // proveedores o volver a leer uno remoto, el problema se reporta por stderr y
@@ -67,12 +74,51 @@ func updateExtensionsAtStartup() {
 		fmt.Fprintf(os.Stderr, "tcode: aviso: %v\n", err)
 		return
 	}
-	updates, errs := ext.UpdateAll(providers, filepath.Join(home, ".tcode", "extensions"), nil)
+	userRoot := filepath.Join(home, ".tcode", "extensions")
+	updates, errs := ext.UpdateAll(providers, userRoot, nil)
 	for _, u := range updates {
 		fmt.Printf("Actualizada: %s (%s → %s)\n", u.Ref, u.OldVer, u.NewVer)
 	}
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "tcode: aviso: %v\n", e)
+	}
+
+	available, errs := ext.AvailableExtensions(providers, userRoot, nil)
+	for _, e := range errs {
+		fmt.Fprintf(os.Stderr, "tcode: aviso: %v\n", e)
+	}
+	installed, errs := ext.InstallAvailable(available, userRoot, nil)
+	for _, r := range installed {
+		fmt.Printf("Instalada: %s\n", r.Ref())
+	}
+	// Las novedades de un proveedor sin aprobar NO se instalan: instalar desde
+	// una fuente sin confianza es exactamente lo que exige confirmación. Se
+	// reportan agrupadas por proveedor para que el usuario pueda aprobarla de
+	// una vez con --approve-provider.
+	for _, e := range errs {
+		fmt.Fprintf(os.Stderr, "tcode: aviso: %v\n", e)
+	}
+	reportUnapproved(available)
+}
+
+// reportUnapproved anuncia, agrupadas por proveedor y en orden alfabético (un
+// recorrido estable entre corridas), las novedades que quedaron sin instalar
+// porque su proveedor no está aprobado.
+func reportUnapproved(available []ext.AvailableExt) {
+	pending := map[string][]string{}
+	for _, a := range available {
+		if a.Approved() {
+			continue
+		}
+		pending[a.Provider.Name] = append(pending[a.Provider.Name], a.ID)
+	}
+	names := make([]string, 0, len(pending))
+	for name := range pending {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		fmt.Printf("Novedad en %s (sin aprobar): %s\n", name, strings.Join(pending[name], ", "))
 	}
 }
 

@@ -285,6 +285,123 @@ func UpdateAll(providers []Provider, userRoot string, fetcher FetchFunc) ([]Upda
 	return updates, errs
 }
 
+// AvailableExt es una extensión que un proveedor ofrece y que NO está
+// instalada: la novedad que el arranque detecta. Provider va entero (no solo
+// el nombre) porque instalar necesita su Source para leer los archivos y su
+// Approved para decidir si la novedad se auto-instala o solo se reporta.
+type AvailableExt struct {
+	Provider Provider
+	ID       string
+	Name     string
+	Version  string
+	Subdir   string
+}
+
+// Ref es la referencia legible "proveedor/id" de la novedad.
+func (a AvailableExt) Ref() string { return a.Provider.Name + "/" + a.ID }
+
+// Approved dice si la novedad viene de un proveedor en el que el usuario ya
+// confió. Solo estas se auto-instalan.
+func (a AvailableExt) Approved() bool { return a.Provider.Approved }
+
+// AvailableExtensions devuelve las extensiones que los proveedores ofrecen y
+// que todavía no están instaladas en userRoot: la diferencia entre el catálogo
+// de cada proveedor (lectura liviana, solo manifests) y lo instalado (List).
+// Es la contraparte de UpdateAll, que solo recorre lo instalado y por eso nunca
+// ve una extensión que el proveedor acaba de agregar.
+//
+// El diff es por proveedor: una extensión instalada desde otro proveedor NO
+// tapa la novedad del que la ofrece, porque son instalaciones distintas
+// (namespaced). Ante el mismo id en dos proveedores gana el primero, la misma
+// regla de resolución que InstallByID: instalar el id después resolvería al
+// primero, así que ofrecer el segundo como novedad sería prometer algo que no
+// es lo que se instalaría.
+//
+// Es tolerante como UpdateAll: un nombre de proveedor inválido o un repo caído
+// se acumulan en los errores y NO cortan el resto. Llamar después de UpdateAll
+// hace que el diff corra contra el conjunto ya refrescado.
+//
+// fetcher nil usa el lector real (necesita git en el PATH).
+func AvailableExtensions(providers []Provider, userRoot string, fetcher FetchFunc) ([]AvailableExt, []error) {
+	if fetcher == nil {
+		fetcher = fetch
+	}
+
+	infos, listErrs := List(userRoot)
+	var errs []error
+	errs = append(errs, listErrs...)
+	// Info.Ref() da "proveedor/id" para lo namespaced y el id suelto para las
+	// instalaciones planas heredadas, que así no tapan nada por proveedor.
+	installed := make(map[string]bool, len(infos))
+	for _, info := range infos {
+		installed[info.Ref()] = true
+	}
+
+	seen := map[string]bool{}
+	var available []AvailableExt
+	for _, p := range providers {
+		if !providerNameRe.MatchString(p.Name) {
+			errs = append(errs, fmt.Errorf("proveedor con nombre inválido %q: se ignora", p.Name))
+			continue
+		}
+		exts, err := ListExtensions(p, fetcher)
+		if err != nil {
+			// Proveedor caído: no impide revisar los siguientes.
+			errs = append(errs, fmt.Errorf("revisando el proveedor %q: %w", p.Name, err))
+			continue
+		}
+		for _, ext := range exts {
+			ref := p.Name + "/" + ext.ID
+			if seen[ext.ID] || installed[ref] {
+				continue
+			}
+			seen[ext.ID] = true
+			available = append(available, AvailableExt{
+				Provider: p,
+				ID:       ext.ID,
+				Name:     ext.Name,
+				Version:  ext.Version,
+				Subdir:   ext.Subdir,
+			})
+		}
+	}
+	return available, errs
+}
+
+// InstallAvailable auto-instala las novedades de los proveedores APROBADOS,
+// reutilizando el camino de instalación por subcarpeta (validar el manifest y
+// copiar el árbol a userRoot/<proveedor>/<id>). Las de un proveedor sin aprobar
+// se saltan en silencio: instalarlas sin confianza repetiría por la puerta de
+// atrás la confirmación que InstallByID pide; quien llama las reporta para que
+// el usuario las apruebe o las ignore.
+//
+// Una novedad que falla se acumula en errs y no impide instalar las demás:
+// instalar una extensión no puede ser la razón de que no se instale otra.
+//
+// fetcher nil usa el lector real (necesita git en el PATH).
+func InstallAvailable(available []AvailableExt, userRoot string, fetcher FetchFunc) ([]InstallResult, []error) {
+	if fetcher == nil {
+		fetcher = fetch
+	}
+
+	var installed []InstallResult
+	var errs []error
+	for _, a := range available {
+		if !a.Approved() {
+			continue
+		}
+		p := a.Provider
+		if err := withProviderRoot(p, fetcher, a.Subdir, func(root string) error {
+			return installSubdir(root, a.Subdir, p.Name, userRoot)
+		}); err != nil {
+			errs = append(errs, fmt.Errorf("instalando %s: %w", a.Ref(), err))
+			continue
+		}
+		installed = append(installed, InstallResult{Provider: p.Name, ID: a.ID})
+	}
+	return installed, errs
+}
+
 // findProviderExt busca el id entre las extensiones que ofrece un proveedor.
 func findProviderExt(exts []ProviderExt, id string) (ProviderExt, bool) {
 	for _, e := range exts {

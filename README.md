@@ -179,6 +179,27 @@ el editor no lo detecta (reinstalar a mano con `--install-extension` lo trae);
 y un proveedor caído o inalcanzable no impide arrancar —se avisa por stderr y
 el editor abre igual— ni impide revisar los demás proveedores.
 
+Las extensiones **nuevas** que agrega un proveedor también se detectan al
+arrancar: después de actualizar, `tcode` compara el catálogo de cada proveedor
+con lo que hay instalado y, si encuentra algo que no está, lo instala —en el
+mismo arranque— cuando viene de un proveedor **aprobado**. Instalar una
+extensión es continuar la confianza que ya se le dio a esa fuente, así que no
+vuelve a preguntar:
+
+```
+Actualizada: tcode-extention/tcode.errordetector (2.0.0 → 2.1.0)
+Instalada: tcode-extention/tcode.vimlite
+```
+
+Las novedades de un proveedor **sin aprobar** no se instalan: instalar desde una
+fuente en la que el usuario todavía no confió es justo lo que exige
+confirmación, así que solo se reportan (por stdout, agrupadas por proveedor) y
+quedan a la espera de `tcode --approve-provider <nombre>`:
+
+```
+Novedad en mios (sin aprobar): tcode.mioformato, tcode.miolinter
+```
+
 Directorio como argumento arranca con el árbol visible y enfocado; sin
 argumento, sobre el directorio actual.
 
