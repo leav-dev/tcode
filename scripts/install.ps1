@@ -1,19 +1,21 @@
 # tcode installer for Windows.
 #
-# Builds tcode.exe to %USERPROFILE%\.tcode\bin and adds that directory to the
-# USER PATH (registry 'User' scope, case-insensitive dedupe; never touches the
-# system PATH). Needs Go 1.25+ on the machine (see go.mod).
+# Default: downloads the prebuilt binary (tcode-windows-amd64.exe or
+# tcode-windows-arm64.exe) from the latest GitHub release into
+# %USERPROFILE%\.tcode\bin and adds that directory to the USER PATH
+# (registry 'User' scope, case-insensitive dedupe; never touches system PATH).
+# The checksum is verified against checksums.txt before installing.
 #
-# Usage:
-#   powershell -ExecutionPolicy Bypass -File scripts/install.ps1
-#   powershell -ExecutionPolicy Bypass -File scripts/install.ps1 -Uninstall
+#   -Build         compile from the current checkout instead (devs, needs Go)
+#   -Uninstall     remove the binary and the PATH entry
+#   -InstallDir    custom install directory (tests / power users)
+#   -NoPath        skip the registry PATH update (safe for sandbox tests)
 #
-# Advanced / tests:
-#   -InstallDir <dir>   install (or remove) a custom directory
-#   -NoPath             skip the registry PATH update (safe for sandbox tests)
+# Advanced: $env:TCODE_RELEASE_BASE overrides the release base URL (tests).
 
 param(
     [string]$InstallDir = "",
+    [switch]$Build,
     [switch]$NoPath,
     [switch]$Uninstall
 )
@@ -21,6 +23,7 @@ param(
 $ErrorActionPreference = "Stop"
 $TcodeHome   = Join-Path $HOME ".tcode"
 $InstallPath = if ($InstallDir) { $InstallDir } else { Join-Path $TcodeHome "bin" }
+$ReleaseBase = if ($env:TCODE_RELEASE_BASE) { $env:TCODE_RELEASE_BASE } else { "https://github.com/leav-dev/tcode/releases/latest/download" }
 
 function Get-TcodePathEntry {
     param([string]$UserPath)
@@ -41,9 +44,21 @@ function Update-UserPath {
     }
     $parts = @($InstallPath)
     if ($userPath) { $parts += $userPath.Split(';') | Where-Object { $_ -ne '' } }
-    $newPath = ($parts -join ';')
-    [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
+    [Environment]::SetEnvironmentVariable('Path', ($parts -join ';'), 'User')
     Write-Host "PATH updated (User scope): $InstallPath"
+}
+
+# Get-Sha256: hash with plain .NET - Get-FileHash is missing on some PS 5.1 hosts.
+function Get-Sha256 {
+    param([string]$Path)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $fs = [System.IO.File]::OpenRead($Path)
+    try {
+        $bytes = $sha.ComputeHash($fs)
+    } finally {
+        $fs.Dispose()
+    }
+    return ([System.BitConverter]::ToString($bytes)).Replace('-', '').ToLower()
 }
 
 function Remove-UserPathEntry {
@@ -69,21 +84,55 @@ if ($Uninstall) {
     exit 0
 }
 
-if (-not (Get-Command go -ErrorAction SilentlyContinue)) {
-    Write-Error "Go is required to build tcode (go.mod requires Go 1.25+)."
-    exit 1
+# build_local: compile from the checkout (requires Go 1.25+).
+function Build-Local {
+    if (-not (Get-Command go -ErrorAction SilentlyContinue)) {
+        Write-Error "Go is required to build tcode (go.mod requires Go 1.25+)."
+        exit 1
+    }
+    $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+    $repoRoot  = Split-Path -Parent $scriptDir
+    New-Item -ItemType Directory -Force -Path $InstallPath | Out-Null
+    Write-Host "Building tcode into $InstallPath ..."
+    Push-Location $repoRoot
+    try {
+        go build -o (Join-Path $InstallPath "tcode.exe") .
+    } finally {
+        Pop-Location
+    }
+    Write-Host "Installed: $InstallPath\tcode.exe"
 }
 
-$scriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
-$repoRoot    = Split-Path -Parent $scriptDir
+# release_install: download + verify checksum + install (no Go needed).
+function Install-Release {
+    $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } elseif ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq [System.Runtime.InteropServices.Architecture]::Arm64) { 'arm64' } else { 'amd64' }
+    $asset = "tcode-windows-$arch.exe"
 
-New-Item -ItemType Directory -Force -Path $InstallPath | Out-Null
-Write-Host "Building tcode into $InstallPath ..."
-Push-Location $repoRoot
-try {
-    go build -o (Join-Path $InstallPath "tcode.exe") .
-} finally {
-    Pop-Location
+    New-Item -ItemType Directory -Force -Path $InstallPath | Out-Null
+    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("tcode-install-" + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+    try {
+        Write-Host "Downloading $asset ($ReleaseBase) ..."
+        Invoke-WebRequest -Uri "$ReleaseBase/$asset" -OutFile (Join-Path $tmp $asset) -UseBasicParsing
+        Invoke-WebRequest -Uri "$ReleaseBase/checksums.txt" -OutFile (Join-Path $tmp 'checksums.txt') -UseBasicParsing
+
+        $line = Get-Content (Join-Path $tmp 'checksums.txt') | Where-Object { $_ -like "*$asset" } | Select-Object -First 1
+        if (-not $line) { throw "checksums.txt has no entry for $asset" }
+        $expected = ($line -split '\s+')[0].ToLower()
+        $actual = Get-Sha256 (Join-Path $tmp $asset)
+        if ($actual -ne $expected) { throw "checksum mismatch for $asset (expected $expected, got $actual)" }
+
+        Copy-Item (Join-Path $tmp $asset) (Join-Path $InstallPath 'tcode.exe') -Force
+        Write-Host "Installed: $InstallPath\tcode.exe"
+    } finally {
+        Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+    }
+}
+
+if ($Build) {
+    Build-Local
+} else {
+    Install-Release
 }
 
 if (-not $NoPath) {
