@@ -1215,3 +1215,74 @@ func TestInstallAvailableReportsFailureWithoutStopping(t *testing.T) {
 		t.Errorf("el manifest inválido no debía crear nada: %v", err)
 	}
 }
+
+// TestCheckUpdatesDetectsWithoutApplying: CheckUpdates ve el salto de versión
+// pero NO toca la instalación —es la detección que arma la pregunta del prompt
+// de arranque, y preguntar no puede cambiar el disco—. Recién UpdateAll baja los
+// archivos nuevos.
+func TestCheckUpdatesDetectsWithoutApplying(t *testing.T) {
+	src := providerFixture(t, map[string][3]string{"linter": {"tcode.linter", "Linter", "1.0.0"}})
+	if err := os.WriteFile(filepath.Join(src, "linter", "main.lua"), []byte("viejo\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile main.lua: %v", err)
+	}
+	p := remoteProviderForUpdate("remoto")
+	userRoot := t.TempDir()
+	if _, err := InstallByID("tcode.linter", []Provider{p}, userRoot, fetchFake(src), nil); err != nil {
+		t.Fatalf("InstallByID: %v", err)
+	}
+
+	bumpVersion(t, src, "linter", "tcode.linter", "Linter", "2.0.0", "nuevo\n")
+	updates, errs := CheckUpdates([]Provider{p}, userRoot, fetchFake(src))
+	if len(errs) != 0 {
+		t.Fatalf("CheckUpdates reportó errores: %v", errs)
+	}
+	if len(updates) != 1 {
+		t.Fatalf("CheckUpdates devolvió %d actualizaciones, esperaba 1: %+v", len(updates), updates)
+	}
+	got := updates[0]
+	if got.Ref != "remoto/tcode.linter" || got.OldVer != "1.0.0" || got.NewVer != "2.0.0" {
+		t.Errorf("UpdateResult inesperado: %+v", got)
+	}
+
+	// Nada se aplicó: el manifest sigue en 1.0.0 y el archivo con el contenido
+	// viejo es el que quedó instalado.
+	dest := filepath.Join(userRoot, "remoto", "tcode.linter")
+	manifest, err := os.ReadFile(filepath.Join(dest, "extension.json"))
+	if err != nil {
+		t.Fatalf("leyendo el manifest instalado: %v", err)
+	}
+	if !strings.Contains(string(manifest), "1.0.0") {
+		t.Errorf("CheckUpdates aplicó la actualización: el manifest ya dice %s", manifest)
+	}
+	code, err := os.ReadFile(filepath.Join(dest, "main.lua"))
+	if err != nil {
+		t.Fatalf("leyendo el archivo instalado: %v", err)
+	}
+	if string(code) != "viejo\n" {
+		t.Errorf("CheckUpdates tocó la instalación: main.lua = %q", code)
+	}
+
+	// Y UpdateAll, sobre el mismo estado, sí aplica: la detección compartida no
+	// quedó solo en una vista previa.
+	if updates, errs := UpdateAll([]Provider{p}, userRoot, fetchFake(src)); len(updates) != 1 || len(errs) != 0 {
+		t.Fatalf("UpdateAll no aplicó lo detectado: %+v %v", updates, errs)
+	}
+	if code, _ := os.ReadFile(filepath.Join(dest, "main.lua")); string(code) != "nuevo\n" {
+		t.Errorf("UpdateAll no reemplazó los archivos: main.lua = %q", code)
+	}
+}
+
+// TestCheckUpdatesReportsNothingWhenVersionsMatch: sin salto de versión no hay
+// nada que preguntar ni que aplicar.
+func TestCheckUpdatesReportsNothingWhenVersionsMatch(t *testing.T) {
+	src := providerFixture(t, map[string][3]string{"linter": {"tcode.linter", "Linter", "1.0.0"}})
+	p := remoteProviderForUpdate("remoto")
+	userRoot := t.TempDir()
+	if _, err := InstallByID("tcode.linter", []Provider{p}, userRoot, fetchFake(src), nil); err != nil {
+		t.Fatalf("InstallByID: %v", err)
+	}
+	updates, errs := CheckUpdates([]Provider{p}, userRoot, fetchFake(src))
+	if len(errs) != 0 || len(updates) != 0 {
+		t.Fatalf("CheckUpdatesSin cambio de versión: %+v %v", updates, errs)
+	}
+}

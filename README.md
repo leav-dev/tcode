@@ -161,43 +161,45 @@ Los binarios de otro SO **no** se pueden ejecutar ni testear en el anfitrión:
 | Agregar una fuente de extensiones | `tcode --add-provider <url-git\|carpeta>` (luego `tcode --approve-provider <nombre>`) |
 | Ver / borrar extensiones | `tcode --list-extensions` · `tcode --remove-extension <proveedor:id\|id>` |
 
-Las extensiones instaladas se **actualizan solas al arrancar**: al abrir el
-editor, `tcode` vuelve a leer cada proveedor del que salió una extensión
-instalada y, si esa extensión declara una versión distinta de la instalada,
-la reemplaza por la nueva antes de abrir la UI (no hay que reinstalar ni
-volver a aprobar el proveedor). Solo se revisan las que cambiaron de versión,
-así que no baja código que no haga falta, y las actualizaciones se anuncian
-por stdout:
+Al arrancar, `tcode` revisa las extensiones y **te pregunta antes de tocar nada**:
+compara la versión de cada extensión instalada con la que declara su proveedor,
+y compara el catálogo de cada proveedor con lo que tenés instalado. Si hay
+actualizaciones o novedades, aparece un prompt en la barra de estado con el
+detalle y solo se aplican si respondés `s` (o `y`):
 
 ```
-Actualizada: tcode-extention/tcode.errordetector (2.0.0 → 2.1.0)
+Aplicar 1 actualización y 2 novedades? [s/N] s
+1 actualización aplicada, 2 novedades instaladas
 ```
 
-Dos cosas para saber: la comparación es por **versión**, así que si el autor
-de la extensión publica un cambio sin subir el campo `version` del manifest,
-el editor no lo detecta (reinstalar a mano con `--install-extension` lo trae);
-y un proveedor caído o inalcanzable no impide arrancar —se avisa por stderr y
-el editor abre igual— ni impide revisar los demás proveedores.
+El default es **no**: cualquier otra tecla —incluido `Enter`— omite todo por
+esta vez, sin tocar el disco. Denegar no es "nunca más": el próximo arranque
+vuelve a preguntar. Sin cambios no hay nada que preguntar y el editor abre
+derecho.
 
-Las extensiones **nuevas** que agrega un proveedor también se detectan al
-arrancar: después de actualizar, `tcode` compara el catálogo de cada proveedor
-con lo que hay instalado y, si encuentra algo que no está, lo instala —en el
-mismo arranque— cuando viene de un proveedor **aprobado**. Instalar una
-extensión es continuar la confianza que ya se le dio a esa fuente, así que no
-vuelve a preguntar:
+**Actualizaciones.** Cuando respondés `s`, `tcode` vuelve a leer cada proveedor
+del que salió una extensión instalada y reemplaza la instalación por la versión
+nueva antes de cargar las extensiones (no hay que reinstalar ni volver a
+aprobar el proveedor). Solo se revisan las que cambiaron de versión, así que no
+baja código que no haga falta.
+
+Dos cosas para saber: la comparación es por **versión**, así que si el autor de
+la extensión publica un cambio sin subir el campo `version` del manifest, el
+editor no lo detecta (reinstalar a mano con `--install-extension` lo trae); y
+un proveedor caído o inalcanzable no impide arrancar —se avisa en la barra y el
+editor abre igual— ni impide revisar los demás proveedores.
+
+**Novedades.** Las extensiones que un proveedor ofrece y no tenés instaladas se
+revisan en la misma pregunta y, si aceptás, se instalan —en el mismo arranque—
+cuando vienen de un proveedor **aprobado**. Instalar una extensión es continuar
+la confianza que ya se le dio a esa fuente, así que no vuelve a preguntar.
+
+Las novedades de un proveedor **sin aprobar** no se instalan ni se ocultan:
+aceptando, la barra las nombra agrupadas por proveedor y quedan a la espera de
+`tcode --approve-provider <nombre>`:
 
 ```
-Actualizada: tcode-extention/tcode.errordetector (2.0.0 → 2.1.0)
-Instalada: tcode-extention/tcode.vimlite
-```
-
-Las novedades de un proveedor **sin aprobar** no se instalan: instalar desde una
-fuente en la que el usuario todavía no confió es justo lo que exige
-confirmación, así que solo se reportan (por stdout, agrupadas por proveedor) y
-quedan a la espera de `tcode --approve-provider <nombre>`:
-
-```
-Novedad en mios (sin aprobar): tcode.mioformato, tcode.miolinter
+1 actualización aplicada, 0 novedades instaladas — sin aprobar: mios (tcode.mioformato, tcode.miolinter)
 ```
 
 Directorio como argumento arranca con el árbol visible y enfocado; sin

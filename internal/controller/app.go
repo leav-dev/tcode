@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"sort"
 	"strings"
 	"time"
 
@@ -131,6 +132,14 @@ type App struct {
 	// de precedencia: el primero gana en caso de ids duplicados. Por defecto,
 	// las del usuario y las del proyecto actual; los tests los reemplazan.
 	extensionRoots []string
+
+	// startupCheck es la revisión de extensiones del arranque —el inyector de
+	// appStartupCheck— con su resultado: lo detectado (actualizaciones y
+	// novedades) y lo que se aplicó. Vive en el App para que el arranque y sus
+	// tests puedan afirmar qué pasó sin volver a tocar el disco.
+	startupUpdates   []ext.UpdateResult
+	startupAvailable []ext.AvailableExt
+	startupApplied   bool
 }
 
 // NewApp inicializa la terminal y carga el archivo indicado (si path != "").
@@ -231,6 +240,10 @@ func NewAppWithScreen(s tcell.Screen, path string) (*App, error) {
 	// Las extensiones de disco se cargan ANTES de los built-ins: sus comandos
 	// declarados no pueden piser a tcode.*.
 	app.extensionRoots = defaultExtensionRoots(app.ws.Root())
+	// El prompt de actualizaciones y novedades va ANTES de loadExtensions: al
+	// aceptar, lo nuevo queda en disco y lo carga el mismo arranque. Después no
+	// se recarga —AddExtensions no es idempotente—.
+	app.checkExtensionsAndPrompt()
 	app.loadExtensions()
 	// El manager habla con el editor a través del App: los comandos con script
 	// corren Lua con la API tcode.* cableada a App (ScriptAPI).
@@ -490,6 +503,211 @@ func defaultExtensionRoots(root string) []string {
 		roots = append(roots, filepath.Join(home, ".tcode", "extensions"))
 	}
 	return roots
+}
+
+// extensionUserSources es la resolución de los proveedores registrados y la
+// raíz de extensiones del USUARIO (~/.tcode/extensions): el alcance del chequeo
+// de arranque, el mismo que cubría updateExtensionsAtStartup en main.go. Es una
+// variable para que los tests apunten a un temporal, sin tocar el HOME real.
+var extensionUserSources = func() ([]ext.Provider, string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, "", err
+	}
+	providers, err := ext.AllProviders(ext.ProvidersFilePath(home))
+	if err != nil {
+		return nil, "", err
+	}
+	return providers, filepath.Join(home, ".tcode", "extensions"), nil
+}
+
+// startupExtFetch es el lector de los proveedores en el chequeo de arranque:
+// nil usa el lector real (git). Variable por la misma razón que
+// extensionUserSources: los tests corren sin git ni red.
+var startupExtFetch ext.FetchFunc
+
+// appStartupCheck es la INYECCIÓN del chequeo de arranque: devuelve las
+// actualizaciones disponibles y las novedades, sin tocar el disco. Vive en una
+// variable para que los tests no dependan de la red ni del HOME real, y para que
+// una falla de lectura sea un no-op en vez de un arranque roto.
+var appStartupCheck = detectStartupExtensions
+
+// detectStartupExtensions revisa el HOME del usuario: primero las
+// actualizaciones de lo instalado (ext.CheckUpdates, que NO aplica nada) y
+// después las novedades (ext.AvailableExtensions). Un error de resolución se
+// devuelve como aviso: el arranque nunca falla por esto.
+func detectStartupExtensions() ([]ext.UpdateResult, []ext.AvailableExt, []error) {
+	providers, userRoot, err := extensionUserSources()
+	if err != nil {
+		return nil, nil, []error{err}
+	}
+	updates, errs := ext.CheckUpdates(providers, userRoot, startupExtFetch)
+	// El diff de novedades va DESPUÉS de la detección de actualizaciones a
+	// propósito: comparar contra el conjunto ya refrescado evita anunciar como
+	// novedad algo que se acaba de actualizar.
+	available, availErrs := ext.AvailableExtensions(providers, userRoot, startupExtFetch)
+	return updates, available, append(errs, availErrs...)
+}
+
+// checkExtensionsAndPrompt es el chequeo de extensiones del arranque, ahora
+// VISIBLE: detecta actualizaciones y novedades, y en vez de aplicarlas en
+// silencio le pregunta al usuario.
+//
+// La pregunta cubre las dos cosas juntas ("Aplicar N actualizaciones y M
+// novedades?"): revisá todo, decidí una vez. El default es NO —cualquier tecla
+// que no sea un sí explícito omite— y denegar omite SOLO esta vez: el próximo
+// arranque vuelve a preguntar, porque el estado de la decisión no se persiste.
+//
+// El prompt usa un loop anidado de eventos (como el config menu, pero antes del
+// loop principal): al arrancar todavía no hay nada que editar, así que espera
+// solo por su respuesta y devuelve el control al resto del arranque.
+//
+// Va antes de loadExtensions por diseño: al aceptar, lo aplicado ya está en
+// disco y lo carga el mismo arranque. Después NO se recarga, porque
+// AddExtensions no es idempotente (appendea a los estados del manager y el
+// registro rechaza el segundo registro).
+//
+// Nunca impide arrancar: un error de revisión se avisa en la barra y el editor
+// sigue con lo que ya está instalado.
+func (a *App) checkExtensionsAndPrompt() {
+	updates, available, errs := appStartupCheck()
+	a.startupUpdates, a.startupAvailable = updates, available
+	if len(errs) > 0 {
+		a.statusBar.SetMessage("Aviso de extensiones: " + errs[len(errs)-1].Error())
+	}
+	if len(updates) == 0 && len(available) == 0 {
+		return
+	}
+
+	if !a.confirmStartupExtensions(len(updates), len(available)) {
+		a.statusBar.SetMessage("Actualizaciones y novedades omitidas: se vuelven a preguntar al próximo arranque")
+		return
+	}
+	a.applyStartupExtensions(updates, available)
+}
+
+// confirmStartupExtensions muestra la pregunta de arranque y espera la
+// respuesta con un loop anidado. Acepta con "s"/"y" (en mayúscula o no) y
+// deniega con cualquier otra tecla, Enter incluido: el default de "[s/N]" es
+// NO, así que un Escape impaciente o un Enter a ciegas nunca instalan nada.
+//
+// El prompt se dibuja sobre la barra de estado con statusBar.Draw, no con
+// redraw: en este punto la composición todavía no está armada (el tema y la
+// configuración se aplican después) y no hace falta pintar el editor para que
+// la pregunta se lea.
+func (a *App) confirmStartupExtensions(updates, available int) bool {
+	a.statusBar.SetPrompt(startupPromptLabel(updates, available))
+	width, height := a.screen.Size()
+	a.screen.Clear()
+	a.statusBar.Draw(a.screen, height-statusHeight, width)
+	a.screen.Show()
+
+	answer := false
+	for {
+		ev := a.screen.PollEvent()
+		if ev == nil {
+			break
+		}
+		switch ev := ev.(type) {
+		case *tcell.EventKey:
+			if ev.Key() == tcell.KeyRune {
+				switch ev.Rune() {
+				case 's', 'S', 'y', 'Y':
+					answer = true
+				}
+			}
+			// Cualquier tecla cierra el pedido: solo un sí explícito acepta.
+			a.statusBar.SetPrompt("")
+			return answer
+		case *tcell.EventResize:
+			a.screen.Sync()
+			width, height = a.screen.Size()
+			a.statusBar.Draw(a.screen, height-statusHeight, width)
+			a.screen.Show()
+		}
+	}
+	a.statusBar.SetPrompt("")
+	return answer
+}
+
+// startupPromptLabel arma la pregunta del arranque con los plurales correctos:
+// el rótulo tiene que decir cuántos cambios se van a aplicar, porque es lo
+// único que el usuario tiene para decidir.
+func startupPromptLabel(updates, available int) string {
+	parts := make([]string, 0, 2)
+	if updates > 0 {
+		parts = append(parts, plural(updates, "actualización", "actualizaciones"))
+	}
+	if available > 0 {
+		parts = append(parts, plural(available, "novedad", "novedades"))
+	}
+	return "Aplicar " + strings.Join(parts, " y ") + "? [s/N] "
+}
+
+// plural cuenta un sustantivo en español: 1 va en singular, el resto en
+// plural.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, one)
+	}
+	return fmt.Sprintf("%d %s", n, many)
+}
+
+// applyStartupExtensions aplica lo que el usuario aceptó: las actualizaciones de
+// las instaladas y las novedades de los proveedores APROBADOS (las de un
+// proveedor sin aprobar se saltan en silencio, igual que siempre: instalarlas
+// sin confianza repetiría por la puerta de atrás la confirmación que pide
+// instalar por id).
+//
+// El resultado se resume en la barra, y las novedades que quedaron sin instalar
+// se nombran agrupadas por proveedor con el comando para aprobarlo: el usuario
+// acaba de decidir que las quiere y tiene que saber cuál no entró y por qué.
+func (a *App) applyStartupExtensions(updates []ext.UpdateResult, available []ext.AvailableExt) {
+	providers, userRoot, err := extensionUserSources()
+	if err != nil {
+		a.statusBar.SetMessage("Aviso de extensiones: " + err.Error())
+		return
+	}
+
+	applied, errs := ext.UpdateAll(providers, userRoot, startupExtFetch)
+	installed, installErrs := ext.InstallAvailable(available, userRoot, startupExtFetch)
+	errs = append(errs, installErrs...)
+	a.startupApplied = len(applied) > 0 || len(installed) > 0
+
+	msg := plural(len(applied), "actualización aplicada", "actualizaciones aplicadas") +
+		", " + plural(len(installed), "novedad instalada", "novedades instaladas")
+	if pend := unapprovedRefs(available); pend != "" {
+		msg += " — sin aprobar: " + pend + " (tcode --list-extensions para verlas)"
+	}
+	// El resumen es el mensaje; un fallo puntual se le cuelga al final para que
+	// no se pierda (el editor siguió con lo instalado).
+	if len(errs) > 0 {
+		msg += " — con errores: " + errs[len(errs)-1].Error()
+	}
+	a.statusBar.SetMessage(msg)
+}
+
+// unapprovedRefs agrupa por proveedor las novedades que no se instalaron por no
+// estar su proveedor aprobado, en orden alfabético para que el aviso sea
+// estable entre corridas.
+func unapprovedRefs(available []ext.AvailableExt) string {
+	pending := map[string][]string{}
+	for _, av := range available {
+		if av.Approved() {
+			continue
+		}
+		pending[av.Provider.Name] = append(pending[av.Provider.Name], av.ID)
+	}
+	names := make([]string, 0, len(pending))
+	for name := range pending {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	groups := make([]string, 0, len(names))
+	for _, name := range names {
+		groups = append(groups, name+" ("+strings.Join(pending[name], ", ")+")")
+	}
+	return strings.Join(groups, "; ")
 }
 
 // loadExtensions descubre las extensiones de cada root y las agrega al

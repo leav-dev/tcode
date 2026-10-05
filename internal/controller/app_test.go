@@ -1,7 +1,10 @@
 package controller
 
 import (
+	"encoding/json"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -9,19 +12,22 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
+	"tcode/internal/ext"
 	"tcode/internal/model"
 	"tcode/internal/view"
 )
 
 // TestMain aísla la suite del entorno REAL del usuario: ni ~/.tcode/config.json
 // ni ~/.tcode/theme.json entran a los tests (son las dos rutas que el arranque
-// lee) y las variables globales de view arrancan en sus defaults. Los tests
-// que necesitan un config o tema propio los remapean explícitamente (ver
-// app_config_test.go y theme_test.go) — ese remapeo corre después de TestMain,
-// con precedencia sobre los pines que quedan acá.
+// lee), el chequeo de extensiones del arranque queda en no-op —sin red ni HOME
+// real— y las variables globales de view arrancan en sus defaults. Los tests
+// que necesitan un config, tema o chequeo propio los remapean explícitamente
+// (ver app_config_test.go y theme_test.go) — ese remapeo corre después de
+// TestMain, con precedencia sobre los pines que quedan acá.
 func TestMain(m *testing.M) {
 	themeFilePath = func() string { return filepath.Join(os.TempDir(), "tcode-test-no-theme.json") }
 	configFilePath = func() string { return filepath.Join(os.TempDir(), "tcode-test-no-config.json") }
+	appStartupCheck = func() ([]ext.UpdateResult, []ext.AvailableExt, []error) { return nil, nil, nil }
 	view.SetIndentSize(4)
 	view.SetWordWrapEnabled(true)
 	view.SetExplorerWidth(24)
@@ -3132,5 +3138,323 @@ func TestCreateEntryValidatesTheNameWithoutTheKeyboard(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Fatalf("la raíz quedó con %d entradas, se esperaba ninguna", len(entries))
+	}
+}
+
+// --- prompt de actualizaciones y novedades al arrancar ---
+
+// extFetchFake emula el sparse checkout de git sobre un "monorepo" en disco:
+// "*/extension.json" deja solo los manifests del proveedor y el nombre de una
+// subcarpeta deja esa extensión entera. Es el mismo fake que usa el paquete
+// ext, replicado acá porque los tests del controller no alcanzan las variables
+// internas de ese paquete.
+func extFetchFake(src string) ext.FetchFunc {
+	return func(_ string, dest, pattern string) error {
+		return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			rel, err := filepath.Rel(src, p)
+			if err != nil {
+				return err
+			}
+			if rel == "." {
+				return os.MkdirAll(dest, 0o755)
+			}
+			rel = filepath.ToSlash(rel)
+			if d.IsDir() || !d.Type().IsRegular() {
+				return nil
+			}
+			if strings.Contains(pattern, "/") {
+				matched, err := path.Match(pattern, rel)
+				if err != nil {
+					return err
+				}
+				if !matched {
+					return nil
+				}
+			} else if rel != pattern && !strings.HasPrefix(rel, pattern+"/") {
+				return nil
+			}
+			data, err := os.ReadFile(p)
+			if err != nil {
+				return err
+			}
+			to := filepath.Join(dest, filepath.FromSlash(rel))
+			if err := os.MkdirAll(filepath.Dir(to), 0o755); err != nil {
+				return err
+			}
+			return os.WriteFile(to, data, 0o644)
+		})
+	}
+}
+
+// startupProviderFixture crea un "proveedor" en disco: una subcarpeta por
+// extensión con su extension.json.
+func startupProviderFixture(t *testing.T, exts map[string][3]string) string {
+	t.Helper()
+	root := t.TempDir()
+	for dir, spec := range exts {
+		full := filepath.Join(root, dir)
+		if err := os.MkdirAll(full, 0o755); err != nil {
+			t.Fatalf("MkdirAll %s: %v", dir, err)
+		}
+		writeStartupManifest(t, full, spec[0], spec[1], spec[2])
+	}
+	return root
+}
+
+// writeStartupManifest escribe el extension.json de una extensión del
+// "proveedor": id, nombre y versión dados.
+func writeStartupManifest(t *testing.T, dir, id, name, version string) {
+	t.Helper()
+	data, err := json.Marshal(ext.Manifest{ID: id, Name: name, Version: version})
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "extension.json"), data, 0o644); err != nil {
+		t.Fatalf("WriteFile extension.json: %v", err)
+	}
+}
+
+// pinStartupSources apunta el chequeo de arranque a un proveedor en disco y a
+// una raíz de extensiones temporal, y devuelve el Ext de esa raíz. Todo lo que
+// el arranque y el prompt usan queda aislado del HOME real y de la red.
+func pinStartupSources(t *testing.T, p ext.Provider, userRoot string) {
+	t.Helper()
+	oldSources, oldFetch, oldCheck := extensionUserSources, startupExtFetch, appStartupCheck
+	extensionUserSources = func() ([]ext.Provider, string, error) { return []ext.Provider{p}, userRoot, nil }
+	startupExtFetch = extFetchFake(p.Source)
+	appStartupCheck = detectStartupExtensions
+	t.Cleanup(func() {
+		extensionUserSources, startupExtFetch, appStartupCheck = oldSources, oldFetch, oldCheck
+	})
+}
+
+// startupScreen es la pantalla simulada con la respuesta del prompt YA en la
+// cola: tcell reinicializa la cola de eventos en cada Init (y NewAppWithScreen
+// inicializa la pantalla), así que la tecla tiene que inyectarse DESPUÉS de ese
+// Init —el proxy lo hace en el primer Init, que es el interno del constructor—.
+type startupScreen struct {
+	tcell.Screen
+	key  tcell.Key
+	r    rune
+	done bool
+}
+
+// Init inicializa la pantalla real y, solo la primera vez, inyecta la tecla de
+// la respuesta.
+func (s *startupScreen) Init() error {
+	if err := s.Screen.Init(); err != nil {
+		return err
+	}
+	if !s.done {
+		s.done = true
+		if sim, ok := s.Screen.(tcell.SimulationScreen); ok {
+			sim.InjectKey(s.key, s.r, tcell.ModNone)
+		}
+	}
+	return nil
+}
+
+// newStartupPromptApp arranca el editor sobre dir con la respuesta del prompt de
+// arranque ya encolada. El prompt corre un loop anidado de eventos DENTRO de
+// NewAppWithScreen, así que la tecla tiene que estar lista antes de que el
+// constructor llegue al prompt.
+func newStartupPromptApp(t *testing.T, dir string, key tcell.Key, r rune) *App {
+	t.Helper()
+	sim := tcell.NewSimulationScreen("UTF-8")
+	sim.SetSize(60, 12)
+	s := &startupScreen{Screen: sim, key: key, r: r}
+
+	app, err := NewAppWithScreen(s, dir)
+	if err != nil {
+		sim.Fini()
+		t.Fatalf("NewAppWithScreen falló: %v", err)
+	}
+	t.Cleanup(func() {
+		app.ws.CloseAll()
+		sim.Fini()
+	})
+	return app
+}
+
+// startupSetup arma el escenario del prompt: un proveedor "remoto" con dos
+// extensiones (una instalada en la versión vieja y otra sin instalar, que es la
+// novedad), y devuelve el App arrancado con la tecla dada en el prompt.
+func startupSetup(t *testing.T, key tcell.Key, r rune) (*App, string) {
+	t.Helper()
+	src := startupProviderFixture(t, map[string][3]string{
+		"linter": {"tcode.linter", "Linter", "1.0.0"},
+		"tema":   {"tcode.tema", "Tema", "2.0.0"},
+	})
+	if err := os.WriteFile(filepath.Join(src, "linter", "main.lua"), []byte("viejo\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile main.lua: %v", err)
+	}
+
+	userRoot := t.TempDir()
+	p := ext.Provider{Name: "remoto", Source: src, Approved: true}
+	if _, err := ext.InstallByID("tcode.linter", []ext.Provider{p}, userRoot, extFetchFake(src), nil); err != nil {
+		t.Fatalf("InstallByID: %v", err)
+	}
+	// El autor publica una versión nueva del linter: eso es la actualización.
+	writeStartupManifest(t, filepath.Join(src, "linter"), "tcode.linter", "Linter", "1.1.0")
+	if err := os.WriteFile(filepath.Join(src, "linter", "main.lua"), []byte("nuevo\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile main.lua nuevo: %v", err)
+	}
+
+	pinStartupSources(t, p, userRoot)
+	return newStartupPromptApp(t, t.TempDir(), key, r), userRoot
+}
+
+// TestStartupPromptAcceptAppliesUpdatesAndNews: respondiendo "s" al prompt de
+// arranque se aplican las actualizaciones Y las novedades: el editor arranca con
+// la versión nueva en disco y la extensión que faltaba instalada.
+func TestStartupPromptAcceptAppliesUpdatesAndNews(t *testing.T) {
+	app, userRoot := startupSetup(t, tcell.KeyRune, 's')
+
+	if !app.startupApplied {
+		t.Fatalf("el prompt aceptado tenía que aplicar; el mensaje dice %q", app.statusBar.Message())
+	}
+	if len(app.startupUpdates) != 1 || app.startupUpdates[0].Ref != "remoto/tcode.linter" {
+		t.Fatalf("actualizaciones detectadas = %+v, esperaba la del linter", app.startupUpdates)
+	}
+	if len(app.startupAvailable) != 1 || app.startupAvailable[0].ID != "tcode.tema" {
+		t.Fatalf("novedades detectadas = %+v, esperaba la del tema", app.startupAvailable)
+	}
+
+	// La actualización se aplicó de verdad (manifest y archivos).
+	linter := filepath.Join(userRoot, "remoto", "tcode.linter")
+	if got := readFile(t, filepath.Join(linter, "extension.json")); !strings.Contains(got, "1.1.0") {
+		t.Errorf("el manifest del linter sigue viejo: %s", got)
+	}
+	if got := readFile(t, filepath.Join(linter, "main.lua")); got != "nuevo\n" {
+		t.Errorf("los archivos del linter no se reemplazaron: %q", got)
+	}
+	// Y la novedad quedó instalada.
+	if _, err := os.Stat(filepath.Join(userRoot, "remoto", "tcode.tema", "extension.json")); err != nil {
+		t.Errorf("la novedad no se instaló: %v", err)
+	}
+	if msg := app.statusBar.Message(); !strings.Contains(msg, "1 actualización aplicada") || !strings.Contains(msg, "1 novedad instalada") {
+		t.Errorf("mensaje = %q, se esperaba el resumen de lo aplicado", msg)
+	}
+}
+
+// TestStartupPromptDenySkipsEverything: denegar omite las actualizaciones y las
+// novedades —no se toca el disco— y el aviso dice que se vuelve a preguntar al
+// próximo arranque (denegar no es "nunca más").
+func TestStartupPromptDenySkipsEverything(t *testing.T) {
+	app, userRoot := startupSetup(t, tcell.KeyRune, 'n')
+
+	if app.startupApplied {
+		t.Fatalf("denegar no tenía que aplicar nada; el mensaje dice %q", app.statusBar.Message())
+	}
+	linter := filepath.Join(userRoot, "remoto", "tcode.linter")
+	if got := readFile(t, filepath.Join(linter, "extension.json")); !strings.Contains(got, "1.0.0") {
+		t.Errorf("la actualización se aplicó pese a denegar: %s", got)
+	}
+	if got := readFile(t, filepath.Join(linter, "main.lua")); got != "viejo\n" {
+		t.Errorf("los archivos se reemplazaron pese a denegar: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(userRoot, "remoto", "tcode.tema")); !os.IsNotExist(err) {
+		t.Errorf("la novedad se instaló pese a denegar: %v", err)
+	}
+	if msg := app.statusBar.Message(); !strings.Contains(msg, "omitidas") || !strings.Contains(msg, "próximo arranque") {
+		t.Errorf("mensaje = %q, se esperaba el aviso de omisión", msg)
+	}
+}
+
+// TestStartupPromptDefaultsToNo: el rótulo es "[s/N]", así que cualquier tecla
+// que no sea un sí explícito —aquí Enter— omite. Un Enter a ciegas no puede
+// instalar nada.
+func TestStartupPromptDefaultsToNo(t *testing.T) {
+	app, userRoot := startupSetup(t, tcell.KeyEnter, 0)
+
+	if app.startupApplied {
+		t.Fatal("Enter no es un sí explícito: no debía aplicarse nada")
+	}
+	if got := readFile(t, filepath.Join(userRoot, "remoto", "tcode.linter", "extension.json")); !strings.Contains(got, "1.0.0") {
+		t.Errorf("la actualización se aplicó con Enter: %s", got)
+	}
+}
+
+// TestStartupPromptLabelCountsAndPlurals: la pregunta dice cuántos cambios se
+// van a aplicar (es lo único que el usuario tiene para decidir) y usa el plural
+// correcto, incluido el caso de una sola novedad.
+func TestStartupPromptLabelCountsAndPlurals(t *testing.T) {
+	cases := []struct {
+		updates, available int
+		want               string
+	}{
+		{1, 0, "Aplicar 1 actualización? [s/N] "},
+		{0, 1, "Aplicar 1 novedad? [s/N] "},
+		{2, 3, "Aplicar 2 actualizaciones y 3 novedades? [s/N] "},
+	}
+	for _, c := range cases {
+		if got := startupPromptLabel(c.updates, c.available); got != c.want {
+			t.Errorf("startupPromptLabel(%d, %d) = %q, esperaba %q", c.updates, c.available, got, c.want)
+		}
+	}
+}
+
+// TestStartupPromptWithoutChangesDoesNotBlock: sin actualizaciones ni novedades
+// no hay nada que preguntar: el arranque sigue solo, sin prompt.
+func TestStartupPromptWithoutChangesDoesNotBlock(t *testing.T) {
+	oldCheck := appStartupCheck
+	appStartupCheck = func() ([]ext.UpdateResult, []ext.AvailableExt, []error) { return nil, nil, nil }
+	t.Cleanup(func() { appStartupCheck = oldCheck })
+
+	dir := t.TempDir()
+	s := tcell.NewSimulationScreen("UTF-8")
+	if err := s.Init(); err != nil {
+		t.Fatalf("no se pudo inicializar la pantalla simulada: %v", err)
+	}
+	s.SetSize(40, 10)
+	app, err := NewAppWithScreen(s, dir)
+	if err != nil {
+		t.Fatalf("NewAppWithScreen sin novedades debe arrancar: %v", err)
+	}
+	t.Cleanup(func() {
+		app.ws.CloseAll()
+		s.Fini()
+	})
+	if app.startupApplied {
+		t.Fatal("sin nada que aplicar no debía aplicar nada")
+	}
+}
+
+// TestStartupPromptKeepsUnapprovedNewsPending: al aceptar, las novedades de un
+// proveedor SIN aprobar no se instalan —instalar desde una fuente sin confianza
+// es justo lo que exige confirmación— y el aviso las nombra para que el usuario
+// pueda aprobar ese proveedor. Las actualizaciones de lo ya instalado sí se
+// aplican: esa extensión salió de ahí.
+func TestStartupPromptKeepsUnapprovedNewsPending(t *testing.T) {
+	src := startupProviderFixture(t, map[string][3]string{
+		"linter": {"tcode.linter", "Linter", "1.0.0"},
+		"tema":   {"tcode.tema", "Tema", "2.0.0"},
+	})
+	userRoot := t.TempDir()
+	p := ext.Provider{Name: "remoto", Source: src, Approved: false}
+	approve := func(ext.Provider) bool { return true }
+	if _, err := ext.InstallByID("tcode.linter", []ext.Provider{p}, userRoot, extFetchFake(src), approve); err != nil {
+		t.Fatalf("InstallByID: %v", err)
+	}
+	writeStartupManifest(t, filepath.Join(src, "linter"), "tcode.linter", "Linter", "1.1.0")
+	pinStartupSources(t, p, userRoot)
+
+	app := newStartupPromptApp(t, t.TempDir(), tcell.KeyRune, 's')
+
+	if !app.startupApplied {
+		t.Fatalf("la actualización tenía que aplicarse; el mensaje dice %q", app.statusBar.Message())
+	}
+	if got := readFile(t, filepath.Join(userRoot, "remoto", "tcode.linter", "extension.json")); !strings.Contains(got, "1.1.0") {
+		t.Errorf("la actualización no se aplicó: %s", got)
+	}
+	if _, err := os.Stat(filepath.Join(userRoot, "remoto", "tcode.tema")); !os.IsNotExist(err) {
+		t.Errorf("una novedad de un proveedor sin aprobar no puede instalarse: %v", err)
+	}
+	msg := app.statusBar.Message()
+	if !strings.Contains(msg, "sin aprobar") || !strings.Contains(msg, "tcode.tema") {
+		t.Errorf("mensaje = %q, se esperaba la novedad pendiente nombrada", msg)
 	}
 }

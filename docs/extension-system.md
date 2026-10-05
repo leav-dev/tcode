@@ -121,6 +121,41 @@ propia extensión es el flujo normal). Un manifest inválido se rechaza sin toca
 nada. La extensión queda disponible en la **próxima sesión** (no hay recarga
 en caliente).
 
+### El prompt del arranque: actualizaciones y novedades
+
+Al abrir el editor, `tcode` revisa **antes** de cargar las extensiones y, si
+encuentra algo, **pregunta**:
+
+```
+Aplicar 1 actualización y 2 novedades? [s/N]
+```
+
+- **Qué cubre**: las dos cosas a la vez. `ext.CheckUpdates` detecta las
+  extensiones instaladas cuyo proveedor declara otra versión (sin tocar el
+  disco) y `ext.AvailableExtensions` detecta las que el proveedor ofrece y no
+  están instaladas. El usuario revisa todo y decide una vez.
+- **Cómo se responde**: `s` (o `y`) aplica; cualquier otra tecla —`Enter`,
+  `Escape`, `n`— omite. El default es **NO**, así que nada se instala sin un sí
+  explícito. El prompt vive en la barra de estado y se atiende con un **loop
+  anidado de eventos** (como el menú de configuración, pero antes del loop
+  principal).
+- **Denegar es por esta vez**: la decisión no se persiste, así que el próximo
+  arranque vuelve a preguntar.
+- **Qué pasa al aceptar**: se aplican las actualizaciones (`ext.UpdateAll`) y
+  las novedades de los proveedores **aprobados** (`ext.InstallAvailable`), y
+  el mismo arranque las carga: el prompt va **antes** de `loadExtensions` a
+  propósito, porque `Manager.AddExtensions` no es idempotente (appendea a los
+  estados del manager y el registro rechaza el segundo registro).
+- **Novedades sin aprobar**: no se instalan (instalar desde una fuente sin
+  confianza es lo que exige confirmación) y se nombran en la barra agrupadas
+  por proveedor, con el comando `--approve-provider <nombre>` para destrabarlas.
+- **Nunca impide arrancar**: sin cambios no hay prompt; un proveedor caído se
+  avisa en la barra y el editor abre igual con lo que ya está instalado.
+
+> El chequeo vivía en `main.go` y se ejecutaba antes de abrir la TUI, así que
+> solo se veía por stdout y las extensiones se aplicaban en silencio. Hoy corre
+> dentro del controller, que es donde se puede preguntar y mostrar.
+
 > El comando clásico sin `script`/`fn` sigue siendo un stub "sin implementación":
 > dale lógica declarándole la función Lua (sección de arriba).
 
