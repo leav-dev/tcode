@@ -82,9 +82,10 @@ func TestTypingWideCharacterAdvancesByItsWidth(t *testing.T) {
 	}
 
 	draw(v, s)
-	// El cursor tiene que quedar en la columna 2, no en la 1: '日' ocupa dos celdas.
-	if x, _, _ := s.GetCursor(); x != 2 {
-		t.Fatalf("cursor en columna %d, se esperaba 2", x)
+	// El cursor tiene que quedar en la columna 4, no en la 3: '日' ocupa dos
+	// celdas y el texto arranca tras el gutter de 2 columnas.
+	if x, _, _ := s.GetCursor(); x != 4 {
+		t.Fatalf("cursor en columna %d, se esperaba 4", x)
 	}
 }
 
@@ -155,8 +156,9 @@ func TestTabInsertsIndentUnit(t *testing.T) {
 	}
 
 	draw(v, s)
-	// 'a' en la columna 0, los espacios de indentUnit, 'b' al final de ellos.
-	want := "a" + indentUnit + "b"
+	// 'a' tras el gutter en la columna 0 del texto, los espacios de indentUnit,
+	// 'b' al final de ellos.
+	want := "1 " + "a" + indentUnit + "b"
 	if got := screenLines(s)[0]; got != want {
 		t.Fatalf("pantalla = %q, se esperaba %q", got, want)
 	}

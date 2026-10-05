@@ -23,7 +23,7 @@ type Viewport struct {
 	TopLine    int // Primera línea lógica visible
 	LeftColumn int // Primera columna lógica visible (scroll horizontal)
 	Height     int // Alto en filas de la terminal
-	Width      int // Ancho en columnas de la terminal
+	Width      int // Ancho del ÁREA DE TEXTO en columnas (sin el gutter)
 }
 
 // Cursor es la posición de edición en coordenadas lógicas.
@@ -52,6 +52,11 @@ type EditorView struct {
 	// theme es la paleta por rol del editor; el valor cero usa la default.
 	// El controller la inyecta con SetTheme tras cargar ~/.tcode/theme.json.
 	theme Theme
+
+	// diagnostics anota las líneas del buffer (el proveedor es el backend de
+	// scripting): el draw pinta el marcador de severidad en el gutter y el
+	// subrayado de la línea anotada.
+	diagnostics []Diagnostic
 
 	// visCache es la última (línea lógica, fila visual global) computada por
 	// visualRowOfLine: el movimiento secuencial del cursor evita re-sumar las
@@ -134,19 +139,33 @@ func (v *EditorView) themeOrDefault() Theme {
 }
 
 func NewEditorView(m *model.PieceTable, height, width int) *EditorView {
-	return &EditorView{
+	v := &EditorView{
 		model: m,
 		viewport: Viewport{
 			Height: height,
 			Width:  width,
 		},
 	}
+	// width es el ancho total del widget; el área de texto pierde el gutter.
+	v.viewport.Width = v.textWidth(width)
+	return v
 }
 
-// Resize actualiza las dimensiones del viewport cuando cambia la terminal.
+// textWidth descuenta el gutter de un ancho total de widget, con un mínimo de
+// 1 columna de texto: un widget demasiado angosto nunca deja 0 columnas.
+func (v *EditorView) textWidth(width int) int {
+	if w := width - v.gutterWidth(); w >= 1 {
+		return w
+	}
+	return 1
+}
+
+// Resize actualiza las dimensiones del viewport cuando cambia la terminal. El
+// ancho recibido es el TOTAL del widget: el área de texto (lo que ve el wrap
+// y el clip) descuenta el gutter.
 func (v *EditorView) Resize(width, height int) {
 	if width > 0 {
-		v.viewport.Width = width
+		v.viewport.Width = v.textWidth(width)
 	}
 	if height > 0 {
 		v.viewport.Height = height
@@ -155,9 +174,9 @@ func (v *EditorView) Resize(width, height int) {
 	v.ensureCursorVisible()
 }
 
-// Size devuelve el ancho y el alto del área de dibujo de esta vista, en celdas
-// de terminal. Es la geometría con la que la vista está dibujando ahora mismo,
-// que puede no coincidir con la de la pantalla si todavía no se redimensionó.
+// Size devuelve el ancho y el alto del ÁREA DE TEXTO (sin el gutter), en
+// celdas de terminal. Es la geometría con la que la vista envuelve y recorta
+// el texto ahora mismo; el widget total mide Size() + gutterWidth().
 func (v *EditorView) Size() (int, int) {
 	return v.viewport.Width, v.viewport.Height
 }
@@ -326,6 +345,12 @@ func (v *EditorView) breakTypingGroup() { v.model.BreakTypingGroup() }
 // moveCursorToCell mueve el cursor a la celda de pantalla indicada. Es el hit
 // testing del mouse: convierte (x, y) en (línea, byte) con el ancho real.
 func (v *EditorView) moveCursorToCell(x, y int) bool {
+	// El clic sobre el gutter (números y marcadores) no selecciona: no toca ni
+	// el cursor ni el grupo de tipeo.
+	if x < v.gutterWidth() {
+		return false
+	}
+
 	v.breakTypingGroup()
 	// Con wrap, la fila física puede ser un corte de una línea envuelta: se
 	// traduce a (línea lógica, fila dentro de la línea) y de ahí al byte.
@@ -335,7 +360,8 @@ func (v *EditorView) moveCursorToCell(x, y int) bool {
 	}
 
 	content := v.model.LineContent(line)
-	colVis := x + v.viewport.LeftColumn
+	// x viene en coordenadas de pantalla: la columna del texto resta el gutter.
+	colVis := x - v.gutterWidth() + v.viewport.LeftColumn
 	var col int
 	if wordWrapEnabled && v.viewport.Width > 0 {
 		col = softLineToByte(string(content), v.viewport.Width, rowInLine, colVis)
@@ -608,18 +634,19 @@ func (v *EditorView) Draw(s Surface) {
 		isCursorLine := line == cursorLine
 
 		if wordWrapEnabled && v.viewport.Width > 0 {
-			// Las filas visuales de la línea: cada una en su propia fila física.
-			for _, sl := range softLines(text, v.viewport.Width) {
+			// Las filas visuales de la línea: cada una en su propia fila física;
+			// solo la primera fila lleva el número de línea en el gutter.
+			for i, sl := range softLines(text, v.viewport.Width) {
 				if row >= v.viewport.Height {
 					break
 				}
-				v.drawSoftLine(s, th, hl, text, content, sl, row, isCursorLine)
+				v.drawSoftLine(s, th, hl, line, text, content, sl, row, isCursorLine, i == 0)
 				row++
 			}
 			continue
 		}
 
-		v.drawLineUnwrapped(s, th, hl, text, content, row, isCursorLine)
+		v.drawLineUnwrapped(s, th, hl, line, text, content, row, isCursorLine)
 		row++
 	}
 
@@ -630,13 +657,16 @@ func (v *EditorView) Draw(s Surface) {
 // física row. text es la copia de la línea (los clusters son substrings suyos,
 // seguros para tcell); content es la vista del modelo solo para calcular roles
 // (nunca se retiene).
-func (v *EditorView) drawSoftLine(s Surface, th Theme, hl *highlighter, text string, content []byte, sl softLine, row int, cursorLine bool) {
+func (v *EditorView) drawSoftLine(s Surface, th Theme, hl *highlighter, line int, text string, content []byte, sl softLine, row int, cursorLine bool, firstRow bool) {
+	gutter := v.gutterWidth()
+	v.drawGutter(s, th, line, row, firstRow)
+	_, hasDiag := v.diagAt(line)
 	col := 0
 	g := uniseg.NewGraphemes(sl.text)
 	for g.Next() {
 		cl := g.Str()
 		from, _ := g.Positions()
-		if cl == "" {
+		if cl == "\r" {
 
 			col = 0 // retorno de carro aislado: vuelve al inicio de la misma fila
 			continue
@@ -645,13 +675,17 @@ func (v *EditorView) drawSoftLine(s Surface, th Theme, hl *highlighter, text str
 		if w <= 0 {
 			continue // combinante huérfano: sin celda propia
 		}
-		x := col - v.viewport.LeftColumn
-		// Solo se dibuja un cluster que entre completo; las tabulaciones no se
-		// dibujan (la pantalla ya viene limpia).
-		if x >= 0 && x+w <= v.viewport.Width && cl != "\t" {
+		x := col - v.viewport.LeftColumn + gutter
+		// Solo se dibuja un cluster que entre completo EN EL ÁREA DE TEXTO (a
+		// la derecha del gutter); las tabulaciones no se dibujan (el fondo ya
+		// viene pintado).
+		if x >= gutter && x+w <= v.viewport.Width+gutter && cl != "\t" {
 			st := th.StyleForRole(hl.styleAt(content, sl.in+from))
 			if cursorLine {
 				st = st.Background(th.CursorLineBg) // la línea del cursor: toda su fila
+			}
+			if hasDiag {
+				st = st.Underline(true) // la línea anotada: subrayada
 			}
 			s.Put(x, row, cl, st)
 		}
@@ -661,13 +695,16 @@ func (v *EditorView) drawSoftLine(s Surface, th Theme, hl *highlighter, text str
 
 // drawLineUnwrapped pinta la línea lógica completa en una fila física (sin
 // wrap): el cluster que no entra se corta contra el borde, como siempre.
-func (v *EditorView) drawLineUnwrapped(s Surface, th Theme, hl *highlighter, text string, content []byte, row int, cursorLine bool) {
+func (v *EditorView) drawLineUnwrapped(s Surface, th Theme, hl *highlighter, line int, text string, content []byte, row int, cursorLine bool) {
+	gutter := v.gutterWidth()
+	v.drawGutter(s, th, line, row, true)
+	_, hasDiag := v.diagAt(line)
 	col := 0
 	g := uniseg.NewGraphemes(text)
 	for g.Next() {
 		cl := g.Str()
 		from, _ := g.Positions()
-		if cl == "" {
+		if cl == "\r" {
 
 			col = 0 // retorno de carro aislado: vuelve al inicio de la misma fila
 			continue
@@ -676,13 +713,17 @@ func (v *EditorView) drawLineUnwrapped(s Surface, th Theme, hl *highlighter, tex
 		if w <= 0 {
 			continue
 		}
-		x := col - v.viewport.LeftColumn
-		// Solo se dibuja un cluster que entre completo; las tabulaciones no se
-		// dibujan (la pantalla ya viene limpia).
-		if x >= 0 && x+w <= v.viewport.Width && cl != "\t" {
+		x := col - v.viewport.LeftColumn + gutter
+		// Solo se dibuja un cluster que entre completo EN EL ÁREA DE TEXTO (a
+		// la derecha del gutter); las tabulaciones no se dibujan (el fondo ya
+		// viene pintado).
+		if x >= gutter && x+w <= v.viewport.Width+gutter && cl != "\t" {
 			st := th.StyleForRole(hl.styleAt(content, from))
 			if cursorLine {
 				st = st.Background(th.CursorLineBg)
+			}
+			if hasDiag {
+				st = st.Underline(true) // la línea anotada: subrayada
 			}
 			s.Put(x, row, cl, st)
 		}
@@ -707,7 +748,9 @@ func (v *EditorView) drawCursor(s Surface) {
 		return
 	}
 
-	s.ShowCursor(col, row)
+	// La columna de pantalla del cursor suma el gutter: el texto vive después
+	// de la columna de números.
+	s.ShowCursor(col+v.gutterWidth(), row)
 }
 
 // --- eventos ---

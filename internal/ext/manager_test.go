@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
+	"tcode/internal/view"
 )
 
 const hookExt = `{
@@ -305,10 +306,13 @@ func TestManagerRunsDeclaredCommandWithScript(t *testing.T) {
 // script que se invoca a sí mismo vía tcode.command.
 type forwardAPI struct{ m *Manager }
 
-func (a *forwardAPI) RunCommand(id string) error           { return a.m.RunCommand(id) }
-func (a *forwardAPI) ActiveBuffer() (string, string, bool) { return "", "", false }
-func (a *forwardAPI) InsertAtCursor(text string) error     { return nil }
-func (a *forwardAPI) StatusMessage(msg string)             {}
+func (a *forwardAPI) RunCommand(id string) error               { return a.m.RunCommand(id) }
+func (a *forwardAPI) ActiveBuffer() (string, string, bool)     { return "", "", false }
+func (a *forwardAPI) InsertAtCursor(text string) error         { return nil }
+func (a *forwardAPI) StatusMessage(msg string)                 {}
+func (a *forwardAPI) LineCount() (int, bool)                   { return 0, false }
+func (a *forwardAPI) Line(n int) (string, bool)                { return "", false }
+func (a *forwardAPI) SetDiagnostics(d []view.Diagnostic) error { return nil }
 
 // TestManagerScriptReentryGuard: un script que invoca tcode.command sobre su
 // propio comando (o cualquier comando con script) no puede re-entrar en

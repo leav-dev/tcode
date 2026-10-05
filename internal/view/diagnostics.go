@@ -1,0 +1,124 @@
+package view
+
+import (
+	"strconv"
+
+	"github.com/gdamore/tcell/v2"
+)
+
+// Severity es el nivel de un diagnóstico: lo que decide el color del marcador
+// del gutter (y, en el hito siguiente, el del subrayado de la línea anotada).
+type Severity int
+
+const (
+	SeverityInfo Severity = iota
+	SeverityWarning
+	SeverityError
+)
+
+// Diagnostic anota una línea del buffer con un mensaje y una severidad. Las
+// anotaciones solo decoran el dibujo y alimentan el mensaje de la barra de
+// estado; nunca editan el documento.
+type Diagnostic struct {
+	Line     int // línea lógica (0-indexada)
+	Message  string
+	Severity Severity
+}
+
+// SetDiagnostics reemplaza las anotaciones del buffer. El proveedor es el
+// backend de scripting: un analizador deposita acá el diagnóstico de cada
+// línea y el editor lo pinta en el próximo redibujo (el draw consulta siempre
+// el buffer activo, así que el reemplazo es inmediato).
+func (v *EditorView) SetDiagnostics(d []Diagnostic) {
+	v.diagnostics = d
+}
+
+// Diagnostics devuelve la lista de anotaciones actuales del editor (la misma
+// del último SetDiagnostics). Es el acceso de lectura de la integración: el
+// backend de scripting escribe con SetDiagnostics y este getter le permite al
+// controlador (y a sus tests) verificar lo depositado.
+func (v *EditorView) Diagnostics() []Diagnostic {
+	return v.diagnostics
+}
+
+// diagAt devuelve el diagnóstico de la línea, priorizando la severidad
+// (Error > Warning > Info) y, con empate, el primero de la lista. false si la
+// línea no está anotada.
+func (v *EditorView) diagAt(line int) (Diagnostic, bool) {
+	best, found := Diagnostic{}, false
+	for _, d := range v.diagnostics {
+		if d.Line == line && (!found || d.Severity > best.Severity) {
+			best, found = d, true
+		}
+	}
+	return best, found
+}
+
+// DiagAtCursor devuelve el diagnóstico de la línea del cursor. Es lo que el
+// controlador consulta para el mensaje de la barra de estado.
+func (v *EditorView) DiagAtCursor() (Diagnostic, bool) {
+	return v.diagAt(v.cursor.Line)
+}
+
+// digitsOf devuelve la cantidad de dígitos decimales de n, con mínimo 1: 0 y 9
+// devuelven 1, 10 y 99 devuelven 2, 100 devuelve 3.
+func digitsOf(n int) int {
+	d := 1
+	for n >= 10 {
+		n /= 10
+		d++
+	}
+	return d
+}
+
+// gutterWidth devuelve el ancho de la columna de números de línea: los dígitos
+// del total de líneas del buffer (mínimo 1) más 1 columna de separador/
+// marcador. Es estable por buffer: solo cambia cuando el LineCount crece de
+// dígitos (1→9, 10→99, ...), nunca por editar el contenido.
+func (v *EditorView) gutterWidth() int {
+	return digitsOf(v.model.LineCount()) + 1
+}
+
+// drawGutter pinta la columna de números (0..gutterWidth-1) de la fila física
+// row. El número de línea solo va en la primera fila visual de la línea lógica
+// (firstRow); las filas de continuación (wrap) dejan la posición en blanco y
+// conservan el fondo del gutter que ya pintó el relleno de Draw. La última
+// celda del gutter es la del separador y, cuando la línea está anotada, lleva
+// el marcador de severidad: '!' Error, '?' Warning, 'i' Info, siempre con el
+// color de su rol del tema sobre el fondo del documento.
+func (v *EditorView) drawGutter(s Surface, th Theme, line, row int, firstRow bool) {
+	if !firstRow {
+		return
+	}
+	gutter := v.gutterWidth()
+	digits := gutter - 1
+	st := th.Gutter.Background(th.docBg())
+
+	// Número (line+1) alineado a la derecha en sus columnas de dígitos; las
+	// celdas de alineación ya vienen pintadas por el relleno de Draw.
+	num := strconv.Itoa(line + 1)
+	x := digits - len(num)
+	if x < 0 {
+		x = 0 // fuera de rango imposible: line+1 nunca excede al LineCount
+	}
+	for _, r := range num {
+		s.SetContent(x, row, r, nil, st)
+		x++
+	}
+
+	if d, ok := v.diagAt(line); ok {
+		var mark rune
+		var ms tcell.Style
+		switch d.Severity {
+		case SeverityError:
+			mark, ms = '!', th.DiagError
+		case SeverityWarning:
+			mark, ms = '?', th.DiagWarning
+		default:
+			mark, ms = 'i', th.DiagInfo
+		}
+		s.SetContent(gutter-1, row, mark, nil, ms.Background(th.docBg()))
+		return
+	}
+	s.SetContent(gutter-1, row, ' ', nil, st)
+}

@@ -646,6 +646,41 @@ func (a *App) InsertAtCursor(text string) error {
 // StatusMessage muestra msg en la barra de estado (ScriptAPI).
 func (a *App) StatusMessage(msg string) { a.statusBar.SetMessage(msg) }
 
+// LineCount devuelve la cantidad de líneas del buffer activo (ScriptAPI);
+// sin buffer activo, ok=false, como ActiveBuffer.
+func (a *App) LineCount() (int, bool) {
+	buf := a.activeBuffer()
+	if buf == nil {
+		return 0, false
+	}
+	return buf.LineCount(), true
+}
+
+// Line devuelve el texto de la línea n (0-indexada) del buffer activo
+// (ScriptAPI); sin buffer activo o con n fuera de [0, LineCount), ok=false.
+// El modelo no copia la línea: LineContent la extrae del PieceTable.
+func (a *App) Line(n int) (string, bool) {
+	buf := a.activeBuffer()
+	if buf == nil || n < 0 || n >= buf.LineCount() {
+		return "", false
+	}
+	return string(buf.LineContent(n)), true
+}
+
+// SetDiagnostics reemplaza las anotaciones del buffer activo (ScriptAPI): el
+// backend de scripting es el proveedor de diagnostics y deposita acá lo que el
+// HITO A renderiza. Sin buffer activo, error legible como el resto de la API.
+// Límite del hito: un hook de onDidSaveBuffer corre "en el contexto del
+// activo", así que el buffer anotado es el activo al momento del set.
+func (a *App) SetDiagnostics(d []view.Diagnostic) error {
+	ed := a.activeEditor()
+	if ed == nil {
+		return errors.New("sin buffer activo")
+	}
+	ed.SetDiagnostics(d)
+	return nil
+}
+
 // emitEvent despacha un evento de buffer al manager de extensiones y muestra
 // el último error de hook en la barra de estado. Un hook roto nunca rompe el
 // editor: solo avisa.
@@ -713,6 +748,37 @@ func (a *App) syncStatus() {
 		return
 	}
 	a.statusBar.SetFile(buf.Path(), buf.Modified())
+}
+
+// syncDiagStatus refleja el diagnóstico de la línea del cursor en la barra de
+// estado: "línea N: mensaje (severidad)". El diag comparte el canal de mensaje
+// transitorio —se muestra al mover el cursor y desaparece al salir de la línea
+// anotada—, por eso este path limpia el mensaje cuando la línea activa no tiene
+// diagnóstico. Se invoca después de cada tecla que el editor manejó (el mouse
+// del editor queda para un hito posterior).
+func (a *App) syncDiagStatus() {
+	ed := a.activeEditor()
+	if ed == nil {
+		return
+	}
+	if d, ok := ed.DiagAtCursor(); ok {
+		a.statusBar.SetMessage(fmt.Sprintf("línea %d: %s (%s)", d.Line+1, d.Message, diagSeverityName(d.Severity)))
+		return
+	}
+	a.statusBar.ClearMessage()
+}
+
+// diagSeverityName nombra la severidad de un diagnóstico para el mensaje de la
+// barra de estado.
+func diagSeverityName(sev view.Severity) string {
+	switch sev {
+	case view.SeverityError:
+		return "error"
+	case view.SeverityWarning:
+		return "advertencia"
+	default:
+		return "info"
+	}
 }
 
 // Run ejecuta el loop de eventos hasta que el usuario cierra el editor.
@@ -1045,6 +1111,7 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		a.statusBar.ClearMessage()
 		if ed := a.activeEditor(); ed != nil && ed.HandleEvent(ev) {
 			a.redraw()
+			a.syncDiagStatus()
 		}
 
 	case *tcell.EventMouse:

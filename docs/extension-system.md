@@ -58,7 +58,33 @@ siempre); solo cambia la implementación. El host expone la tabla global
 | `tcode.command(id)` | Ejecuta un comando registrado (`tcode.*` u otros). Un script que se llama a sí mismo corta con un guard de recursión (máx 8). |
 | `tcode.buffer()` | Devuelve `{path, content, ok}` del buffer activo (`ok=false` sin buffer). `content` es el documento completo (límite del hito 1). |
 | `tcode.insert(text)` | Inserta `text` en la posición del cursor del buffer activo. |
+| `tcode.lineCount()` / `tcode.line(n)` | Líneas del buffer activo y su contenido por línea (`n` 1-indexado; errores "sin buffer activo"/"línea fuera de rango"). |
+| `tcode.diagnostics.set(lista)` / `tcode.diagnostics.clear()` | Reemplaza las **anotaciones** del buffer activo: lista de `{line, message, severity}` (severidad `error`\|`warning`\|`info`, default `error`; un elemento inválido aborta todo). |
 | `tcode.message(msg)` | Muestra un mensaje en la barra de estado. |
+
+### Ejemplo: un mini-linter con diagnostics
+
+`extension.json` con el comando `linter.marcar` (script+fn), keybinding y hook
+`onDidSaveBuffer` → el script marca las líneas con `TODO`:
+
+```lua
+function marcar()
+  local n = tcode.lineCount()
+  local diags = {}
+  for i = 1, n do
+    if string.find(tcode.line(i), "TODO") then
+      table.insert(diags, { line = i, message = "todo pendiente", severity = "warning" })
+    end
+  end
+  tcode.diagnostics.set(diags)
+end
+```
+
+El editor pinta el diagnóstico en el **gutter** (marcador `!`/`?`/`i` según la
+severidad), subraya la línea anotada y muestra el mensaje en la barra de
+estado cuando el cursor está sobre ella. Límite del hito: las anotaciones van
+al **buffer activo** del momento; el hook `onDidSaveBuffer` anota el activo,
+no necesariamente el guardado.
 
 Errores del script (Lua o del puente) → mensaje en la barra de estado, nunca
 rompen el editor. El runtime solo abre las librerías base/tabla/string/math

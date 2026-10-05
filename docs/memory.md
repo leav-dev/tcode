@@ -26,6 +26,12 @@ Este archivo registra las decisiones arquitectónicas clave, cambios estructural
   checkout de rama choca con el mmap de tcode corriendo.
 
 ## 3. Registro de Cambios (Changelog de Memoria)
+- *2026-10-04 (sesión 10):* **Diagnostics: anotaciones por buffer + gutter de números de línea** (`odd/tasks/diagnostics.md`). El usuario pidió anotaciones {línea, mensaje, severidad} con render mínimo — y notó que el editor ni siquiera tenía números de línea. 
+  - **Hito A (render):** `view.Diagnostic{Line, Message, Severity}` (Info/Warning/Error) en el EditorView (`SetDiagnostics`); **gutter de números de línea** (ancho por dígitos del LineCount + separador; el texto se desplaza y el hit-testing del mouse descuenta la columna), marcador de severidad `!`/`?`/`i`; underline de las líneas anotadas (mantiene la sintaxis); el mensaje "línea N: msg (severidad)" en la barra cuando el cursor está en una línea anotada (`syncDiagStatus` en el path de teclas del editor). Roles de tema nuevos `gutter`/`diagError`/`diagWarning`/`diagInfo` en las 6 paletas + claves JSON.
+  - **Hito B (proveedor Lua):** `tcode.lineCount()`/`tcode.line(n)` (1-indexado→0), `tcode.diagnostics.set(lista)`/`clear()` (severidad ausente→Error default, desconocida→error Lua; todo-o-nada); ScriptAPI gana LineCount/Line/SetDiagnostics (App implementa, límite documentado: anota el buffer ACTIVO). Ejemplo en docs: mini-linter que marca líneas con TODO.
+  - **Decisión de render:** el color de severidad vive en el marcador del gutter y el mensaje; el texto solo se subraya (no pisa la sintaxis). El gutter SIEMPRE presente (números de línea como base).
+  - **Churn de tests:** agregar la columna del gutter movió ~44 asserts de posición en `view_test`/`controller` — ajustados sin cambiar semántica.
+  - **Deuda detectada por el worker:** `softLines` (wrap.go) entra en bucle infinito con área de texto de 1 columna — no alcanzable hoy (editor ≥ 16 cols), arreglar wrap.go cuando haya panes angostos.
 
 - *2026-10-04 (sesión 8):* **Tanda reciente — todos en `main`, sin push.**
   - **Instalador de extensiones por CLI** (`ad116df`): `tcode --install-extension

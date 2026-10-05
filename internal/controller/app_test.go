@@ -380,8 +380,9 @@ func TestUndoPlacesTheCursorAtTheChange(t *testing.T) {
 	if !visible {
 		t.Fatal("el cursor debe quedar visible")
 	}
-	if x != 3 || y != 2 {
-		t.Fatalf("cursor en (%d,%d), se esperaba (3,2): el final de \"dos\" en la fila del editor", x, y)
+	// La columna 3 de \ "dos\ " vive en la celda gutterWidth+3 (gutter de 2).
+	if x != 5 || y != 2 {
+		t.Fatalf("cursor en (%d,%d), se esperaba (5,2): el final de \"dos\" en la fila del editor", x, y)
 	}
 }
 
@@ -901,8 +902,10 @@ func TestResizeUpdatesEveryEditor(t *testing.T) {
 		if ed == nil {
 			t.Fatalf("la vista de %v es nil", buf)
 		}
-		if w, h := ed.Size(); w != 30 || h != 3 {
-			t.Fatalf("la vista de %v quedó con %dx%d, se esperaba 30x3", buf, w, h)
+		// El área de texto descuenta el gutter (2 columnas para buffers de 1
+		// línea): 30 de widget → 28 de texto.
+		if w, h := ed.Size(); w != 28 || h != 3 {
+			t.Fatalf("la vista de %v quedó con %dx%d, se esperaba 28x3", buf, w, h)
 		}
 	}
 }
@@ -1359,18 +1362,18 @@ func TestRedrawComposesTabsAboveTheEditor(t *testing.T) {
 	app.redraw()
 
 	// El primer carácter de la etiqueta de la pestaña ("doc.txt" → 'd') va en
-	// (0,0); el primer carácter del documento va en (0,1), la primera fila del
-	// editor.
+	// (0,0); el primer carácter del documento vive tras el gutter de 2
+	// columnas en (2,1), la primera fila del editor.
 	if got := cellRune(app, 0, 0); got != 'd' {
 		t.Fatalf("(0,0) = %q, se esperaba 'd' (inicio de la pestaña)", got)
 	}
-	if got := cellRune(app, 0, 1); got != 'u' {
-		t.Fatalf("(0,1) = %q, se esperaba 'u' (inicio del documento)", got)
+	if got := cellRune(app, 2, 1); got != 'u' {
+		t.Fatalf("(2,1) = %q, se esperaba 'u' (inicio del documento tras el gutter)", got)
 	}
 
 	sim := app.screen.(tcell.SimulationScreen)
-	if x, y, vis := sim.GetCursor(); !vis || x != 0 || y != 1 {
-		t.Fatalf("cursor = (%d,%d,vis=%v), se esperaba (0,1,true)", x, y, vis)
+	if x, y, vis := sim.GetCursor(); !vis || x != 2 || y != 1 {
+		t.Fatalf("cursor = (%d,%d,vis=%v), se esperaba (2,1,true)", x, y, vis)
 	}
 }
 
@@ -1380,7 +1383,8 @@ func TestRedrawComposesTabsAboveTheEditor(t *testing.T) {
 func TestMouseClickIsTranslatedPastTheTabBar(t *testing.T) {
 	app, _ := newTestApp(t, "uno\ndos\ntres")
 
-	app.handleEvent(tcell.NewEventMouse(0, 2, tcell.Button1, tcell.ModNone))
+	// La columna 2 es la primera celda de texto (tras el gutter de la vista).
+	app.handleEvent(tcell.NewEventMouse(2, 2, tcell.Button1, tcell.ModNone))
 	typeRune(app, 'X')
 
 	if got := app.ws.Active().GetContent(); got != "uno\nXdos\ntres" {
@@ -1615,12 +1619,12 @@ func TestStartupWithFileArgumentKeepsTheExplorerHidden(t *testing.T) {
 		t.Fatal("el explorador debe arrancar oculto con un archivo como argumento")
 	}
 
-	// El documento arranca en (0,1): el panel oculto no desplaza nada y la
-	// geometría de los tests existentes se conserva.
+	// El documento arranca en (2,1): el panel oculto no desplaza nada salvo el
+	// gutter de la vista del editor.
 	resizeApp(app, 24, 6)
 	app.redraw()
-	if got := cellRune(app, 0, 1); got != 'c' {
-		t.Fatalf("(0,1) = %q, se esperaba 'c' (el inicio del documento)", got)
+	if got := cellRune(app, 2, 1); got != 'c' {
+		t.Fatalf("(2,1) = %q, se esperaba 'c' (el inicio del documento tras el gutter)", got)
 	}
 }
 
@@ -1674,8 +1678,9 @@ func TestCtrlBTogglesTheExplorer(t *testing.T) {
 	// EXISTENTES, así que la vista tiene que existir primero.
 	app.redraw()
 	ed := app.activeEditor()
-	if w, _ := ed.Size(); w != 80 {
-		t.Fatalf("la vista del editor = %d columnas, se esperaba 80 (panel oculto)", w)
+	// Size() es el área de texto: descuenta el gutter (2 para 1 línea).
+	if w, _ := ed.Size(); w != 78 {
+		t.Fatalf("la vista del editor = %d columnas de texto, se esperaba 78 (80 de widget - gutter, panel oculto)", w)
 	}
 
 	if quit := press(app, tcell.KeyCtrlB); quit {
@@ -1687,12 +1692,13 @@ func TestCtrlBTogglesTheExplorer(t *testing.T) {
 	if !app.explorerFocused {
 		t.Fatal("al mostrar, el foco debe ir al explorador")
 	}
-	// El editor conserva 80-24 columnas y el documento arranca en la columna 24.
-	if w, h := ed.Size(); w != 56 || h != 6 {
-		t.Fatalf("vista del editor = %dx%d, se esperaba 56x6", w, h)
+	// El editor conserva 80-24 columnas de widget; el área de texto descuenta
+	// el gutter y el documento arranca en la columna del panel + gutter.
+	if w, h := ed.Size(); w != 54 || h != 6 {
+		t.Fatalf("vista del editor = %dx%d, se esperaba 54x6", w, h)
 	}
-	if got := cellRune(app, 24, 1); got != 'u' {
-		t.Fatalf("(24,1) = %q, se esperaba 'u': el documento desplazado por el panel", got)
+	if got := cellRune(app, 26, 1); got != 'u' {
+		t.Fatalf("(26,1) = %q, se esperaba 'u': el documento desplazado por el panel y el gutter", got)
 	}
 
 	if quit := press(app, tcell.KeyCtrlB); quit {
@@ -1704,11 +1710,11 @@ func TestCtrlBTogglesTheExplorer(t *testing.T) {
 	if app.explorerFocused {
 		t.Fatal("al ocultar, el explorador debe desenfocarse")
 	}
-	if w, _ := ed.Size(); w != 80 {
-		t.Fatalf("la vista del editor = %d columnas tras ocultar, se esperaba 80", w)
+	if w, _ := ed.Size(); w != 78 {
+		t.Fatalf("la vista del editor = %d columnas de texto tras ocultar, se esperaba 78", w)
 	}
-	if got := cellRune(app, 0, 1); got != 'u' {
-		t.Fatalf("(0,1) = %q, se esperaba 'u': el documento de vuelta en la columna 0", got)
+	if got := cellRune(app, 2, 1); got != 'u' {
+		t.Fatalf("(2,1) = %q, se esperaba 'u': el documento de vuelta tras el gutter", got)
 	}
 }
 
@@ -2391,8 +2397,9 @@ func TestMouseClickInTheEditorIsTranslatedPastThePanel(t *testing.T) {
 	resizeApp(app, 80, 8)
 	press(app, tcell.KeyCtrlB) // mostrar el panel: el editor arranca en x=24
 
-	// Pantalla (25, 2): el editor recibe (1, 1) — línea 1, columna 1 de "dos".
-	app.handleEvent(tcell.NewEventMouse(25, 2, tcell.Button1, tcell.ModNone))
+	// Pantalla (27, 2): el editor recibe (3, 1) — línea 1, columna 1 de "dos"
+	// (3 = gutter de 2 + columna 1 del texto).
+	app.handleEvent(tcell.NewEventMouse(27, 2, tcell.Button1, tcell.ModNone))
 	typeRune(app, 'X')
 
 	if got := app.ws.Active().GetContent(); got != "uno\ndXos\ntres" {
@@ -2752,5 +2759,28 @@ func TestSaveAsPromptOwnsTheMouse(t *testing.T) {
 	}
 	if !app.promptActive {
 		t.Fatal("el clic no debe cerrar el pedido")
+	}
+}
+
+// TestDiagMessageShowsInStatusBar: el diagnóstico de la línea del cursor se
+// refleja en la barra de estado al pasar por el path de teclas del editor, y
+// el mensaje se limpia al salir a una línea sin anotar.
+func TestDiagMessageShowsInStatusBar(t *testing.T) {
+	app, _ := newTestApp(t, "uno\ndos\ntres")
+	ed := app.activeEditor()
+	ed.SetDiagnostics([]view.Diagnostic{{Line: 0, Message: "mal", Severity: view.SeverityError}})
+
+	// Una tecla que mueve el cursor (derecha) pasa por el path que sincroniza
+	// la barra: la línea 0 del cursor tiene el diagnóstico.
+	press(app, tcell.KeyRight)
+	msg := app.statusBar.Message()
+	if !strings.Contains(msg, "línea 1") || !strings.Contains(msg, "mal") || !strings.Contains(msg, "error") {
+		t.Fatalf("mensaje = %q, se esperaba la línea 1 con %q y severidad error", msg, "mal")
+	}
+
+	// Bajar a la línea 1 (sin diagnóstico) limpia el mensaje.
+	press(app, tcell.KeyDown)
+	if got := app.statusBar.Message(); got != "" {
+		t.Fatalf("mensaje = %q, se esperaba limpio al salir de la línea con diagnóstico", got)
 	}
 }

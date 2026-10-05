@@ -31,6 +31,15 @@ type Theme struct {
 	Function     tcell.Style // nombres de función (sintaxis)
 	Variable     tcell.Style // identificadores comunes (sintaxis)
 	Punct        tcell.Style // puntuación/otros (sintaxis)
+
+	// Gutter lleva SOLO el frente de la columna de números de línea; el uso (el
+	// dibujo del editor) le pone el fondo del documento con docBg. Los Diag*
+	// llevan el color de severidad de los marcadores del gutter (y del
+	// subrayado en el hito siguiente), también solo frente.
+	Gutter      tcell.Style // números de línea del gutter (gris suave)
+	DiagError   tcell.Style // diagnóstico: error
+	DiagWarning tcell.Style // diagnóstico: advertencia
+	DiagInfo    tcell.Style // diagnóstico: info
 }
 
 // fg tiñe el frente de un estilo sobre el default: el rol de color de la
@@ -85,6 +94,10 @@ func DarkTheme() Theme {
 		Function:     fg(tcell.PaletteColor(187)),
 		Variable:     fg(tcell.PaletteColor(117)),
 		Punct:        fg(tcell.PaletteColor(250)),
+		Gutter:       fg(tcell.PaletteColor(246)),
+		DiagError:    fg(tcell.PaletteColor(208)),
+		DiagWarning:  fg(tcell.PaletteColor(220)),
+		DiagInfo:     fg(tcell.PaletteColor(45)),
 	}
 }
 
@@ -111,6 +124,10 @@ func LightTheme() Theme {
 		Function:     fg(tcell.NewHexColor(0x795E26)),
 		Variable:     fg(tcell.NewHexColor(0x001080)),
 		Punct:        fg(tcell.NewHexColor(0x000000)),
+		Gutter:       fg(tcell.NewHexColor(0x808080)),
+		DiagError:    fg(tcell.NewHexColor(0xD6140F)),
+		DiagWarning:  fg(tcell.NewHexColor(0xB25D00)),
+		DiagInfo:     fg(tcell.NewHexColor(0x005FB8)),
 	}
 }
 
@@ -135,6 +152,10 @@ func LightHighContrastTheme() Theme {
 		Function:     fg(tcell.NewHexColor(0x804000)),
 		Variable:     fg(tcell.NewHexColor(0x000000)),
 		Punct:        fg(tcell.NewHexColor(0x000000)),
+		Gutter:       fg(tcell.NewHexColor(0x808080)),
+		DiagError:    fg(tcell.PaletteColor(1)),
+		DiagWarning:  fg(tcell.PaletteColor(11)),
+		DiagInfo:     fg(tcell.PaletteColor(12)),
 	}
 }
 
@@ -159,6 +180,10 @@ func DarkHighContrastTheme() Theme {
 		Function:     fg(tcell.NewHexColor(0xFFFFFF)),
 		Variable:     fg(tcell.NewHexColor(0xFFFFFF)),
 		Punct:        fg(tcell.NewHexColor(0xFFFFFF)),
+		Gutter:       fg(tcell.PaletteColor(248)),
+		DiagError:    fg(tcell.PaletteColor(9)),
+		DiagWarning:  fg(tcell.PaletteColor(11)),
+		DiagInfo:     fg(tcell.PaletteColor(12)),
 	}
 }
 
@@ -182,6 +207,10 @@ func TokyoNightTheme() Theme {
 		Function:     fg(tcell.NewHexColor(0x7AA2F7)),
 		Variable:     fg(tcell.NewHexColor(0xC0CAF5)),
 		Punct:        fg(tcell.NewHexColor(0x89DDFF)),
+		Gutter:       fg(tcell.NewHexColor(0x565F89)),
+		DiagError:    fg(tcell.NewHexColor(0xF7768E)),
+		DiagWarning:  fg(tcell.NewHexColor(0xE0AF68)),
+		DiagInfo:     fg(tcell.NewHexColor(0x7AA2F7)),
 	}
 }
 
@@ -206,6 +235,10 @@ func DraculaTheme() Theme {
 		Function:     fg(tcell.NewHexColor(0x50FA7B)),
 		Variable:     fg(tcell.NewHexColor(0xF8F8F2)),
 		Punct:        fg(tcell.NewHexColor(0xF8F8F2)),
+		Gutter:       fg(tcell.NewHexColor(0x6272A4)),
+		DiagError:    fg(tcell.NewHexColor(0xFF5555)),
+		DiagWarning:  fg(tcell.NewHexColor(0xF1FA8C)),
+		DiagInfo:     fg(tcell.NewHexColor(0x8BE9FD)),
 	}
 }
 
@@ -314,6 +347,10 @@ func LoadTheme(data []byte) Theme {
 	fg(&t.Function, "function")
 	fg(&t.Variable, "variable")
 	fg(&t.Punct, "punct")
+	fg(&t.Gutter, "gutter")
+	fg(&t.DiagError, "diagError")
+	fg(&t.DiagWarning, "diagWarning")
+	fg(&t.DiagInfo, "diagInfo")
 	txt(&t.Text, "text")
 	if v := raw["cursorLine"]; v != "" {
 		if c, ok := parseThemeColor(v); ok {

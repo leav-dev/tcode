@@ -36,6 +36,13 @@ func TestThemeDefaultsAreSet(t *testing.T) {
 	if th.Comment == th.Text || th.Keyword == th.Text || th.String == th.Text {
 		t.Fatal("los roles de sintaxis deben diferenciarse del texto")
 	}
+	// Los roles de diagnóstico y el gutter llevan frente propio en el default.
+	if th.DiagError == th.Text || th.DiagWarning == th.Text || th.DiagInfo == th.Text {
+		t.Fatal("los roles de diagnóstico deben diferenciarse del texto")
+	}
+	if fgOf(th.Gutter) == fgOf(th.Text) {
+		t.Fatal("el gutter debe distinguirse del texto (gris suave)")
+	}
 }
 
 // TestLoadThemeParsesRoles: el JSON re-mapea los roles nombrados.
@@ -165,6 +172,25 @@ func TestThemeSyntaxRolesAreDistinct(t *testing.T) {
 		if p[0] == p[1] {
 			t.Fatalf("el par de roles no se distingue: %v vs %v", p[0], p[1])
 		}
+	}
+}
+
+// TestLoadThemeParsesDiagAndGutterRoles: el JSON re-mapea los roles del gutter
+// y de los diagnósticos (todos de frente; el fondo lo propaga el dibujo).
+func TestLoadThemeParsesDiagAndGutterRoles(t *testing.T) {
+	src := `{"gutter": "246", "diagError": "208", "diagWarning": "220", "diagInfo": "45"}`
+	th := LoadTheme([]byte(src))
+	if fgOf(th.Gutter) != tcell.PaletteColor(246) {
+		t.Errorf("gutter = %v, esperaba índice 246", fgOf(th.Gutter))
+	}
+	if fgOf(th.DiagError) != tcell.PaletteColor(208) {
+		t.Errorf("diagError = %v, esperaba índice 208", fgOf(th.DiagError))
+	}
+	if fgOf(th.DiagWarning) != tcell.PaletteColor(220) {
+		t.Errorf("diagWarning = %v, esperaba índice 220", fgOf(th.DiagWarning))
+	}
+	if fgOf(th.DiagInfo) != tcell.PaletteColor(45) {
+		t.Errorf("diagInfo = %v, esperaba índice 45", fgOf(th.DiagInfo))
 	}
 }
 

@@ -76,7 +76,8 @@ func TestDrawRendersVisibleLines(t *testing.T) {
 	draw(v, s)
 
 	got := screenLines(s)
-	want := []string{"uno", "dos", "tres"}
+	// El gutter (2 columnas: número + separador) precede al texto.
+	want := []string{"1 uno", "2 dos", "3 tres"}
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("línea %d = %q, se esperaba %q", i, got[i], want[i])
@@ -93,7 +94,7 @@ func TestDrawOnlyRendersLinesInsideViewport(t *testing.T) {
 	draw(v, s)
 
 	got := screenLines(s)
-	if got[0] != "tres" || got[1] != "cuatro" {
+	if got[0] != "3 tres" || got[1] != "4 cuatro" {
 		t.Fatalf("viewport mal renderizado: %q", got)
 	}
 }
@@ -239,8 +240,10 @@ func TestHorizontalScrollSkipsLeadingColumns(t *testing.T) {
 	v.viewport.LeftColumn = 1
 
 	draw(v, s)
-	if got := screenLines(s)[0]; got != "bcdef" {
-		t.Fatalf("contenido horizontal = %q, se esperaba %q", got, "bcdef")
+	// El gutter (2 columnas) precede al texto y reduce el área de texto a 3
+	// columnas: la fila muestra "bcd" después del número.
+	if got := screenLines(s)[0]; got != "1 bcd" {
+		t.Fatalf("contenido horizontal = %q, se esperaba %q", got, "1 bcd")
 	}
 }
 
@@ -249,8 +252,8 @@ func TestDrawDecodesUTF8WithoutSplittingRunes(t *testing.T) {
 	v := newTestView(t, "café ☕\nsegunda", 10, 1)
 
 	draw(v, s)
-	if got := screenLines(s)[0]; got != "café ☕" {
-		t.Fatalf("contenido UTF-8 = %q, se esperaba %q", got, "café ☕")
+	if got := screenLines(s)[0]; got != "1 café ☕" {
+		t.Fatalf("contenido UTF-8 = %q, se esperaba %q", got, "1 café ☕")
 	}
 }
 

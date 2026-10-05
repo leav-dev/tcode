@@ -36,7 +36,7 @@ func TestCursorLineGetsItsBackground(t *testing.T) {
 	draw(v, s)
 
 	cells, width, _ := s.GetContents()
-	got := bgOfCell(cells[0*width+0].Style) // celda (0,0) = 'u'
+	got := bgOfCell(cells[0*width+2].Style) // 'u' tras el gutter de 2
 	if got != DefaultTheme().CursorLineBg {
 		t.Fatalf("fondo de la línea del cursor = %v, esperaba %v", got, DefaultTheme().CursorLineBg)
 	}
@@ -48,16 +48,17 @@ func TestCursorMovedLineKeepsBackground(t *testing.T) {
 	s := newTestScreen(t, 20, 3)
 	v := newTestView(t, "uno\ndos\n", 20, 3)
 
-	if !v.moveCursorToCell(0, 1) {
+	// La columna 0 del texto vive en la celda gutterWidth.
+	if !v.moveCursorToCell(2, 1) {
 		t.Fatal("no se pudo mover el cursor a la línea 1")
 	}
 	draw(v, s)
 
 	cells, width, _ := s.GetContents()
-	if bgOfCell(cells[1*width+0].Style) != DefaultTheme().CursorLineBg {
+	if bgOfCell(cells[1*width+2].Style) != DefaultTheme().CursorLineBg {
 		t.Fatal("la línea 1 (cursor) debe llevar el fondo")
 	}
-	if bgOfCell(cells[0*width+0].Style) == DefaultTheme().CursorLineBg {
+	if bgOfCell(cells[0*width+2].Style) == DefaultTheme().CursorLineBg {
 		t.Fatal("la línea 0 ya no es la del cursor")
 	}
 }
@@ -71,11 +72,12 @@ func TestKeywordStyledInRender(t *testing.T) {
 	draw(v, s)
 
 	cells, width, _ := s.GetContents()
-	if got := fgOfCell(cells[0*width+0].Style); got != fgOf(DefaultTheme().Keyword) {
+	// El texto arranca en la celda 2 (gutter de 1 línea: dígitos(1)+1).
+	if got := fgOfCell(cells[0*width+2].Style); got != fgOf(DefaultTheme().Keyword) {
 		t.Fatalf("'func' = %v, esperaba el fg de Keyword (%v)", got, fgOf(DefaultTheme().Keyword))
 	}
 	// 'main' seguido de ( es el rol Function (regla nueva), no keyword.
-	if got := fgOfCell(cells[0*width+5].Style); got != fgOf(DefaultTheme().Function) {
+	if got := fgOfCell(cells[0*width+7].Style); got != fgOf(DefaultTheme().Function) {
 		t.Fatalf("'main' = %v, esperaba texto", got)
 	}
 }
@@ -88,7 +90,7 @@ func TestCommentStyledInRender(t *testing.T) {
 	draw(v, s)
 
 	cells, width, _ := s.GetContents()
-	if got := fgOfCell(cells[0*width+11].Style); got != fgOf(DefaultTheme().Comment) {
+	if got := fgOfCell(cells[0*width+13].Style); got != fgOf(DefaultTheme().Comment) {
 		t.Fatalf("comentario = %v, esperaba el fg de Comment", got)
 	}
 }
@@ -104,7 +106,7 @@ func TestThemeOverrideReachesRender(t *testing.T) {
 	draw(v, s)
 
 	cells, width, _ := s.GetContents()
-	if got := fgOfCell(cells[0*width+0].Style); got != tcell.ColorRed {
+	if got := fgOfCell(cells[0*width+2].Style); got != tcell.ColorRed {
 		t.Fatalf("'func' con tema custom = %v, esperaba red", got)
 	}
 }
@@ -150,15 +152,16 @@ func TestTypeFunctionVariableStyledInRender(t *testing.T) {
 	draw(v, s)
 
 	cells, width, _ := s.GetContents()
-	// "var x int": 'var' keyword (0), 'x' variable (4), 'int' type (6).
-	if fgOf(cells[0*width+6].Style) != fgOf(DefaultTheme().Type) {
+	// "var x int": 'var' keyword (0), 'x' variable (4), 'int' type (6), todo
+	// desplazado por el gutter de 2 columnas.
+	if fgOf(cells[0*width+8].Style) != fgOf(DefaultTheme().Type) {
 		t.Fatal("'int' debe pintarse con el rol Type")
 	}
-	if fgOf(cells[0*width+4].Style) != fgOf(DefaultTheme().Variable) {
+	if fgOf(cells[0*width+6].Style) != fgOf(DefaultTheme().Variable) {
 		t.Fatal("'x' debe pintarse con el rol Variable")
 	}
-	// "foo(x)": 'foo' función (0).
-	if fgOf(cells[1*width+0].Style) != fgOf(DefaultTheme().Function) {
+	// "foo(x)": 'foo' función (0 tras el gutter).
+	if fgOf(cells[1*width+2].Style) != fgOf(DefaultTheme().Function) {
 		t.Fatal("'foo' debe pintarse con el rol Function")
 	}
 }

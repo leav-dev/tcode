@@ -8,6 +8,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"tcode/internal/ext"
+	"tcode/internal/view"
 )
 
 // validExtSrc es un manifest sano con un comando declarado.
@@ -401,5 +402,63 @@ func TestLoadExtensionsPrefersFirstRoot(t *testing.T) {
 
 	if got := app.ext.Resolve(tcell.NewEventKey(tcell.KeyRune, 'k', tcell.ModCtrl)); got != "cmd.usuario" {
 		t.Fatalf("Resolve = %q, esperaba el keybinding del primer root (usuario)", got)
+	}
+}
+
+// TestExtensionScriptFillsDiagnostics: integración del backend de
+// diagnostics — una extensión de disco recorre el buffer con lineCount/line y
+// deposita las anotaciones (tcode.diagnostics.set); el editor las expone por
+// el getter con línea 0-indexada, tal como el HITO A las renderiza. El camino
+// es el mismo que TestExtensionScriptInsertsAtCursor (extensión de disco con
+// main.lua, keybinding y Activación de arranque).
+func TestExtensionScriptFillsDiagnostics(t *testing.T) {
+	resetConfigVars(t)
+	app, _ := newTestApp(t, "uno\nTODO aqui\nfin")
+
+	root := writeExtensionDir(t, "", map[string]string{
+		"marcador": `{
+			"id": "marcador",
+			"name": "Marcador TODO",
+			"version": "1.0.0",
+			"activation": ["onStartup"],
+			"contributes": {
+				"commands": [
+					{ "id": "marcador.todo", "title": "Marcar TODOs", "script": "main.lua", "fn": "marcar" }
+				],
+				"keybindings": [
+					{ "key": "ctrl+shift+t", "command": "marcador.todo" }
+				]
+			}
+		}`,
+	})
+	luaSrc := `function marcar()
+  local n = tcode.lineCount()
+  local diags = {}
+  for i = 1, n do
+    local l = tcode.line(i)
+    if string.find(l, "TODO") then
+      table.insert(diags, { line = i, message = "todo pendiente", severity = "warning" })
+    end
+  end
+  tcode.diagnostics.set(diags)
+end
+`
+	if err := os.WriteFile(filepath.Join(root, "marcador", "main.lua"), []byte(luaSrc), 0o644); err != nil {
+		t.Fatalf("main.lua: %v", err)
+	}
+	app.extensionRoots = []string{root}
+	app.loadExtensions()
+	app.ext.ActivateEvent(ext.ActivateStartup)
+
+	// La tecla del keybinding corre la función Lua que marca las TODOs.
+	app.handleEvent(tcell.NewEventKey(tcell.KeyRune, 'T', tcell.ModCtrl|tcell.ModShift))
+
+	ed := app.activeEditor()
+	d := ed.Diagnostics()
+	if len(d) != 1 {
+		t.Fatalf("diagnósticos = %+v, esperaba 1 (solo la línea con TODO)", d)
+	}
+	if d[0].Line != 1 || d[0].Severity != view.SeverityWarning || d[0].Message != "todo pendiente" {
+		t.Errorf("diag = %+v, esperaba Line=1 (0-indexada), Warning, todo pendiente", d[0])
 	}
 }

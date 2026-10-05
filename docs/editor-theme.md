@@ -44,6 +44,10 @@ comportamiento original). El esquema `theme.json` no tiene clave de fondo.
   "cursorLine": "236",
   "tabActive": "45",
   "treeCursor": "237",
+  "gutter": "246",
+  "diagError": "208",
+  "diagWarning": "220",
+  "diagInfo": "45",
   "keyword": "#569cd6",
   "comment": "244",
   "string": "173",
@@ -69,6 +73,8 @@ comportamiento original). El esquema `theme.json` no tiene clave de fondo.
 | `treeCursor` | Fondo de la fila activa del árbol (un color, como `cursorLine`) |
 | `status` / `message` | Barra de estado / mensaje transitorio |
 | `modified` | Marca de documento sucio *(reservado)* |
+| `gutter` | Números de línea de la columna lateral (fondo del tema, fg gris) |
+| `diagError` / `diagWarning` / `diagInfo` | Marcador de severidad en el gutter y mensaje del diagnóstico |
 | `comment`, `keyword`, `string`, `number`, `type`, `function`, `variable`, `punct` | Roles de sintaxis |
 
 `tabActive` conserva el atributo `Reverse` además del color de acento: la

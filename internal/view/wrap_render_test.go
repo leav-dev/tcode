@@ -7,15 +7,18 @@ import (
 // TestRenderWrapsLongLine: una línea que excede el ancho se pinta en varias
 // filas físicas, cortando por palabra.
 func TestRenderWrapsLongLine(t *testing.T) {
-	s := newTestScreen(t, 10, 4)
-	v := newTestView(t, "hola mundo ancho", 10, 4)
+	// 12 de pantalla = 2 del gutter + 10 del área de texto: el corte por
+	// palabra se mantiene idéntico al comportamiento previo con 10 columnas.
+	s := newTestScreen(t, 12, 4)
+	v := newTestView(t, "hola mundo ancho", 12, 4)
 	draw(v, s)
 
-	if got := screenLines(s)[0]; got != "hola mundo" {
-		t.Fatalf("fila 0 = %q, esperaba %q (corte por palabra)", got, "hola mundo")
+	if got := screenLines(s)[0]; got != "1 hola mundo" {
+		t.Fatalf("fila 0 = %q, esperaba %q (número + corte por palabra)", got, "1 hola mundo")
 	}
-	if got := screenLines(s)[1]; got != "ancho" {
-		t.Fatalf("fila 1 = %q, esperaba %q", got, "ancho")
+	// La fila de continuación lleva el gutter en blanco y el texto desplazado.
+	if got := screenLines(s)[1]; got != "  ancho" {
+		t.Fatalf("fila 1 = %q, esperaba %q", got, "  ancho")
 	}
 	if got := screenLines(s)[2]; got != "" {
 		t.Fatalf("fila 2 = %q, esperaba vacía", got)
@@ -25,9 +28,11 @@ func TestRenderWrapsLongLine(t *testing.T) {
 // TestCursorMovesToWrappedVisualRow: el clic en la fila física 1 de una línea
 // envuelta cae en la línea lógica 0 con el byte de esa fila visual.
 func TestCursorMovesToWrappedVisualRow(t *testing.T) {
-	v := newTestView(t, "hola mundo ancho", 10, 4)
+	// 12 de pantalla = 2 del gutter + 10 del área de texto (el wrap previo).
+	v := newTestView(t, "hola mundo ancho", 12, 4)
 
-	if !v.moveCursorToCell(2, 1) {
+	// La columna 2 del texto vive en la celda gutterWidth+2.
+	if !v.moveCursorToCell(2+v.gutterWidth(), 1) {
 		t.Fatal("el clic en la fila envuelta no se aceptó")
 	}
 	if v.cursor.Line != 0 {
@@ -43,20 +48,23 @@ func TestCursorMovesToWrappedVisualRow(t *testing.T) {
 // varias filas físicas) lleva el fondo en TODAS sus filas; la línea siguiente
 // no.
 func TestCursorLineBackgroundOnWrappedRow(t *testing.T) {
-	s := newTestScreen(t, 10, 3)
-	v := newTestView(t, "hola mundo ancho\notra línea\n", 10, 3)
+	s := newTestScreen(t, 12, 3)
+	v := newTestView(t, "hola mundo ancho\notra línea\n", 12, 3)
 	v.setCursorAt(11) // 'a' de "ancho" → fila visual 1 de la línea 0
 	draw(v, s)
 
 	cells, width, _ := s.GetContents()
-	if bgOfCell(cells[0*width+0].Style) != DefaultTheme().CursorLineBg {
+	// El texto vive después del gutter (2 columnas): las celdas de texto son
+	// las de la columna gutterWidth.
+	g := v.gutterWidth()
+	if bgOfCell(cells[0*width+g].Style) != DefaultTheme().CursorLineBg {
 		t.Fatal("la fila física 0 (línea del cursor) debe llevar el fondo")
 	}
-	if bgOfCell(cells[1*width+0].Style) != DefaultTheme().CursorLineBg {
+	if bgOfCell(cells[1*width+g].Style) != DefaultTheme().CursorLineBg {
 		t.Fatal("la fila física 1 (corte de la línea del cursor) debe llevar el fondo")
 	}
 	// La línea 1 ("otra línea") ocupa la fila física 2: sin el fondo.
-	if bgOfCell(cells[2*width+0].Style) == DefaultTheme().CursorLineBg {
+	if bgOfCell(cells[2*width+g].Style) == DefaultTheme().CursorLineBg {
 		t.Fatal("la fila de la línea siguiente no debe llevar el fondo del cursor")
 	}
 }
@@ -69,11 +77,13 @@ func TestWrapDisabledKeepsHorizontalCutting(t *testing.T) {
 	wordWrapEnabled = false
 	defer func() { wordWrapEnabled = old }()
 
-	s := newTestScreen(t, 4, 2)
-	v := newTestView(t, "holamundo", 4, 2)
+	// 6 de pantalla = 2 del gutter + 4 del área de texto: el corte en el
+	// borde recorta "holamundo" a 4 columnas, igual que antes con 4.
+	s := newTestScreen(t, 6, 2)
+	v := newTestView(t, "holamundo", 6, 2)
 	draw(v, s)
 
-	if got := screenLines(s)[0]; got != "hola" {
+	if got := screenLines(s)[0]; got != "1 hola" {
 		t.Fatalf("sin wrap, fila 0 = %q, esperaba recortada en el borde", got)
 	}
 	if got := screenLines(s)[1]; got != "" {

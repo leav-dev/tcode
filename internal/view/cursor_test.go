@@ -204,8 +204,10 @@ func TestViewportScrollsHorizontallyToKeepCursorVisible(t *testing.T) {
 	if v.cursor.ByteCol != 6 {
 		t.Fatalf("ByteCol = %d, se esperaba 6", v.cursor.ByteCol)
 	}
-	if v.viewport.LeftColumn != 2 {
-		t.Fatalf("LeftColumn = %d, se esperaba 2 para que la columna 6 sea visible", v.viewport.LeftColumn)
+	// El área de texto mide 3 columnas (5 de widget - 2 de gutter): la
+	// columna 6 queda visible con LeftColumn 4 (6 - 3 + 1).
+	if v.viewport.LeftColumn != 4 {
+		t.Fatalf("LeftColumn = %d, se esperaba 4 para que la columna 6 sea visible", v.viewport.LeftColumn)
 	}
 
 	v.HandleEvent(tcell.NewEventKey(tcell.KeyHome, 0, tcell.ModCtrl))
@@ -232,7 +234,8 @@ func TestMouseWheelScrollDoesNotDragTheCursor(t *testing.T) {
 func TestMouseClickPositionsCursor(t *testing.T) {
 	v := newTestView(t, "uno\ndos\ntres", 20, 3)
 
-	if !v.HandleEvent(tcell.NewEventMouse(2, 1, tcell.Button1, tcell.ModNone)) {
+	// La columna 2 del texto vive en la celda de pantalla gutterWidth+2.
+	if !v.HandleEvent(tcell.NewEventMouse(2+v.gutterWidth(), 1, tcell.Button1, tcell.ModNone)) {
 		t.Fatal("el clic debería mover el cursor")
 	}
 	if v.cursor.Line != 1 || v.cursor.ByteCol != 2 {
@@ -244,15 +247,17 @@ func TestMouseClickPositionsCursor(t *testing.T) {
 // rompía: clickear la mitad de un carácter ancho debe anclar en su inicio.
 func TestMouseClickOnWideCharacterSnapsToItsStart(t *testing.T) {
 	v := newTestView(t, "日ab", 20, 1)
+	gutter := v.gutterWidth()
 
-	// La columna 1 cae en la mitad de '日' (que ocupa 0 y 1).
-	v.HandleEvent(tcell.NewEventMouse(1, 0, tcell.Button1, tcell.ModNone))
+	// La columna lógica 1 cae en la mitad de '日' (que ocupa 0 y 1): en
+	// pantalla es la celda gutter+1.
+	v.HandleEvent(tcell.NewEventMouse(gutter+1, 0, tcell.Button1, tcell.ModNone))
 	if v.cursor.ByteCol != 0 {
 		t.Fatalf("ByteCol = %d, se esperaba 0: el clic debe anclar en el inicio del carácter ancho", v.cursor.ByteCol)
 	}
 
-	// La columna 2 ya es el carácter siguiente.
-	v.HandleEvent(tcell.NewEventMouse(2, 0, tcell.Button1, tcell.ModNone))
+	// La columna lógica 2 ya es el carácter siguiente.
+	v.HandleEvent(tcell.NewEventMouse(gutter+2, 0, tcell.Button1, tcell.ModNone))
 	if v.cursor.ByteCol != 3 {
 		t.Fatalf("ByteCol = %d, se esperaba 3", v.cursor.ByteCol)
 	}
@@ -262,16 +267,18 @@ func TestMouseClickRespectsHorizontalScroll(t *testing.T) {
 	v := newTestView(t, "abcdefghij", 5, 1)
 	v.viewport.LeftColumn = 3
 
-	v.HandleEvent(tcell.NewEventMouse(0, 0, tcell.Button1, tcell.ModNone))
+	// La columna 0 del texto vive en la celda gutterWidth: ahí cae la columna
+	// lógica 3 (LeftColumn).
+	v.HandleEvent(tcell.NewEventMouse(v.gutterWidth(), 0, tcell.Button1, tcell.ModNone))
 	if v.cursor.ByteCol != 3 {
-		t.Fatalf("ByteCol = %d, se esperaba 3: la columna 0 de pantalla es la 3 del documento", v.cursor.ByteCol)
+		t.Fatalf("ByteCol = %d, se esperaba 3: la columna del texto es la 3 del documento", v.cursor.ByteCol)
 	}
 }
 
 func TestMouseClickBelowTheLastLineIsIgnored(t *testing.T) {
 	v := newTestView(t, "uno", 20, 5)
 
-	if v.HandleEvent(tcell.NewEventMouse(0, 4, tcell.Button1, tcell.ModNone)) {
+	if v.HandleEvent(tcell.NewEventMouse(v.gutterWidth(), 4, tcell.Button1, tcell.ModNone)) {
 		t.Fatal("un clic por debajo de la última línea no debería mover el cursor")
 	}
 }
@@ -327,8 +334,9 @@ func TestDrawShowsCursorAtItsCell(t *testing.T) {
 	if !visible {
 		t.Fatal("el cursor debería ser visible")
 	}
-	if x != 1 || y != 1 {
-		t.Fatalf("cursor en (%d,%d), se esperaba (1,1)", x, y)
+	// La celda de la columna 1 del texto es gutterWidth+1 en pantalla.
+	if x != 3 || y != 1 {
+		t.Fatalf("cursor en (%d,%d), se esperaba (3,1)", x, y)
 	}
 }
 
@@ -343,8 +351,8 @@ func TestDrawPlacesCursorAfterWideCharacters(t *testing.T) {
 	if !visible {
 		t.Fatal("el cursor debería ser visible")
 	}
-	if x != 2 {
-		t.Fatalf("cursor en columnas %d, se esperaba 2: '日' ocupa dos celdas", x)
+	if x != 4 {
+		t.Fatalf("cursor en columnas %d, se esperaba 4: '日' ocupa dos celdas y el texto arranca tras el gutter", x)
 	}
 }
 
