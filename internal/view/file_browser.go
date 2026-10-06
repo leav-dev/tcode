@@ -777,7 +777,7 @@ func (fb *FileBrowser) guides(idx int) string {
 		if fb.continues(idx, level) {
 			b.WriteString("│ ")
 		} else {
-		b.WriteString("  ")
+			b.WriteString("  ")
 		}
 	}
 	return b.String()

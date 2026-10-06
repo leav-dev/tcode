@@ -3,8 +3,8 @@ package ext
 import (
 	"fmt"
 
-	lua "github.com/yuin/gopher-lua"
 	"github.com/leav-dev/tcode/internal/view"
+	lua "github.com/yuin/gopher-lua"
 )
 
 // ScriptAPI es el puente que el backend de scripting usa para tocar el editor

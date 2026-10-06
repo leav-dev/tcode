@@ -2349,7 +2349,7 @@ func (a *App) deletePath(path string) error {
 		a.explorerFocused = true
 	}
 	a.syncStatus()
-	a.showToast("Borrado: " + filepath.Base(path), view.ToastSuccess)
+	a.showToast("Borrado: "+filepath.Base(path), view.ToastSuccess)
 	return nil
 }
 
@@ -2503,7 +2503,7 @@ func (a *App) createEntry(dir, name string, folder bool) error {
 			return err
 		}
 		a.explorer.AddChild(dir, view.Entry{Name: name, Path: path, IsDir: true})
-		a.showToast("Carpeta creada: " + name, view.ToastSuccess)
+		a.showToast("Carpeta creada: "+name, view.ToastSuccess)
 		return nil
 	}
 
@@ -2524,7 +2524,7 @@ func (a *App) createEntry(dir, name string, folder bool) error {
 	a.explorerFocused = false
 	a.explorer.AddChild(dir, view.Entry{Name: name, Path: path})
 	a.syncStatus()
-	a.showToast("Archivo creado: " + name, view.ToastSuccess)
+	a.showToast("Archivo creado: "+name, view.ToastSuccess)
 	return nil
 }
 
@@ -3185,7 +3185,7 @@ func (a *App) promptRemoveExtension(item view.ExtItem) {
 		if err != nil {
 			return err
 		}
-		a.showToast("Eliminada: " + item.Ref, view.ToastSuccess)
+		a.showToast("Eliminada: "+item.Ref, view.ToastSuccess)
 		return nil
 	})
 }
@@ -3268,7 +3268,7 @@ func (a *App) addProviderSource(source string) error {
 	a.extSnapshot = nil
 	a.prefetchExtensions()
 	a.loadExtManagerData()
-	a.showToast("Proveedor agregado (sin aprobar): " + name, view.ToastSuccess)
+	a.showToast("Proveedor agregado (sin aprobar): "+name, view.ToastSuccess)
 	return nil
 }
 

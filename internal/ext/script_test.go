@@ -17,31 +17,31 @@ type notif struct {
 // fakeAPI implementa ScriptAPI registrando las llamadas, para que los tests
 // comprueben el puente script → editor sin tocar un controlador real.
 type fakeAPI struct {
-	cmds            []string
-	msgs            []string
-	notifs          []notif
-	sections        map[string]string
-	inserted        []string
-	path            string
-	content         string
-	bufOK           bool
-	insertErr       error
-	runErr          error
-	lineCount       int
-	lineCountCalls  int
-	lines           []string
-	lineCalls       []int
-	diags           [][]view.Diagnostic
-	diagErr         error
-	files           []HostFile
-	filesErr        error
-	readPath        string
-	readFile        HostFile
-	readErr         error
-	gitInfo         GitInfo
-	gitErr          error
-	fileDiffLines   []FileDiffLine
-	fileDiffErr     error
+	cmds           []string
+	msgs           []string
+	notifs         []notif
+	sections       map[string]string
+	inserted       []string
+	path           string
+	content        string
+	bufOK          bool
+	insertErr      error
+	runErr         error
+	lineCount      int
+	lineCountCalls int
+	lines          []string
+	lineCalls      []int
+	diags          [][]view.Diagnostic
+	diagErr        error
+	files          []HostFile
+	filesErr       error
+	readPath       string
+	readFile       HostFile
+	readErr        error
+	gitInfo        GitInfo
+	gitErr         error
+	fileDiffLines  []FileDiffLine
+	fileDiffErr    error
 }
 
 func (f *fakeAPI) RunCommand(id string) error {
@@ -160,6 +160,7 @@ func TestScriptHostReadFileNilOnError(t *testing.T) {
 		t.Errorf("mensajes = %v, esperaba [nil]", api.msgs)
 	}
 }
+
 // host la enruta al editor. tcode.message y tcode.buffer (con ok=false: sin
 // buffer activo, la función Lua simplemente recibe nil) corren limpio, y el
 // error de tcode.command se propaga como error del Call.

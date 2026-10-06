@@ -5,8 +5,8 @@ import (
 	"unsafe"
 
 	"github.com/gdamore/tcell/v2"
-	"github.com/rivo/uniseg"
 	"github.com/leav-dev/tcode/internal/model"
+	"github.com/rivo/uniseg"
 )
 
 // tabWidth es la cantidad de columnas a la que se expande una tabulación.

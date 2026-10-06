@@ -306,17 +306,19 @@ func TestManagerRunsDeclaredCommandWithScript(t *testing.T) {
 // script que se invoca a sí mismo vía tcode.command.
 type forwardAPI struct{ m *Manager }
 
-func (a *forwardAPI) RunCommand(id string) error                                   { return a.m.RunCommand(id) }
-func (a *forwardAPI) ActiveBuffer() (string, string, bool)                         { return "", "", false }
-func (a *forwardAPI) InsertAtCursor(text string) error                             { return nil }
-func (a *forwardAPI) StatusMessage(msg string)                                     {}
-func (a *forwardAPI) Notify(msg, kind string) error                              { return nil }
-func (a *forwardAPI) SetSection(id, text string) error                            { return nil }
-func (a *forwardAPI) LineCount() (int, bool)                                       { return 0, false }
-func (a *forwardAPI) Line(n int) (string, bool)                                    { return "", false }
-func (a *forwardAPI) SetDiagnostics(source string, d []view.Diagnostic) error      { return nil }
-func (a *forwardAPI) DirFiles() ([]HostFile, error)                                { return nil, nil }
-func (a *forwardAPI) ReadFile(relpath string) (HostFile, error)                  { return HostFile{}, errors.New("sin read_file") }
+func (a *forwardAPI) RunCommand(id string) error                              { return a.m.RunCommand(id) }
+func (a *forwardAPI) ActiveBuffer() (string, string, bool)                    { return "", "", false }
+func (a *forwardAPI) InsertAtCursor(text string) error                        { return nil }
+func (a *forwardAPI) StatusMessage(msg string)                                {}
+func (a *forwardAPI) Notify(msg, kind string) error                           { return nil }
+func (a *forwardAPI) SetSection(id, text string) error                        { return nil }
+func (a *forwardAPI) LineCount() (int, bool)                                  { return 0, false }
+func (a *forwardAPI) Line(n int) (string, bool)                               { return "", false }
+func (a *forwardAPI) SetDiagnostics(source string, d []view.Diagnostic) error { return nil }
+func (a *forwardAPI) DirFiles() ([]HostFile, error)                           { return nil, nil }
+func (a *forwardAPI) ReadFile(relpath string) (HostFile, error) {
+	return HostFile{}, errors.New("sin read_file")
+}
 func (a *forwardAPI) GitStatus() (GitInfo, error)                                  { return GitInfo{}, nil }
 func (a *forwardAPI) GetFileDiff(path string, staged bool) ([]FileDiffLine, error) { return nil, nil }
 
