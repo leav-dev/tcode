@@ -335,15 +335,10 @@ func NewAppWithScreen(s tcell.Screen, path string) (*App, error) {
 	// corren Lua con la API tcode.* cableada a App (ScriptAPI).
 	app.ext.SetEditor(app)
 
-	// La fila Extensions de la ventana de configuración abre el panel de
-	// extensiones: el callback vive acá porque abrirlo es decisión del
-	// controlador (consulta el catálogo en goroutine y compone el panel).
-	app.configMenu.SetOnAction(func(label string) bool {
-		if label == "Extensiones" || label == "Extensions" {
-			return app.openExtensionsPanel()
-		}
-		return false
-	})
+	// La fila Extensiones abre el ExtManager (pending/Activated en el loop):
+	// es la única ventana atada a esa fila para que las teclas (Left/Right
+	// entre pestañas) no se queden sin dueño. El panel de catálogo
+	// (openExtensionsPanel) se conserva como apertura directa.
 
 	// El tema se aplica a todas las vistas en el arranque; los editores que se
 	// creen bajo demanda lo reciben en activeEditor.

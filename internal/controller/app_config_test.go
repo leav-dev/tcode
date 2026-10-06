@@ -289,22 +289,16 @@ func swapCatalogFakes(t *testing.T, cat *fakeCatalog, inst *fakeInstall) {
 	})
 }
 
-// openExtensionsPanelFromMenu abre el panel desde la ventana de configuración
-// (Ctrl+P → Down ×4 → Enter) y drena la consulta del catálogo.
+// openExtensionsPanelFromMenu abre el panel por apertura directa y drena la
+// consulta del catálogo. (La fila Extensiones de la ventana de configuración
+// abre el ExtManager; el panel se abre directo hasta unificar la UX.)
 func openExtensionsPanelFromMenu(t *testing.T, app *App) {
 	t.Helper()
-	app.handleEvent(tcell.NewEventKey(tcell.KeyCtrlP, 0, tcell.ModNone))
-	if !app.configActive {
-		t.Fatal("Ctrl+P debe abrir la ventana de configuración")
-	}
-	for range 4 {
-		app.handleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
-	}
-	if quit := app.handleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone)); quit {
-		t.Fatal("Enter en Extensions no debe cerrar el editor")
+	if !app.openExtensionsPanel() {
+		t.Fatal("openExtensionsPanel debe abrir el panel")
 	}
 	if !app.extPanelActive {
-		t.Fatal("Enter en Extensions debe abrir el panel")
+		t.Fatal("openExtensionsPanel debe activar el panel")
 	}
 	drainCatalog(t, app)
 }
@@ -316,23 +310,32 @@ func openExtensionsPanelFromMenu(t *testing.T, app *App) {
 // resultado ya está en el canal — sin carrera.
 func drainCatalog(t *testing.T, app *App) {
 	t.Helper()
-	evCh := make(chan tcell.Event, 1)
-	go func() {
-		evCh <- app.screen.PollEvent()
-	}()
-	var ev tcell.Event
-	select {
-	case ev = <-evCh:
-	case <-time.After(5 * time.Second):
-		t.Fatal("la goroutine de consulta no posteó el EventInterrupt a tiempo")
+	// Drena eventos hasta el interrupt del catálogo (Data nil): el prefetch
+	// de arranque también postea su snapshot a la pantalla y puede llegar
+	// primero; tomar un solo evento traería ese y dejaría el del catálogo
+	// sin leer (flaky según el scheduler). Con deadline global, sin espera
+	// infinita.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if time.Now().After(deadline) {
+			t.Fatal("la goroutine de consulta no posteó su interrupt a tiempo")
+		}
+		evCh := make(chan tcell.Event, 1)
+		go func() {
+			evCh <- app.screen.PollEvent()
+		}()
+		select {
+		case ev := <-evCh:
+			if ev == nil {
+				t.Fatal("PollEvent devolvió nil: la goroutine no posteó el evento")
+			}
+			app.handleEvent(ev)
+			if intr, ok := ev.(*tcell.EventInterrupt); ok && intr.Data() == nil {
+				return // el del catálogo: setCatalog ya corrió en handleEvent
+			}
+		case <-time.After(500 * time.Millisecond):
+		}
 	}
-	if ev == nil {
-		t.Fatal("PollEvent devolvió nil: la goroutine no posteó el evento")
-	}
-	if _, ok := ev.(*tcell.EventInterrupt); !ok {
-		t.Fatalf("PollEvent devolvió %T, se esperaba *tcell.EventInterrupt", ev)
-	}
-	app.handleEvent(ev)
 }
 
 // TestCtrlPOpensTheExtensionsPanel: Enter sobre la fila Extensions de la
