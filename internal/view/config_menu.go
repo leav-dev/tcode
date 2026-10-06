@@ -142,6 +142,12 @@ type ConfigMenu struct {
 	// con la semántica de la ventana (tecla suya, fila mutada). Activated
 	// devuelve y limpia el valor, así que una acción se lee una sola vez.
 	pending string
+
+	// onAction es el callback compat de las acciones (Enter): si está fijado
+	// se llama con la etiqueta y su retorno va en changed. Existe por la
+	// suite anterior (TestConfigMenuExtensionsAction); el camino nuevo es
+	// pending/Activated, que siempre se fija.
+	onAction func(label string) bool
 }
 
 func NewConfigMenu() *ConfigMenu {
@@ -344,6 +350,9 @@ func (m *ConfigMenu) HandleEvent(ev tcell.Event) (handled, changed bool) {
 			// porque una acción no es una mutación de la configuración.
 			if it := configItems()[m.cursor]; it.kind == ConfigAction {
 				m.pending = it.action
+				if m.onAction != nil {
+					return true, m.onAction(it.label)
+				}
 				return true, false
 			}
 			return true, m.mutate(0)
@@ -360,6 +369,11 @@ func (m *ConfigMenu) Activated() string {
 	m.pending = ""
 	return action
 }
+
+// SetOnAction fija el callback compat de las acciones: lo llama Enter con la
+// etiqueta y su retorno va en changed. Nil lo desactiva (el camino
+// pending/Activated sigue funcionando).
+func (m *ConfigMenu) SetOnAction(fn func(label string) bool) { m.onAction = fn }
 
 // configValueText es el valor de la fila como texto: el entero con sus dígitos,
 // "off"/"on" para el booleano, el NOMBRE de la opción para el enum o la

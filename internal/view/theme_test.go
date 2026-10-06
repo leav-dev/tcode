@@ -209,6 +209,19 @@ func TestLoadThemeParsesNewSyntaxRoles(t *testing.T) {
 	}
 }
 
+// TestThemeSelectionRole: el rol Selection se distingue del texto y se puede
+// re-mapear por JSON.
+func TestThemeSelectionRole(t *testing.T) {
+	th := DefaultTheme()
+	if th.Selection == th.Text {
+		t.Fatal("el rol Selection no puede ser idéntico al texto")
+	}
+	loaded := LoadTheme([]byte(`{"selection": "45"}`))
+	if fgOf(loaded.Selection) != tcell.PaletteColor(45) {
+		t.Fatalf("selection re-mapeado = %v, esperaba índice 45", fgOf(loaded.Selection))
+	}
+}
+
 // TestThemeRegistryIsStableAndValid: el registry expone los seis temas en un
 // orden fijo (el del selector), cada id existe con un tema válido (CursorLineBg
 // real y barra de estado diferenciada del texto) y un id ajeno no existe.

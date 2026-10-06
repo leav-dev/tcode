@@ -71,6 +71,18 @@ type EditorView struct {
 		line int
 		row  int
 	}
+
+	// sel es el rango marcado ([Start, End) en offsets de documento) y
+	// selAnchor el ancla de la extensión con Shift: el cursor se mueve y el
+	// rango va del ancla al cursor. Cualquier movimiento sin Shift limpia.
+	sel       Selection
+	selAnchor *int
+
+	// mouseDown y mouseAnchor sostienen el arrastre del mouse: presionar el
+	// botón 1 ancla (sin seleccionar todavía); el movimiento con el botón
+	// extiende desde el ancla; soltar termina y deja el rango.
+	mouseDown   bool
+	mouseAnchor *int
 }
 
 // visualRowOfLine devuelve la fila visual GLOBAL donde empieza la línea lógica
@@ -384,6 +396,20 @@ func (v *EditorView) moveCursorToCell(x, y int) bool {
 	return true
 }
 
+// deleteSelection borra el rango marcado y deja el cursor en su inicio.
+func (v *EditorView) deleteSelection() bool {
+	if !v.SelectionActive() {
+		return false
+	}
+	v.breakTypingGroup()
+	if _, err := v.model.Delete(v.sel.Start, v.sel.End); err != nil {
+		return false
+	}
+	v.setCursorAt(v.sel.Start)
+	v.clearSelection()
+	return true
+}
+
 // moveHorizontal avanza o retrocede un grapheme cluster, cruzando de línea en los
 // extremos.
 func (v *EditorView) moveHorizontal(delta int) bool {
@@ -531,6 +557,17 @@ func (v *EditorView) insertText(s string) bool {
 	if s == "" {
 		return false
 	}
+	if v.SelectionActive() {
+		// Escribir reemplaza la selección (VSCode-like) y corta el grupo de
+		// tipeo (borrar+rango es una edición distinta): borra el rango e
+		// inserta desde su inicio.
+		v.breakTypingGroup()
+		if _, err := v.model.Delete(v.sel.Start, v.sel.End); err != nil {
+			return false
+		}
+		v.setCursorAt(v.sel.Start)
+		v.clearSelection()
+	}
 	off := v.cursorOffset()
 	if err := v.model.Insert(off, s); err != nil {
 		return false
@@ -539,9 +576,23 @@ func (v *EditorView) insertText(s string) bool {
 	return true
 }
 
+// PasteText inserta el texto COMPLETO de un paste del TERMINAL (evento de
+// bracketed paste: tcode pide el modo con EnablePaste y el terminal entrega el
+// portapapeles como un solo evento, con sus saltos de línea intactos). Es la
+// diferencia con el "pegar" que el terminal hace a secas —sin bracketed paste—,
+// que llega runa por runa y se inserta (y se deshace) carácter por carácter.
+// Reutiliza insertText: reemplaza la selección activa si hay y queda como UN
+// paso de deshacer.
+func (v *EditorView) PasteText(text string) bool {
+	return v.insertText(text)
+}
+
 // backspace borra el grapheme cluster anterior al cursor. Al inicio de una línea
 // borra el salto anterior, que es lo que fusiona las dos líneas.
 func (v *EditorView) backspace() bool {
+	if v.SelectionActive() {
+		return v.deleteSelection()
+	}
 	line := v.cursor.Line
 
 	if v.cursor.ByteCol > 0 {
@@ -575,6 +626,9 @@ func (v *EditorView) backspace() bool {
 // deleteForward borra el grapheme cluster que está en el cursor. Al final de una
 // línea borra el salto, fusionandola con la siguiente.
 func (v *EditorView) deleteForward() bool {
+	if v.SelectionActive() {
+		return v.deleteSelection()
+	}
 	line := v.cursor.Line
 	start := v.model.LineStart(line)
 	content := v.model.LineContent(line)
@@ -627,6 +681,10 @@ func (v *EditorView) Draw(s Surface) {
 	}
 
 	row := 0 // fila física en pantalla
+	selStart, selEnd, selActive := 0, 0, false
+	if v.SelectionActive() {
+		selStart, selEnd, selActive = v.sel.Start, v.sel.End, true
+	}
 	for line := v.viewport.TopLine; line < v.model.LineCount() && row < v.viewport.Height; line++ {
 		// COPIA obligatoria, no vista de mmap: tcell retiene el string que le
 		// pasamos en su buffer de celdas (currStr/lastStr) hasta el próximo
@@ -638,6 +696,7 @@ func (v *EditorView) Draw(s Surface) {
 		content := v.model.LineContent(line)
 		text := string(content)
 		isCursorLine := line == cursorLine
+		lineStart := v.model.LineStart(line)
 
 		if wordWrapEnabled && v.viewport.Width > 0 {
 			// Las filas visuales de la línea: cada una en su propia fila física;
@@ -646,13 +705,13 @@ func (v *EditorView) Draw(s Surface) {
 				if row >= v.viewport.Height {
 					break
 				}
-				v.drawSoftLine(s, th, hl, line, text, content, sl, row, isCursorLine, i == 0)
+				v.drawSoftLine(s, th, hl, line, text, content, sl, row, isCursorLine, i == 0, lineStart, selStart, selEnd, selActive)
 				row++
 			}
 			continue
 		}
 
-		v.drawLineUnwrapped(s, th, hl, line, text, content, row, isCursorLine)
+		v.drawLineUnwrapped(s, th, hl, line, text, content, row, isCursorLine, lineStart, selStart, selEnd, selActive)
 		row++
 	}
 
@@ -663,7 +722,7 @@ func (v *EditorView) Draw(s Surface) {
 // física row. text es la copia de la línea (los clusters son substrings suyos,
 // seguros para tcell); content es la vista del modelo solo para calcular roles
 // (nunca se retiene).
-func (v *EditorView) drawSoftLine(s Surface, th Theme, hl *highlighter, line int, text string, content []byte, sl softLine, row int, cursorLine bool, firstRow bool) {
+func (v *EditorView) drawSoftLine(s Surface, th Theme, hl *highlighter, line int, text string, content []byte, sl softLine, row int, cursorLine bool, firstRow bool, lineStart, selStart, selEnd int, selActive bool) {
 	gutter := v.gutterWidth()
 	v.drawGutter(s, th, line, row, firstRow)
 	_, hasDiag := v.diagAt(line)
@@ -673,7 +732,6 @@ func (v *EditorView) drawSoftLine(s Surface, th Theme, hl *highlighter, line int
 		cl := g.Str()
 		from, _ := g.Positions()
 		if cl == "\r" {
-
 			col = 0 // retorno de carro aislado: vuelve al inicio de la misma fila
 			continue
 		}
@@ -687,7 +745,11 @@ func (v *EditorView) drawSoftLine(s Surface, th Theme, hl *highlighter, line int
 		// viene pintado).
 		if x >= gutter && x+w <= v.viewport.Width+gutter && cl != "\t" {
 			st := th.StyleForRole(hl.styleAt(content, sl.in+from))
-			if cursorLine {
+			goff := lineStart + sl.in + from // offset global del cluster
+			switch {
+			case selActive && goff >= selStart && goff < selEnd:
+				st = th.Selection
+			case cursorLine:
 				st = st.Background(th.CursorLineBg) // la línea del cursor: toda su fila
 			}
 			if hasDiag {
@@ -707,7 +769,7 @@ func (v *EditorView) drawSoftLine(s Surface, th Theme, hl *highlighter, line int
 
 // drawLineUnwrapped pinta la línea lógica completa en una fila física (sin
 // wrap): el cluster que no entra se corta contra el borde, como siempre.
-func (v *EditorView) drawLineUnwrapped(s Surface, th Theme, hl *highlighter, line int, text string, content []byte, row int, cursorLine bool) {
+func (v *EditorView) drawLineUnwrapped(s Surface, th Theme, hl *highlighter, line int, text string, content []byte, row int, cursorLine bool, lineStart, selStart, selEnd int, selActive bool) {
 	gutter := v.gutterWidth()
 	v.drawGutter(s, th, line, row, true)
 	_, hasDiag := v.diagAt(line)
@@ -717,7 +779,6 @@ func (v *EditorView) drawLineUnwrapped(s Surface, th Theme, hl *highlighter, lin
 		cl := g.Str()
 		from, _ := g.Positions()
 		if cl == "\r" {
-
 			col = 0 // retorno de carro aislado: vuelve al inicio de la misma fila
 			continue
 		}
@@ -731,7 +792,11 @@ func (v *EditorView) drawLineUnwrapped(s Surface, th Theme, hl *highlighter, lin
 		// viene pintado).
 		if x >= gutter && x+w <= v.viewport.Width+gutter && cl != "\t" {
 			st := th.StyleForRole(hl.styleAt(content, from))
-			if cursorLine {
+			goff := lineStart + from // offset global del cluster
+			switch {
+			case selActive && goff >= selStart && goff < selEnd:
+				st = th.Selection
+			case cursorLine:
 				st = st.Background(th.CursorLineBg)
 			}
 			if hasDiag {
@@ -795,16 +860,17 @@ func (v *EditorView) handleKey(ev *tcell.EventKey) bool {
 	if page < 1 {
 		page = 1
 	}
+	shift := ev.Modifiers()&tcell.ModShift != 0
 
 	switch ev.Key() {
 	case tcell.KeyUp:
-		return v.moveVertical(-1)
+		return v.moveWithShift(shift, func() bool { return v.moveVertical(-1) })
 	case tcell.KeyDown:
-		return v.moveVertical(1)
+		return v.moveWithShift(shift, func() bool { return v.moveVertical(1) })
 	case tcell.KeyLeft:
-		return v.moveHorizontal(-1)
+		return v.moveWithShift(shift, func() bool { return v.moveHorizontal(-1) })
 	case tcell.KeyRight:
-		return v.moveHorizontal(1)
+		return v.moveWithShift(shift, func() bool { return v.moveHorizontal(1) })
 	case tcell.KeyPgUp:
 		// Ctrl+PageUp/PageDown cambian de pestaña y son del controlador, no
 		// scroll de página: la vista los ignora con ModCtrl para que ninguna
@@ -813,22 +879,26 @@ func (v *EditorView) handleKey(ev *tcell.EventKey) bool {
 		if ev.Modifiers()&tcell.ModCtrl != 0 {
 			return false
 		}
-		return v.moveVertical(-page)
+		return v.moveWithShift(shift, func() bool { return v.moveVertical(-page) })
 	case tcell.KeyPgDn:
 		if ev.Modifiers()&tcell.ModCtrl != 0 {
 			return false
 		}
-		return v.moveVertical(page)
+		return v.moveWithShift(shift, func() bool { return v.moveVertical(page) })
 	case tcell.KeyHome:
 		if ev.Modifiers()&tcell.ModCtrl != 0 {
-			return v.moveDocStart()
+			return v.moveWithShift(shift, v.moveDocStart)
 		}
-		return v.moveLineStart()
+		return v.moveWithShift(shift, v.moveLineStart)
 	case tcell.KeyEnd:
 		if ev.Modifiers()&tcell.ModCtrl != 0 {
-			return v.moveDocEnd()
+			return v.moveWithShift(shift, v.moveDocEnd)
 		}
-		return v.moveLineEnd()
+		return v.moveWithShift(shift, v.moveLineEnd)
+	case tcell.KeyCtrlA:
+		return v.selectAll()
+	case tcell.KeyCtrlV:
+		return v.PasteClipboard()
 
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
 		return v.backspace()
@@ -855,8 +925,12 @@ func (v *EditorView) handleKey(ev *tcell.EventKey) bool {
 	return false
 }
 
-// handleMouse solo altera el viewport: la rueda no debe arrastrar el cursor.
-// El clic sí lo mueve, porque cae dentro de la pantalla por definición.
+// handleMouse traduce el mouse del editor: la rueda scrollea sin arrastrar el
+// cursor, el clic mueve el cursor y limpia la selección, el arrastre con el
+// Button1 presionado extiende una selección VIVA desde el ancla del press, y
+// Shift+clic extiende desde el ancla previo (VSCode-like). La columna del
+// gutter es de solo lectura visual: el clic O el arrastre que arranca ahí no
+// seleccionan (se ignoran, como el clic que ya no movía el cursor).
 func (v *EditorView) handleMouse(ev *tcell.EventMouse) bool {
 	btns := ev.Buttons()
 
@@ -871,8 +945,46 @@ func (v *EditorView) handleMouse(ev *tcell.EventMouse) bool {
 		return v.scrollColumnBy(3)
 	case btns&tcell.Button1 != 0:
 		x, y := ev.Position()
-		return v.moveCursorToCell(x, y)
+		// El clic/arrastre sobre el gutter (números y marcadores de severidad)
+		// no arma ni extiende selección: se ignora entero.
+		if x < v.gutterWidth() {
+			return false
+		}
+		if v.mouseDown {
+			// tcell no distingue el movimiento con botón: un Button1 repetido
+			// con el flag de arrastre ya activo es un drag (extiende desde el
+			// ancla del press); el primero es el press que ancla.
+			if v.mouseAnchor == nil {
+				return false
+			}
+			v.selAnchor = v.mouseAnchor
+			changed := v.moveCursorToCell(x, y)
+			v.updateSelection()
+			return changed || v.SelectionActive()
+		}
+		// Press (sin arrastre previo): mueve el cursor y ancla el punto para
+		// un posible drag. Sin Shift limpia la selección (clic simple); con
+		// Shift extiende desde el ancla (o la arranca acá) — VSCode-like, el
+		// mismo patrón del teclado (selAnchor + updateSelection).
+		shift := ev.Modifiers()&tcell.ModShift != 0
+		if shift {
+			v.beginExtend()
+		}
+		changed := v.moveCursorToCell(x, y)
+		v.mouseDown = true
+		a := v.cursorOffset()
+		v.mouseAnchor = &a
+		if shift {
+			v.updateSelection()
+			return changed || v.SelectionActive()
+		}
+		v.clearSelection()
+		return changed
 	}
+	// Release (ButtonNone) o cualquier otro estado sin el botón: fin del
+	// arrastre; la selección queda marcada como quedó.
+	v.mouseDown = false
+	v.mouseAnchor = nil
 	return false
 }
 

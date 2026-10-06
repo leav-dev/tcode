@@ -268,3 +268,51 @@ func TestEventThatDoesNotChangeViewportReturnsFalse(t *testing.T) {
 		t.Fatal("un evento de mouse sin rueda no debería pedir redibujado")
 	}
 }
+
+// TestPasteTextInsertsTheBlockAsOneUndoStep: PasteText inserta el texto
+// COMPLETO que manda el terminal en su evento de bracketed paste (no runa por
+// runa) y queda como UN solo paso de deshacer.
+func TestPasteTextInsertsTheBlockAsOneUndoStep(t *testing.T) {
+	v := newTestView(t, "uno", 20, 3)
+
+	if !v.PasteText("hola\nmundo") {
+		t.Fatal("PasteText debe insertar el bloque")
+	}
+	if got := string(v.model.GetContent()); got != "hola\nmundouno" {
+		t.Fatalf("contenido = %q, se esperaba el bloque pegado de una vez", got)
+	}
+
+	// Un solo Ctrl+Z saca el bloque entero (no letra por letra).
+	if _, ok, err := v.model.Undo(); err != nil || !ok {
+		t.Fatalf("Undo del bloque falló: ok=%v err=%v", ok, err)
+	}
+	if got := string(v.model.GetContent()); got != "uno" {
+		t.Fatalf("contenido tras un undo = %q, se esperaba el documento original", got)
+	}
+}
+
+// TestPasteTextInsertsAtTheCursor: pegar SIN selección inserta en la posición
+// del cursor (no borra nada previo).
+func TestPasteTextInsertsAtTheCursor(t *testing.T) {
+	v := newTestView(t, "uno", 20, 3)
+	v.MoveCursorToOffset(2) // cursor entre "un" y "o"
+
+	v.PasteText("XY")
+
+	if got := string(v.model.GetContent()); got != "unXYo" {
+		t.Fatalf("contenido = %q, se esperaba la inserción en el cursor", got)
+	}
+}
+
+// TestPasteTextReplacesAnActiveSelection: pegar con selección activa reemplaza
+// el rango (VSCode-like), no inserta al lado.
+func TestPasteTextReplacesAnActiveSelection(t *testing.T) {
+	v := newTestView(t, "abcdef", 20, 3)
+	v.sel = Selection{Start: 0, End: 3} // "abc" marcado
+
+	v.PasteText("Z")
+
+	if got := string(v.model.GetContent()); got != "Zdef" {
+		t.Fatalf("contenido = %q, se esperaba la selección reemplazada", got)
+	}
+}

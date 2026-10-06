@@ -118,6 +118,21 @@ func NewPieceTable() *PieceTable {
 // Path devuelve la ruta del archivo asociado, o "" si no hay ninguno.
 func (pt *PieceTable) Path() string { return pt.path }
 
+// TextRange devuelve el texto entre dos offsets de documento (clampados al
+// rango válido). Lo usa la vista para copiar una selección.
+func (pt *PieceTable) TextRange(start, end int) string {
+	if start < 0 {
+		start = 0
+	}
+	if end > pt.docLen {
+		end = pt.docLen
+	}
+	if end <= start {
+		return ""
+	}
+	return string(pt.slice(start, end))
+}
+
 // Modified indica si hay cambios sin guardar. Se deduce del historial en lugar de
 // llevarse en un flag aparte: el documento está limpio cuando el historial está
 // justo en el punto de guardado. Así deshacer después de guardar vuelve a marcarlo

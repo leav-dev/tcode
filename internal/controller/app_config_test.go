@@ -1,12 +1,16 @@
 package controller
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
+	"tcode/internal/ext"
 	"tcode/internal/view"
 )
 
@@ -234,6 +238,212 @@ func TestConfigThemePersistsWhenCycled(t *testing.T) {
 	}
 	if cfg.IndentUnit != 4 || cfg.ExplorerWidth != 24 {
 		t.Fatalf("ciclar el tema no debe tocar los demás ajustes: indent=%d width=%d", cfg.IndentUnit, cfg.ExplorerWidth)
+	}
+}
+
+// fakeCatalog es el fake de fetchCatalog: devuelve entradas y errores
+// configurables y registra las llamadas (con mutex: lo llama una goroutine).
+type fakeCatalog struct {
+	mu      sync.Mutex
+	entries []ext.CatalogEntry
+	errs    []error
+	calls   int
+}
+
+func (f *fakeCatalog) fetch(ctx context.Context, userRoot string) ([]ext.CatalogEntry, []error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	return f.entries, f.errs
+}
+
+// fakeInstall es el fake de installExtension: registra los subdirs pedidos y
+// devuelve un error configurable.
+type fakeInstall struct {
+	mu      sync.Mutex
+	subdirs []string
+	err     error
+}
+
+func (f *fakeInstall) install(url, subdir, userRoot string, cloner ext.CloneFunc) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.subdirs = append(f.subdirs, subdir)
+	return subdir, f.err
+}
+
+// swapCatalogFakes sustituye fetchCatalog e installExtension por los fakes
+// dados (nil deja el original) y los restaura al final. Se llama ANTES de
+// abrir el panel: la goroutine de consulta usa el fake.
+func swapCatalogFakes(t *testing.T, cat *fakeCatalog, inst *fakeInstall) {
+	t.Helper()
+	oldFetch, oldInstall := fetchCatalog, installExtension
+	if cat != nil {
+		fetchCatalog = cat.fetch
+	}
+	if inst != nil {
+		installExtension = inst.install
+	}
+	t.Cleanup(func() {
+		fetchCatalog, installExtension = oldFetch, oldInstall
+	})
+}
+
+// openExtensionsPanelFromMenu abre el panel desde la ventana de configuración
+// (Ctrl+P → Down ×4 → Enter) y drena la consulta del catálogo.
+func openExtensionsPanelFromMenu(t *testing.T, app *App) {
+	t.Helper()
+	app.handleEvent(tcell.NewEventKey(tcell.KeyCtrlP, 0, tcell.ModNone))
+	if !app.configActive {
+		t.Fatal("Ctrl+P debe abrir la ventana de configuración")
+	}
+	for range 4 {
+		app.handleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
+	}
+	if quit := app.handleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone)); quit {
+		t.Fatal("Enter en Extensions no debe cerrar el editor")
+	}
+	if !app.extPanelActive {
+		t.Fatal("Enter en Extensions debe abrir el panel")
+	}
+	drainCatalog(t, app)
+}
+
+// drainCatalog espera el EventInterrupt que posteó la goroutine de consulta y
+// lo procesa (drena catalogCh y deposita el resultado en el panel). PollEvent
+// bloquea hasta que la goroutine postee: el envío a catalogCh ocurre ANTES del
+// post (orden del programa en la goroutine), así que al volver del Poll el
+// resultado ya está en el canal — sin carrera.
+func drainCatalog(t *testing.T, app *App) {
+	t.Helper()
+	evCh := make(chan tcell.Event, 1)
+	go func() {
+		evCh <- app.screen.PollEvent()
+	}()
+	var ev tcell.Event
+	select {
+	case ev = <-evCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("la goroutine de consulta no posteó el EventInterrupt a tiempo")
+	}
+	if ev == nil {
+		t.Fatal("PollEvent devolvió nil: la goroutine no posteó el evento")
+	}
+	if _, ok := ev.(*tcell.EventInterrupt); !ok {
+		t.Fatalf("PollEvent devolvió %T, se esperaba *tcell.EventInterrupt", ev)
+	}
+	app.handleEvent(ev)
+}
+
+// TestCtrlPOpensTheExtensionsPanel: Enter sobre la fila Extensions de la
+// ventana de configuración abre el panel (extPanelActive, configActive false),
+// la consulta del catálogo pobló la lista, y Escape sobre el panel lo cierra
+// y vuelve a la ventana de configuración.
+func TestCtrlPOpensTheExtensionsPanel(t *testing.T) {
+	resetConfigVars(t)
+	app, _ := newTestApp(t, "uno")
+
+	cat := &fakeCatalog{entries: []ext.CatalogEntry{
+		{ID: "alpha", Name: "Alpha", Version: "1.0.0", Subdir: "alpha"},
+	}}
+	swapCatalogFakes(t, cat, nil)
+
+	openExtensionsPanelFromMenu(t, app)
+	if app.configActive {
+		t.Fatal("el panel abierto debe cerrar la ventana de configuración")
+	}
+
+	// La consulta del catálogo pobló la lista del panel.
+	cat.mu.Lock()
+	calls := cat.calls
+	cat.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("fetchCatalog llamado %d veces, se esperaba 1", calls)
+	}
+	if got := len(app.extPanel.Entries()); got != 1 {
+		t.Fatalf("el panel tiene %d entradas, se esperaba 1", got)
+	}
+
+	// Escape sobre el panel: cierra y vuelve a la ventana de configuración.
+	if quit := app.handleEvent(tcell.NewEventKey(tcell.KeyEscape, 0, tcell.ModNone)); quit {
+		t.Fatal("Escape en el panel no debe cerrar el editor")
+	}
+	if app.extPanelActive {
+		t.Fatal("Escape debe cerrar el panel de extensiones")
+	}
+	if !app.configActive {
+		t.Fatal("Escape en el panel debe volver a la ventana de configuración")
+	}
+}
+
+// TestExtensionsPanelInstallsSelected: Espacio marca una extensión, Enter en
+// el item final (bajar con End) instala la marcada —el fake de install
+// registra la llamada con el subdir correcto— y tras instalar la entrada queda
+// Installed.
+func TestExtensionsPanelInstallsSelected(t *testing.T) {
+	resetConfigVars(t)
+	app, _ := newTestApp(t, "uno")
+
+	cat := &fakeCatalog{entries: []ext.CatalogEntry{
+		{ID: "alpha", Name: "Alpha", Version: "1.0.0", Subdir: "alpha"},
+		{ID: "beta", Name: "Beta", Version: "2.0.0", Subdir: "beta"},
+	}}
+	inst := &fakeInstall{}
+	swapCatalogFakes(t, cat, inst)
+
+	openExtensionsPanelFromMenu(t, app)
+	if got := len(app.extPanel.Entries()); got != 2 {
+		t.Fatalf("el panel tiene %d entradas, se esperaban 2", got)
+	}
+
+	// Espacio marca la primera (alpha).
+	app.extPanel.HandleEvent(tcell.NewEventKey(tcell.KeyRune, ' ', tcell.ModNone))
+	// End: cursor al item final.
+	app.extPanel.HandleEvent(tcell.NewEventKey(tcell.KeyEnd, 0, tcell.ModNone))
+	// Enter en el item final: instala la marcada (alpha).
+	if quit := app.handleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone)); quit {
+		t.Fatal("Enter en el panel no debe cerrar el editor")
+	}
+
+	// El fake de install registró la llamada con el subdir correcto.
+	inst.mu.Lock()
+	subdirs := append([]string(nil), inst.subdirs...)
+	inst.mu.Unlock()
+	if len(subdirs) != 1 || subdirs[0] != "alpha" {
+		t.Fatalf("installExtension llamado con subdirs=%v, se esperaba [alpha]", subdirs)
+	}
+
+	// Tras instalar, la entrada queda Installed (y la otra no).
+	installed := map[string]bool{}
+	for _, e := range app.extPanel.Entries() {
+		installed[e.ID] = e.Installed
+	}
+	if !installed["alpha"] {
+		t.Fatal("alpha debe quedar instalada tras instalarla")
+	}
+	if installed["beta"] {
+		t.Fatal("beta no debe estar instalada")
+	}
+}
+
+// TestConfigToggleClosesTheExtensionsPanel: con el panel abierto, Ctrl+P lo
+// cierra y vuelve a la ventana de configuración (no abre nada nuevo).
+func TestConfigToggleClosesTheExtensionsPanel(t *testing.T) {
+	resetConfigVars(t)
+	app, _ := newTestApp(t, "uno")
+	swapCatalogFakes(t, &fakeCatalog{}, nil)
+
+	openExtensionsPanelFromMenu(t, app)
+
+	// Ctrl+P con el panel abierto: cierra el panel y vuelve a la ventana.
+	if quit := app.handleEvent(tcell.NewEventKey(tcell.KeyCtrlP, 0, tcell.ModNone)); quit {
+		t.Fatal("Ctrl+P no debe cerrar el editor")
+	}
+	if app.extPanelActive {
+		t.Fatal("Ctrl+P debe cerrar el panel de extensiones")
+	}
+	if !app.configActive {
+		t.Fatal("Ctrl+P con el panel abierto debe volver a la ventana de configuración")
 	}
 }
 
