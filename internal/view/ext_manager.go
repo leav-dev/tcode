@@ -1,6 +1,7 @@
 package view
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/gdamore/tcell/v2"
@@ -422,12 +423,13 @@ func (m *ExtManager) Draw(s Surface) {
 		s.SetContent(m.width-1, y, '│', nil, th.Text)
 	}
 
-	// Pestañas sobre el borde superior: cada una con su rótulo y un espacio de
-	// separación; la activa va entre corchetes para que se vea cuál es sin
-	// depender del color. writeString recorta si no entran todas.
+	// Pestañas sobre el borde superior: cada una con su rótulo y su conteo
+	// («Disponibles (3)») más un espacio de separación; la activa va entre
+	// corchetes para que se vea cuál es sin depender del color. writeString
+	// recorta si no entran todas.
 	x := 1
 	for tab := ExtTab(0); tab < extTabCount && x < m.width-1; tab++ {
-		label := extTabNames[tab]
+		label := extTabNames[tab] + " (" + strconv.Itoa(len(m.items[tab])) + ")"
 		style := th.Text
 		if tab == m.tab {
 			label = "[" + label + "]"

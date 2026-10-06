@@ -26,7 +26,7 @@ func extManagerFixture(t *testing.T) *ExtManager {
 		{Kind: ExtItemInfo, Label: "remoto", Right: "(sin aprobar)"},
 		{Kind: ExtItemAddProvider, Label: "+ Agregar proveedor"},
 	})
-	m.Resize(60, ExtManagerHeight())
+	m.Resize(80, ExtManagerHeight())
 	return m
 }
 
@@ -190,14 +190,14 @@ func TestExtManagerScrollsOnlyAsNeeded(t *testing.T) {
 // resaltada a todo el ancho.
 func TestExtManagerDrawsTabsAndRows(t *testing.T) {
 	m := extManagerFixture(t)
-	s := newTestScreen(t, 60, ExtManagerHeight())
+	s := newTestScreen(t, 80, ExtManagerHeight())
 	m.Draw(s)
 	s.Show()
 
 	if got := cellRuneAt(s, 0, 0); got != '┌' {
 		t.Fatalf("(0,0) = %q, se esperaba la esquina del marco '┌'", got)
 	}
-	if got := cellRuneAt(s, 59, ExtManagerHeight()-1); got != '┘' {
+	if got := cellRuneAt(s, 79, ExtManagerHeight()-1); got != '┘' {
 		t.Fatalf("esquina inferior derecha = %q, se esperaba '┘'", got)
 	}
 	if got := cellRuneAt(s, 0, 1); got != '│' {
@@ -211,8 +211,8 @@ func TestExtManagerDrawsTabsAndRows(t *testing.T) {
 			t.Fatalf("borde superior = %q, debe contener la pestaña %q", top, name)
 		}
 	}
-	if !strings.Contains(top, "[Instaladas]") {
-		t.Fatalf("borde superior = %q, la pestaña activa debe ir marcada entre corchetes", top)
+	if !strings.Contains(top, "[Instaladas (1)]") {
+		t.Fatalf("borde superior = %q, la pestaña activa debe ir marcada entre corchetes con su conteo", top)
 	}
 
 	// La fila del cursor va con la barra de selección (TreeCursor) a todo el
@@ -230,8 +230,8 @@ func TestExtManagerDrawsTabsAndRows(t *testing.T) {
 	m.Draw(s)
 	s.Show()
 	top = screenLines(s)[0]
-	if !strings.Contains(top, "[Actualizables]") {
-		t.Fatalf("borde superior = %q tras cambiar de pestaña, se esperaba [Actualizables]", top)
+	if !strings.Contains(top, "[Actualizables (1)]") {
+		t.Fatalf("borde superior = %q tras cambiar de pestaña, se esperaba [Actualizables (1)]", top)
 	}
 	if line := screenLines(s)[1]; !strings.Contains(line, "1.0.0 → 1.1.0") {
 		t.Fatalf("fila de Actualizables = %q, debe mostrar el salto de versión", line)
@@ -245,8 +245,8 @@ func TestExtManagerEmptyTabShowsAPlaceholder(t *testing.T) {
 	m := NewExtManager()
 	m.SetItems(ExtTabInstalled, nil)
 	m.SetItems(ExtTabAvailable, []ExtItem{{Kind: ExtItemInstall, Label: "Tema"}})
-	m.Resize(60, ExtManagerHeight())
-	s := newTestScreen(t, 60, ExtManagerHeight())
+	m.Resize(80, ExtManagerHeight())
+	s := newTestScreen(t, 80, ExtManagerHeight())
 	m.Draw(s)
 	s.Show()
 

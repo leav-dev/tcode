@@ -822,4 +822,9 @@ func (fb *FileBrowser) drawFooter(s Surface) {
 	file, folder := buttonRanges()
 	writeString(s, file[0], y, " "+NewFileLabel+" ", th.Button, fb.width-file[0])
 	writeString(s, folder[0], y, " "+NewFolderLabel+" ", th.Button, fb.width-folder[0])
+	// Filete en la celda que separa ambos chips (buttonRanges deja una):
+	// orden visual sin mover nada.
+	if gap := file[1]; gap < folder[0] && gap < fb.width {
+		s.SetContent(gap, y, '│', nil, th.Text)
+	}
 }

@@ -153,7 +153,7 @@ func (tb *TabBar) Draw(sc Surface, ws *model.Workspace, width int) {
 
 	active := ws.ActiveIndex()
 	th := themeOr(tb.theme)
-	for _, s := range slots {
+	for si, s := range slots {
 		label := tabLabel(ws.BufferAt(s.index))
 		style := th.TabIdle
 		if s.index == active {
@@ -171,6 +171,12 @@ func (tb *TabBar) Draw(sc Surface, ws *model.Workspace, width int) {
 			continue
 		}
 		writeString(sc, s.x, 0, label, style, s.width)
+		// Filete en la columna de separación entre pestañas (el layout ya
+		// reserva esa celda): orden visual sin gastar ancho extra. Tras una
+		// truncada la fila corta ahí y no lleva filete.
+		if si+1 < len(slots) && s.x+s.width <= contentEnd {
+			sc.SetContent(s.x+s.width, 0, '│', nil, tcell.StyleDefault)
+		}
 	}
 
 	if right {

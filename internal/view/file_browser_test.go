@@ -1202,6 +1202,9 @@ func TestFileBrowserFooterDrawsBothButtons(t *testing.T) {
 	if !strings.Contains(bottom, NewFileLabel) || !strings.Contains(bottom, NewFolderLabel) {
 		t.Fatalf("pie = %q, se esperaban los dos botones (%q y %q)", bottom, NewFileLabel, NewFolderLabel)
 	}
+	if !strings.Contains(bottom, "│") {
+		t.Fatalf("pie = %q, se esperaba el filete entre botones", bottom)
+	}
 }
 
 // TestFileBrowserFooterClickReturnsTheCreateActions: un clic en cada botón

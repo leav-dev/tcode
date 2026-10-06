@@ -54,7 +54,7 @@ func TestTabBarDrawsLabelsAndModifiedMarker(t *testing.T) {
 	s := newTestScreen(t, 40, 1)
 	drawTabBar(tb, ws, s, 40)
 
-	want := "a.txt b.txt [+]"
+	want := "a.txt│b.txt [+]"
 	if got := screenLines(s)[0]; got != want {
 		t.Fatalf("fila 0 = %q, se esperaba %q", got, want)
 	}
@@ -128,7 +128,7 @@ func TestTabBarScrollShowsArrowsAndKeepsActiveVisible(t *testing.T) {
 		t.Fatal("la pestaña activa visible debe ir en estilo invertido")
 	}
 
-	want := "<t2.txt t3.txt>"
+	want := "<t2.txt│t3.txt>"
 	if got := screenLines(s)[0]; got != want {
 		t.Fatalf("fila 0 = %q, se esperaba %q", got, want)
 	}
@@ -194,7 +194,7 @@ func TestTabBarWideMiddleTabStillDrawsTheActive(t *testing.T) {
 	if got := cellRuneAt(s, 27, 0); got != 'y' {
 		t.Fatalf("(27,0) = %q, se esperaba el inicio de la pestaña activa", got)
 	}
-	if got := screenLines(s)[0]; got != "x.txt nombre-muy-largo.txt y.txt" {
+	if got := screenLines(s)[0]; got != "x.txt│nombre-muy-largo.txt│y.txt" {
 		t.Fatalf("fila 0 = %q", got)
 	}
 }
