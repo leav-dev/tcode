@@ -20,17 +20,28 @@ set -u
 self="$(readlink -f "$0")"
 repo="$(dirname "$(dirname "$self")")"
 
-# El binario vive en dist/: se usa el que ya esté alojado ahí (el flujo
-# habitual es dist/tcode, el que deja `go build` y el instalador local).
-# Si todavía no hay ninguno, se cae al default y se compila abajo.
-bin=""
-for cand in "$repo/dist/tcode" "$repo/dist/tcode.exe"; do
-	if [ -e "$cand" ]; then
-		bin="$cand"
-		break
-	fi
-done
-[ -n "$bin" ] || bin="$repo/dist/tcode"
+# El binario vive en dist/ y se nombra según el SO anfitrión: `tcode` en
+# Linux/macOS, `tcode.exe` en Windows (Git Bash/MSYS/CYGWIN). Si el canónico
+# todavía no existe pero hay un binario alojado con otro nombre (p. ej.
+# `tcode` sin extensión en Windows o un asset `tcode-<os>-<arch>`), se usa
+# ese para no recompilar sin necesidad; si no hay ninguno, se compila el
+# canónico abajo.
+dev_bin_for_this_os() {
+	case "$(uname -s)" in
+		MINGW* | MSYS* | CYGWIN*) printf '%s' "$repo/dist/tcode.exe" ;; # Windows
+		*) printf '%s' "$repo/dist/tcode" ;; # Linux, macOS y demás Unix
+	esac
+}
+
+bin="$(dev_bin_for_this_os)"
+if [ ! -e "$bin" ]; then
+	for legacy in "$repo/dist/tcode" "$repo/dist/tcode.exe" "$repo/dist/tcode-linux-amd64" "$repo/dist/tcode-darwin-arm64" "$repo/dist/tcode-windows-amd64.exe"; do
+		if [ -e "$legacy" ]; then
+			bin="$legacy"
+			break
+		fi
+	done
+fi
 
 # Reconstruye si el binario falta o si algún .go es más nuevo. `.git` se poda
 # porque recorrerlo no aporta fuentes y es lo más pesado del árbol.
