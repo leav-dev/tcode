@@ -16,7 +16,7 @@ curl -fsSL https://raw.githubusercontent.com/leav-dev/tcode/main/scripts/install
 tcode .
 ```
 
-[Instalación](#-instalación-en-30-segundos) · [Atajos](#-uso-diario) · [Extensiones](#-extensiones) · [Docs](docs/constitution.md)
+[Instalación](#-instalación-en-30-segundos) · [Preview](#-preview) · [Atajos](#-uso-diario) · [Extensiones](#-extensiones) · [Docs](docs/constitution.md)
 
 </div>
 
@@ -67,6 +67,28 @@ go install github.com/leav-dev/tcode@latest     # Go 1.25+
 > ¿Recién salió un tag y `@latest` trae la anterior? Es el caché del proxy de Go: pedí la versión explícita (`@vX.Y.Z`) o usá `GOPROXY=direct`.
 >
 > Compilar desde fuente, cross-build y notas de macOS/Gatekeeper → [`docs/install.md`](docs/install.md)
+
+## 🧪 Preview
+
+Probá lo último de la rama `preview` sin ensuciar tu instalación estable. Los tags `preview-v*` salen como **Pre-release** en GitHub: `tcode update` y el instalador por defecto los ignoran a propósito.
+
+**Opción A — binario del prerelease (sin Go):**
+
+```bash
+# mirá el último tag en: https://github.com/leav-dev/tcode/releases
+# (buscá el que diga Pre-release, ej. preview-v0.1.3)
+TCODE_RELEASE_BASE=https://github.com/leav-dev/tcode/releases/download/preview-v0.1.3 \
+  bash scripts/install.sh
+```
+
+**Opción B — desde la rama (siempre al día, requiere Go 1.25+):**
+
+```bash
+git fetch origin preview && git checkout preview
+bash scripts/install.sh --build
+```
+
+> Volver a estable es el instalador normal (sin `TCODE_RELEASE_BASE`) o `tcode update`. Nunca taggees `v*-preview`: matchea `v*` y saldría como estable.
 
 ## ⌨️ Uso diario
 
