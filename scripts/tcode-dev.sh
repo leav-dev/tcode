@@ -19,7 +19,18 @@ set -u
 
 self="$(readlink -f "$0")"
 repo="$(dirname "$(dirname "$self")")"
-bin="$repo/dist/tcode-linux-amd64"
+
+# El binario vive en dist/: se usa el que ya esté alojado ahí (el flujo
+# habitual es dist/tcode, el que deja `go build` y el instalador local).
+# Si todavía no hay ninguno, se cae al default y se compila abajo.
+bin=""
+for cand in "$repo/dist/tcode" "$repo/dist/tcode.exe"; do
+	if [ -e "$cand" ]; then
+		bin="$cand"
+		break
+	fi
+done
+[ -n "$bin" ] || bin="$repo/dist/tcode"
 
 # Reconstruye si el binario falta o si algún .go es más nuevo. `.git` se poda
 # porque recorrerlo no aporta fuentes y es lo más pesado del árbol.
