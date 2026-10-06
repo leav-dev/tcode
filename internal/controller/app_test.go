@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"encoding/json"
 	"io/fs"
 	"os"
@@ -31,6 +32,9 @@ func TestMain(m *testing.M) {
 	extensionUserSources = func() ([]ext.Provider, string, error) {
 		return nil, filepath.Join(os.TempDir(), "tcode-test-no-extensions"), nil
 	}
+	// El chequeo del propio editor queda mudo: sin red en los tests salvo que
+	// un test lo pinnee explícitamente.
+	editorUpdateCheck = func(context.Context) (string, error) { return "", nil }
 	view.SetIndentSize(4)
 	view.SetWordWrapEnabled(true)
 	view.SetExplorerWidth(24)
@@ -4109,6 +4113,78 @@ func TestManualRefreshRejectedWhileJobRunning(t *testing.T) {
 	if !app.extActive {
 		t.Fatal("la ventana debe seguir abierta")
 	}
+}
+
+// pinEditorUpdate sustituye el chequeo de release y la versión propia por
+// valores fijos, sin red.
+func pinEditorUpdate(t *testing.T, own, latest string) {
+	t.Helper()
+	oldCheck, oldOwn := editorUpdateCheck, editorOwnVersion
+	editorUpdateCheck = func(context.Context) (string, error) { return latest, nil }
+	editorOwnVersion = func() string { return own }
+	t.Cleanup(func() { editorUpdateCheck, editorOwnVersion = oldCheck, oldOwn })
+}
+
+// awaitEditorNotice consume eventos hasta que la barra anuncia la
+// actualización (o se acaba el plazo).
+func awaitEditorNotice(t *testing.T, app *App) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !strings.Contains(app.statusBar.Message(), "disponible") {
+		if time.Now().After(deadline) {
+			t.Fatal("el aviso de actualización del editor no llegó")
+		}
+		events := make(chan tcell.Event, 1)
+		go func() { events <- app.screen.PollEvent() }()
+		select {
+		case ev := <-events:
+			app.handleEvent(ev)
+		case <-time.After(10 * time.Second):
+			t.Fatal("el chequeo del editor no entregó su resultado")
+		}
+	}
+}
+
+// TestEditorUpdateNotice: con release más nuevo, el arranque avisa en la
+// barra cómo actualizar, sin prompt ni descarga.
+func TestEditorUpdateNotice(t *testing.T) {
+	resetConfigVars(t)
+	pinEditorUpdate(t, "v0.1.0", "v0.2.0")
+	app, _ := newTestApp(t, "uno")
+	awaitEditorNotice(t, app)
+	if got := app.statusBar.Message(); !strings.Contains(got, "tcode update") {
+		t.Fatalf("el mensaje es %q, debe decir cómo actualizar", got)
+	}
+}
+
+// TestEditorUpdateSilentWhenCurrent: ya al día (o dev sin versión), el
+// chequeo no dice nada: un arranque silencioso sigue silencioso.
+func TestEditorUpdateSilentWhenCurrent(t *testing.T) {
+	resetConfigVars(t)
+	pinEditorUpdate(t, "v0.2.0", "v0.2.0")
+	app, _ := newTestApp(t, "uno")
+	awaitExtSnapshot(t, app)
+	// Gracia para que un aviso indebido alcance a llegar: el fake responde
+	// al instante, así que 1s sin aviso es silencio de verdad.
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case ev := <-pollEvent(app):
+			app.handleEvent(ev)
+		case <-time.After(100 * time.Millisecond):
+		}
+		if strings.Contains(app.statusBar.Message(), "disponible") {
+			t.Fatalf("el mensaje es %q, al día no debe avisar", app.statusBar.Message())
+		}
+	}
+}
+
+// pollEvent envuelve el PollEvent bloqueante en un canal para poder
+// esperarlo con timeout.
+func pollEvent(app *App) <-chan tcell.Event {
+	ch := make(chan tcell.Event, 1)
+	go func() { ch <- app.screen.PollEvent() }()
+	return ch
 }
 
 // TestExtensionWindowRejectsConcurrentJob: con un job en vuelo, otra

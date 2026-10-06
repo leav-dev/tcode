@@ -2,13 +2,16 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/leav-dev/tcode/internal/controller"
 	"github.com/leav-dev/tcode/internal/ext"
+	"github.com/leav-dev/tcode/internal/update"
 )
 
 // Modos comando de la CLI: instalan, listan o eliminan extensiones sobre la
@@ -53,7 +56,7 @@ func main() {
 }
 
 // runCommandMode ejecuta el modo comando cuando os.Args[1] es un flag de
-// extensión. Devuelve (código de salida, cierto) cuando hay que salir sin
+// extensión o el subcomando update. Devuelve (código de salida, cierto) cuando hay que salir sin
 // abrir la UI; con cualquier otro primer argumento (o ninguno) devuelve
 // (0, falso) y main arranca la app normal.
 func runCommandMode() (int, bool) {
@@ -145,9 +148,53 @@ func runCommandMode() (int, bool) {
 			return 1, true
 		}
 		return 0, true
+
+	case "update":
+		if err := runUpdate(); err != nil {
+			fmt.Fprintf(os.Stderr, "tcode: %v\n", err)
+			return 1, true
+		}
+		return 0, true
 	}
 
 	return 0, false
+}
+
+// runUpdate actualiza el editor al último release: pregunta el tag, compara
+// con la versión propia y, si hay algo nuevo, descarga el asset verificado y
+// reemplaza el ejecutable en uso. Ya estar al día no es error: se informa y
+// listo. Sin versión propia conocida igual funciona: instala latest a ciegas
+// y avisa que no pudo comparar.
+func runUpdate() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	tag, err := update.CheckLatest(ctx)
+	if err != nil {
+		return err
+	}
+	if tag == "" {
+		return fmt.Errorf("no se pudo saber el último release (sin red o rate limit)")
+	}
+	current := update.CurrentVersion()
+	if current != "" && !update.NeedsUpdate(current, tag) {
+		fmt.Printf("Ya estás al día: %s\n", current)
+		return nil
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolviendo el ejecutable: %w", err)
+	}
+	if current == "" {
+		fmt.Printf("Versión propia desconocida (build de desarrollo); instalando %s en %s\n", tag, exe)
+	} else {
+		fmt.Printf("Actualizando %s → %s en %s\n", current, tag, exe)
+	}
+	if err := update.Update(ctx, tag, exe); err != nil {
+		return err
+	}
+	fmt.Printf("Actualizado a %s\n", tag)
+	return nil
 }
 
 // addProvider registra una fuente de extensiones en ~/.tcode/providers.json:

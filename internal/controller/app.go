@@ -15,6 +15,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/leav-dev/tcode/internal/ext"
 	"github.com/leav-dev/tcode/internal/model"
+	"github.com/leav-dev/tcode/internal/update"
 	"github.com/leav-dev/tcode/internal/view"
 )
 
@@ -352,6 +353,9 @@ func NewAppWithScreen(s tcell.Screen, path string) (*App, error) {
 	// eventos y el aviso aparece en la barra cuando llega; hasta entonces el
 	// editor ya está escribiendo.
 	app.prefetchExtensions()
+	// El chequeo del propio editor va en la misma tanda de fondo que el de
+	// extensiones: avisa en la barra si hay release nuevo, sin descargar nada.
+	app.prefetchEditorUpdate()
 	// La configuración persistida (~/.tcode/config.json) se aplica ANTES de
 	// cargar extensiones: el conjunto de desactivadas decide cuáles se
 	// registran. También deja el indent, el wrap y el ancho del panel listos
@@ -677,6 +681,22 @@ var providersConfigPath = func() (string, error) {
 // resuelve las fuentes acá, en el arranque, y manda a la goroutine SOLO la
 // lectura remota.
 
+// editorUpdateCheck pregunta el tag del último release del editor; es
+// variable para que los tests la sustituyan por un fake sin red. Misma
+// razón para editorOwnVersion: la versión propia en tests es dev.
+var (
+	editorUpdateCheck = func(ctx context.Context) (string, error) { return update.CheckLatest(ctx) }
+	editorOwnVersion  = update.CurrentVersion
+)
+
+// editorUpdateEvent es el sobre con el que la goroutine del chequeo del
+// editor entrega el tag latest al bucle de eventos. Viaja como
+// tcell.EventInterrupt, igual que extSnapshotEvent: screen.PostEvent es la
+// única puerta thread-safe hacia el loop.
+type editorUpdateEvent struct {
+	Tag string
+}
+
 // extSnapshotEvent es el sobre con el que la goroutine del prefetch entrega el
 // snapshot al bucle de eventos. Viaja como tcell.EventInterrupt porque
 // screen.PostEvent es la única puerta thread-safe hacia el loop: ninguna
@@ -732,6 +752,32 @@ func (a *App) prefetchExtensions() {
 			Err:      lastError(errs),
 		}))
 	}()
+}
+
+// prefetchEditorUpdate pregunta el último release en segundo plano y
+// devuelve de inmediato: el arranque sigue sin esperar. Si el tag es más
+// nuevo que la versión propia, avisa en la barra cómo actualizar; si no hay
+// nada nuevo (o no se pudo saber: sin red, dev), silencio total.
+func (a *App) prefetchEditorUpdate() {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		tag, err := editorUpdateCheck(ctx)
+		if err != nil || tag == "" {
+			return
+		}
+		if !update.NeedsUpdate(editorOwnVersion(), tag) {
+			return
+		}
+		a.screen.PostEvent(tcell.NewEventInterrupt(editorUpdateEvent{Tag: tag}))
+	}()
+}
+
+// handleEditorUpdate avisa en la barra que hay release nuevo y cómo
+// traerlo. Sin prompt y sin descarga: la decisión es del usuario, fuera del
+// arranque (tcode update en una terminal).
+func (a *App) handleEditorUpdate(ev editorUpdateEvent) {
+	a.statusBar.SetMessage("tcode " + ev.Tag + " disponible — actualizá con: tcode update")
 }
 
 // lastError devuelve el último error de la lista, o nil si no hay: los errores
@@ -1658,6 +1704,11 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 
 		if p, ok := ev.Data().(extJobEvent); ok {
 			a.handleExtJob(p)
+			a.redraw()
+		}
+
+		if p, ok := ev.Data().(editorUpdateEvent); ok {
+			a.handleEditorUpdate(p)
 			a.redraw()
 		}
 

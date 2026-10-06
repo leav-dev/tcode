@@ -219,6 +219,7 @@ Los binarios de otro SO **no** se pueden ejecutar ni testear en el anfitrión:
 | Instalar una extensión por id | `tcode --install-extension tcode.vimlite` |
 | Agregar una fuente de extensiones | `tcode --add-provider <url-git\|carpeta>` (luego `tcode --approve-provider <nombre>`) |
 | Ver / borrar extensiones | `tcode --list-extensions` · `tcode --remove-extension <proveedor:id\|id>` |
+| Actualizar el editor | `tcode update` (descarga el último release verificado y reemplaza el ejecutable) |
 
 Al arrancar, `tcode` revisa las extensiones **en segundo plano**: en cuanto el
 editor abre, una goroutine lee el catálogo de cada proveedor (comparte la versión
@@ -232,6 +233,11 @@ Cuando llega, si hay actualizaciones o novedades, la barra de estado lo avisa
 ```
 2 actualizaciones, 1 novedad — Ctrl+P → Extensiones
 ```
+
+**El propio editor también se revisa.** En la misma tanda de fondo, `tcode`
+pregunta el último release publicado y compara con su versión: si hay uno
+nuevo, la barra avisa `tcode vX.Y.Z disponible — actualizá con: tcode update`.
+Sin prompt y sin descargar nada solo; sin red o en builds de desarrollo, silencio.
 
 | Seleccionar | `Shift`+flechas / `Ctrl+A` todo · arrastrar con el mouse · `Shift`+clic extiende |
 | Copiar / cortar / pegar | `Ctrl+C` / `Ctrl+X` / `Ctrl+V` (portapapeles del sistema) |
