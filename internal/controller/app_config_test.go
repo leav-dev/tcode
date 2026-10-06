@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -380,9 +381,9 @@ func TestCtrlPOpensTheExtensionsPanel(t *testing.T) {
 }
 
 // TestExtensionsPanelInstallsSelected: Espacio marca una extensión, Enter en
-// el item final (bajar con End) instala la marcada —el fake de install
-// registra la llamada con el subdir correcto— y tras instalar la entrada queda
-// Installed.
+// el item final (bajar con End) la instala EN SEGUNDO PLANO —el pedido vuelve
+// de inmediato con el job en vuelo— y al entregar el fake registró la llamada
+// con el subdir correcto y la entrada queda Installed.
 func TestExtensionsPanelInstallsSelected(t *testing.T) {
 	resetConfigVars(t)
 	app, _ := newTestApp(t, "uno")
@@ -403,10 +404,14 @@ func TestExtensionsPanelInstallsSelected(t *testing.T) {
 	app.extPanel.HandleEvent(tcell.NewEventKey(tcell.KeyRune, ' ', tcell.ModNone))
 	// End: cursor al item final.
 	app.extPanel.HandleEvent(tcell.NewEventKey(tcell.KeyEnd, 0, tcell.ModNone))
-	// Enter en el item final: instala la marcada (alpha).
+	// Enter en el item final: instala la marcada (alpha) sin bloquear.
 	if quit := app.handleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone)); quit {
 		t.Fatal("Enter en el panel no debe cerrar el editor")
 	}
+	if !app.extJobRunning {
+		t.Fatal("Enter debe lanzar el job de instalación en segundo plano")
+	}
+	awaitExtJob(t, app)
 
 	// El fake de install registró la llamada con el subdir correcto.
 	inst.mu.Lock()
@@ -426,6 +431,99 @@ func TestExtensionsPanelInstallsSelected(t *testing.T) {
 	}
 	if installed["beta"] {
 		t.Fatal("beta no debe estar instalada")
+	}
+	if got := app.toast.Message(); !strings.Contains(got, "Instalada") {
+		t.Fatalf("el toast es %q, debe confirmar la instalación", got)
+	}
+}
+
+// TestExtensionsPanelQueuesBatch: con dos marcadas, Enter instala la primera
+// de inmediato y la segunda queda EN COLA (un job en vuelo); un solo await
+// consume la cadena y ambas quedan instaladas, en orden.
+func TestExtensionsPanelQueuesBatch(t *testing.T) {
+	resetConfigVars(t)
+	app, _ := newTestApp(t, "uno")
+
+	cat := &fakeCatalog{entries: []ext.CatalogEntry{
+		{ID: "alpha", Name: "Alpha", Version: "1.0.0", Subdir: "alpha"},
+		{ID: "beta", Name: "Beta", Version: "2.0.0", Subdir: "beta"},
+	}}
+	inst := &fakeInstall{}
+	swapCatalogFakes(t, cat, inst)
+
+	openExtensionsPanelFromMenu(t, app)
+
+	// Espacio marca alpha, bajar, Espacio marca beta, End al item final.
+	app.extPanel.HandleEvent(tcell.NewEventKey(tcell.KeyRune, ' ', tcell.ModNone))
+	app.extPanel.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
+	app.extPanel.HandleEvent(tcell.NewEventKey(tcell.KeyRune, ' ', tcell.ModNone))
+	app.extPanel.HandleEvent(tcell.NewEventKey(tcell.KeyEnd, 0, tcell.ModNone))
+	if quit := app.handleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone)); quit {
+		t.Fatal("Enter en el panel no debe cerrar el editor")
+	}
+	if !app.extJobRunning {
+		t.Fatal("la primera debe arrancar de inmediato")
+	}
+	if len(app.extInstallQueue) != 1 || app.extInstallQueue[0].catalogID != "beta" {
+		t.Fatalf("la cola = %+v, se esperaba el pedido de catálogo de beta", app.extInstallQueue)
+	}
+
+	awaitExtJob(t, app)
+	if app.extJobRunning || len(app.extInstallQueue) != 0 {
+		t.Fatal("vaciada la cola no debe quedar ningún job en vuelo ni pedidos")
+	}
+	inst.mu.Lock()
+	subdirs := append([]string(nil), inst.subdirs...)
+	inst.mu.Unlock()
+	if len(subdirs) != 2 || subdirs[0] != "alpha" || subdirs[1] != "beta" {
+		t.Fatalf("installExtension llamado con subdirs=%v, se esperaba [alpha beta] en orden", subdirs)
+	}
+	for _, e := range app.extPanel.Entries() {
+		if !e.Installed {
+			t.Fatalf("la entrada %s debe quedar Installed", e.ID)
+		}
+	}
+}
+
+// TestCatalogInstallQueuesWhileWindowJobRunning: UN SOLO funnel —un pedido del
+// panel con un job de la ventana en vuelo espera su turno detrás de él y al
+// terminar arranca solo: la ventana instala su extensión en disco y el fake
+// del catálogo registra la suya después.
+func TestCatalogInstallQueuesWhileWindowJobRunning(t *testing.T) {
+	resetConfigVars(t)
+	app, userRoot, _ := extWindowFixture(t, true)
+	inst := &fakeInstall{}
+	swapCatalogFakes(t, nil, inst)
+	app.catalog = []ext.CatalogEntry{
+		{ID: "alpha", Name: "Alpha", Version: "1.0.0", Subdir: "alpha"},
+	}
+
+	// La ventana instala su novedad en segundo plano.
+	first := view.ExtItem{Kind: view.ExtItemInstall, ID: "tcode.tema", Provider: "remoto", Ref: "remoto/tcode.tema"}
+	if err := app.installExtension(first); err != nil {
+		t.Fatalf("installExtension: %v", err)
+	}
+	if !app.extJobRunning {
+		t.Fatal("el pedido de la ventana debe lanzar el job")
+	}
+	// El panel pide la suya con ese job en vuelo: queda en cola.
+	app.installCatalogEntries([]string{"alpha"})
+	if len(app.extInstallQueue) != 1 || app.extInstallQueue[0].catalogID != "alpha" {
+		t.Fatalf("la cola = %+v, se esperaba el pedido de catálogo de alpha", app.extInstallQueue)
+	}
+
+	awaitExtJob(t, app)
+	if _, err := os.Stat(filepath.Join(userRoot, "remoto", "tcode.tema", "extension.json")); err != nil {
+		t.Fatalf("la extensión de la ventana debe quedar instalada: %v", err)
+	}
+	inst.mu.Lock()
+	subdirs := append([]string(nil), inst.subdirs...)
+	inst.mu.Unlock()
+	if len(subdirs) != 1 || subdirs[0] != "alpha" {
+		t.Fatalf("el clon del catálogo llegó con subdirs=%v, se esperaba [alpha]", subdirs)
+	}
+	if idx := app.catalogIndex("alpha"); idx < 0 || !app.catalog[idx].Installed {
+		t.Fatal("la entrada del catálogo debe quedar Installed")
 	}
 }
 

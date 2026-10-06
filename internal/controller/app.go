@@ -183,6 +183,14 @@ type App struct {
 	extJobSeq     int
 	extJobRunning bool
 
+	// extInstallQueue son las instalaciones en espera: en vez de rechazarse
+	// con un job en vuelo quedan EN COLA y al terminar el vigente arranca
+	// sola la siguiente, siempre DE A UNA (un solo clone a la vez, bajo
+	// consumo). Hay DOS orígenes —la ventana (por proveedor) y el panel del
+	// catálogo— y un solo funnel: el drenado ejecuta cada pedido por su
+	// camino. Solo se toca en el hilo de los eventos.
+	extInstallQueue []extPendingInstall
+
 	// extRefreshManual dice si la lectura en vuelo la pidió el usuario con
 	// la tecla r (y no el arranque): el resultado manual SIEMPRE se reporta
 	// con toast, incluso sin novedades. Lo consume handleExtSnapshot.
@@ -2693,37 +2701,36 @@ func (a *App) setCatalog(res catalogResult) {
 }
 
 // installCatalogEntries instala las extensiones del catálogo indicadas por id
-// (Enter del panel): busca cada entrada en el último catálogo consultado, la
-// instala con installExtension (clon real si no hay fake) y deja el resultado
-// en la barra: "N instaladas" o "N instaladas · M fallidas". Nunca crashea:
-// cada error se acumula al contador de fallidas. Después refresca el flag
-// Installed de las entradas instaladas y vuelve a depositar la lista en el
-// panel.
+// (Enter del panel) por LA MISMA cola que la ventana: cada id conocido entra
+// como pedido de catálogo —si hay un job en vuelo espera su turno, si no la
+// primera arranca de inmediato— y las entregas marcan su entrada como
+// Installed una por una, con su toast de éxito o error. Solo los ids que ya
+// no están en el catálogo se cuentan como fallidos en el acto: sin entrada no
+// hay nada que encolar. El panel NO se congela: el clon corre en segundo plano
+// como los demás jobs.
 func (a *App) installCatalogEntries(ids []string) {
-	root := userExtensionRoot()
-	var installed, failed int
+	failed := 0
 	for _, id := range ids {
-		idx := a.catalogIndex(id)
-		if idx < 0 {
+		if a.catalogIndex(id) < 0 {
 			failed++
 			continue
 		}
-		entry := a.catalog[idx]
-		if _, err := installExtension("https://github.com/"+ext.CatalogRepo, entry.Subdir, root, nil); err != nil {
-			a.statusBar.SetMessage("Error instalando " + entry.ID + ": " + err.Error())
-			failed++
+		if a.extJobRunning {
+			a.enqueueInstall(extPendingInstall{catalogID: id})
 			continue
 		}
-		a.catalog[idx].Installed = true
-		installed++
+		a.startCatalogInstallJob(id)
 	}
-	switch {
-	case failed == 0:
-		a.statusBar.SetMessage(fmt.Sprintf("%d instaladas", installed))
-	default:
-		a.statusBar.SetMessage(fmt.Sprintf("%d instaladas · %d fallidas", installed, failed))
+	if failed == len(ids) && failed > 0 {
+		a.statusBar.SetMessage(plural(failed, "fallida", "fallidas"))
 	}
-	// Refresca el panel con los flags Installed nuevos.
+	a.redraw()
+}
+
+// refreshCatalogPanel repone las filas del panel del catálogo desde el último
+// catálogo consultado: lo que cambia tras instalar es el flag Installed, no
+// las entradas.
+func (a *App) refreshCatalogPanel() {
 	entries := make([]view.ExtensionEntry, len(a.catalog))
 	for i, e := range a.catalog {
 		entries[i] = view.ExtensionEntry{
@@ -3055,13 +3062,33 @@ func (a *App) clearExtArtifacts(id string) {
 	a.syncStatus()
 }
 
+// extPendingInstall es un pedido de instalación en espera en extInstallQueue:
+// o viene de la ventana (item, que se instala por proveedor con InstallByID)
+// o del panel del catálogo (catalogID, que se clona del repo del catálogo).
+// El drenado ejecuta cada uno por su camino, siempre DE A UNO: un solo funnel
+// secuencial para no pisar la raíz ni clonar en paralelo.
+type extPendingInstall struct {
+	item      view.ExtItem
+	catalogID string
+}
+
+// label nombra el pedido para avisos y dedup: la ref proveedor/id de la
+// ventana, el id del catálogo para el panel.
+func (p extPendingInstall) label() string {
+	if p.catalogID != "" {
+		return p.catalogID
+	}
+	return p.item.Ref
+}
+
 // extJobKind dice qué escritura corre un job en segundo plano: instalar una
-// extensión suelta o actualizar las que difieren. Borrar es disco local y
-// queda sincrónico.
+// extensión de la ventana, instalar una entrada del catálogo o actualizar las
+// que difieren. Borrar es disco local y queda sincrónico.
 type extJobKind int
 
 const (
 	extJobInstall extJobKind = iota
+	extJobCatalogInstall
 	extJobUpdate
 )
 
@@ -3076,7 +3103,10 @@ type extJobEvent struct {
 	Kind    extJobKind
 	Ref     string
 	Applied int
-	ErrMsg  string
+	// CatalogID es el id de la entrada del catálogo que instaló un job de
+	// catálogo: con él se marca la entrada como Installed al entregar.
+	CatalogID string
+	ErrMsg    string
 }
 
 // handleExtJob aplica el resultado de un job de escritura: limpia el flag de
@@ -3088,9 +3118,25 @@ func (a *App) handleExtJob(ev extJobEvent) {
 		return // llegó un job viejo: el dato fresco ya está en caché
 	}
 	a.extJobRunning = false
+	if ev.Kind == extJobCatalogInstall {
+		// El catálogo marca SU entrada y repinta SU panel: la ventana de
+		// extensiones (snapshot de proveedores) no cambió con este job.
+		if ev.ErrMsg != "" {
+			a.showToast(ev.Ref+": "+ev.ErrMsg, view.ToastError)
+		} else {
+			if idx := a.catalogIndex(ev.CatalogID); idx >= 0 {
+				a.catalog[idx].Installed = true
+			}
+			a.refreshCatalogPanel()
+			a.showToast("Instalada: "+ev.Ref, view.ToastSuccess)
+		}
+		a.drainInstallQueue()
+		return
+	}
 	a.refreshExtData()
 	if ev.ErrMsg != "" {
 		a.showToast(ev.Ref+": "+ev.ErrMsg, view.ToastError)
+		a.drainInstallQueue()
 		return
 	}
 	switch ev.Kind {
@@ -3103,6 +3149,86 @@ func (a *App) handleExtJob(ev extJobEvent) {
 			a.showToast(plural(ev.Applied, "actualización aplicada", "actualizaciones aplicadas"), view.ToastSuccess)
 		}
 	}
+	// La vigente terminó: si hay pedidos en espera arranca sola la
+	// siguiente, de a una. El drenado vale para ambos kinds porque la
+	// actualización también tomaba el lock de escritura.
+	a.drainInstallQueue()
+}
+
+// enqueueInstall agrega el pedido a la cola (con dedup por label) y avisa
+// en la barra. Devuelve false si ya estaba pedido o la cola está llena: en
+// ambos casos el pedido NO entra dos veces ni sin cota.
+func (a *App) enqueueInstall(p extPendingInstall) bool {
+	for _, q := range a.extInstallQueue {
+		if q.label() == p.label() {
+			a.statusBar.SetMessage(p.label() + " ya está en cola")
+			return false
+		}
+	}
+	if len(a.extInstallQueue) >= maxInstallQueue {
+		a.statusBar.SetMessage("cola de instalación llena: esperá a que termine la vigente")
+		return false
+	}
+	a.extInstallQueue = append(a.extInstallQueue, p)
+	a.statusBar.SetMessage(fmt.Sprintf("En cola: %s (%d en espera)", p.label(), len(a.extInstallQueue)))
+	return true
+}
+
+// drainInstallQueue arranca el siguiente pedido encolado, si hay y no corre
+// ningún job. Cada pedido va por su camino (ventana por proveedor, panel por
+// clon del catálogo), siempre DE A UNO: el job que arranca levanta el flag y
+// la cadena sigue hasta vaciar la cola. Si las fuentes de la ventana no se
+// resuelven, la cola se descarta con el error en la barra: reintentar es
+// pedir de nuevo, no adivinar.
+func (a *App) drainInstallQueue() {
+	if a.extJobRunning || len(a.extInstallQueue) == 0 {
+		return
+	}
+	next := a.extInstallQueue[0]
+	a.extInstallQueue = a.extInstallQueue[1:]
+	if next.catalogID != "" {
+		a.startCatalogInstallJob(next.catalogID)
+		return
+	}
+	providers, userRoot, err := extensionUserSources()
+	if err != nil {
+		a.extInstallQueue = nil
+		a.statusBar.SetMessage("cola de instalación descartada: " + err.Error())
+		return
+	}
+	a.startInstallJob(next.item, providers, userRoot, startupExtFetch)
+}
+
+// startCatalogInstallJob lanza en segundo plano la instalación de una entrada
+// del catálogo: clona su subdir del repo del catálogo con installExtension
+// (variable para los fakes de test) y entrega por EventInterrupt como los
+// demás jobs. Subdir, raíz e instalador se capturan POR VALOR en el hilo de
+// los eventos: la goroutine no relee el catálogo, que puede cambiar mientras
+// clona.
+func (a *App) startCatalogInstallJob(id string) {
+	a.extJobSeq++
+	seq := a.extJobSeq
+	a.extJobRunning = true
+	idx := a.catalogIndex(id)
+	subdir, root := "", userExtensionRoot()
+	if idx >= 0 {
+		subdir = a.catalog[idx].Subdir
+	}
+	installer := installExtension
+	msg := "Instalando " + id + " en segundo plano…"
+	if n := len(a.extInstallQueue); n > 0 {
+		msg += fmt.Sprintf(" (%d en cola)", n)
+	}
+	a.showToast(msg, view.ToastInfo)
+	go func() {
+		ev := extJobEvent{Seq: seq, Kind: extJobCatalogInstall, Ref: id, CatalogID: id}
+		if idx < 0 {
+			ev.ErrMsg = "ya no está en el catálogo"
+		} else if _, err := installer("https://github.com/"+ext.CatalogRepo, subdir, root, nil); err != nil {
+			ev.ErrMsg = err.Error()
+		}
+		a.screen.PostEvent(tcell.NewEventInterrupt(ev))
+	}()
 }
 
 // startInstallJob lanza la instalación en una goroutine y vuelve de
@@ -3114,7 +3240,11 @@ func (a *App) startInstallJob(item view.ExtItem, providers []ext.Provider, userR
 	a.extJobSeq++
 	seq := a.extJobSeq
 	a.extJobRunning = true
-	a.showToast("Instalando "+item.Ref+" en segundo plano…", view.ToastInfo)
+	msg := "Instalando " + item.Ref + " en segundo plano…"
+	if n := len(a.extInstallQueue); n > 0 {
+		msg += fmt.Sprintf(" (%d en cola)", n)
+	}
+	a.showToast(msg, view.ToastInfo)
 	go func() {
 		res, err := ext.InstallByID(item.ID, providers, userRoot, fetcher, nil)
 		ev := extJobEvent{Seq: seq, Kind: extJobInstall, Ref: item.Ref}
@@ -3168,16 +3298,23 @@ func (a *App) promptInstallExtension(item view.ExtItem) {
 	})
 }
 
+// maxInstallQueue acota las instalaciones en espera: una cola sin tope es
+// memoria sin cota, y 32 sobra para extensiones (pedir más es esperar a que
+// se vacíe, no seguir acumulando).
+const maxInstallQueue = 32
+
 // installExtension instala la extensión por id con la MISMA ruta que la CLI
 // (ext.InstallByID, no una reinvención): resolución por orden de proveedores y
 // validación del manifest antes de tocar el destino. Corre en SEGUNDO PLANO
 // (startInstallJob): esta función vuelve de inmediato y el editor sigue
 // respondiendo mientras git clona; el resultado llega por EventInterrupt y
-// repinta la ventana con recarga de la sesión. Si ya hay un job en vuelo se
-// rechaza: dos escrituras concurrentes sobre la raíz se pisarían.
+// repinta la ventana con recarga de la sesión. Si ya hay un job en vuelo la
+// instalación queda EN COLA en vez de rechazarse: al terminar el vigente
+// arranca sola la siguiente, siempre de a una (dos escrituras concurrentes
+// sobre la raíz se pisarían y N clones a la vez suben el consumo).
 func (a *App) installExtension(item view.ExtItem) error {
 	if a.extJobRunning {
-		a.statusBar.SetMessage("ya hay una instalación en curso")
+		a.enqueueInstall(extPendingInstall{item: item})
 		return nil
 	}
 	providers, userRoot, err := extensionUserSources()
