@@ -3,10 +3,18 @@ name: release
 # Builds tcode for the supported platforms on every v* tag and uploads the
 # binaries plus a checksums.txt as GitHub release assets. The installers
 # download them (scripts/install.sh, scripts/install.ps1).
+#
+# Preview versions use `preview-v*` tags (e.g. preview-v0.1.3) from the
+# preview branch: they build the same assets but the GitHub release is
+# marked as prerelease (stable users and `tcode update`, which reads
+# releases/latest, never see them) and GoReleaser/homebrew is skipped.
+# Never tag a preview as `v*-preview`: it would match `v*` and ship as
+# a stable release.
 on:
   push:
     tags:
       - 'v*'
+      - 'preview-v*'
 
 permissions:
   contents: write
@@ -51,8 +59,14 @@ jobs:
         with:
           files: dist/*
           fail_on_unmatched_files: true
+          # Preview tags ship as prerelease so releases/latest (stable
+          # users, installers, `tcode update`) never points at them.
+          prerelease: ${{ startsWith(github.ref_name, 'preview-') }}
 
   release:
+    # Stable only: GoReleaser parses the tag as semver (preview-v* is
+    # not) and bumps the homebrew formula, which must track stable.
+    if: ${{ !startsWith(github.ref_name, 'preview-') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
