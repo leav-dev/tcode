@@ -349,11 +349,12 @@ func NewAppWithScreen(s tcell.Screen, path string) (*App, error) {
 	// corren Lua con la API tcode.* cableada a App (ScriptAPI).
 	app.ext.SetEditor(app)
 
-	// La fila Extensions de la ventana de configuración abre el panel de
-	// extensiones: el callback vive acá porque abrirlo es decisión del
+	// La fila Extensiones de la ventana de configuración abre el panel de
+	// catálogo: el callback vive acá porque abrirlo es decisión del
 	// controlador (consulta el catálogo en goroutine y compone el panel).
+	// Acepta ambas etiquetas (histórica en inglés y actual en español).
 	app.configMenu.SetOnAction(func(label string) bool {
-		if label == "Extensions" {
+		if label == "Extensiones" || label == "Extensions" {
 			return app.openExtensionsPanel()
 		}
 		return false
