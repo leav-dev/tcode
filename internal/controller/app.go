@@ -339,7 +339,7 @@ func NewAppWithScreen(s tcell.Screen, path string) (*App, error) {
 	// extensiones: el callback vive acá porque abrirlo es decisión del
 	// controlador (consulta el catálogo en goroutine y compone el panel).
 	app.configMenu.SetOnAction(func(label string) bool {
-		if label == "Extensions" {
+		if label == "Extensiones" || label == "Extensions" {
 			return app.openExtensionsPanel()
 		}
 		return false
