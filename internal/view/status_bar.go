@@ -117,13 +117,20 @@ func (s *StatusBar) Draw(sc tcell.Screen, y, width int) {
 	}
 
 	label := s.label()
+	labelStyle := status
 	sections := s.sectionsText()
+	if s.prompt != "" {
+		// El pedido se distingue del nombre del archivo: prefijo y estilo
+		// de mensaje para que se vea que espera una respuesta.
+		label = "» " + label
+		labelStyle = message
+	}
 
 	if s.message == "" {
 		// Sin mensaje: la etiqueta y las secciones ocupan la barra.
-		col := writeString(sc, 0, y, label, status, width)
+		col := writeString(sc, 0, y, label, labelStyle, width)
 		if sections != "" && col < width {
-			writeString(sc, col, y, "  "+sections, section, width-col)
+			writeString(sc, col, y, " │ "+sections, section, width-col)
 		}
 		return
 	}
@@ -144,9 +151,9 @@ func (s *StatusBar) Draw(sc tcell.Screen, y, width int) {
 	// anterior al mensaje. Entre ellas, la etiqueta gana: las secciones se
 	// recortan antes que el nombre del archivo.
 	left := start - 1
-	col := writeString(sc, 0, y, label, status, left)
+	col := writeString(sc, 0, y, label, labelStyle, left)
 	if sections != "" && col < left {
-		writeString(sc, col, y, "  "+sections, section, left-col)
+		writeString(sc, col, y, " │ "+sections, section, left-col)
 	}
 	writeString(sc, start, y, s.message, message, msgWidth)
 }

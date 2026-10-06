@@ -43,12 +43,12 @@ func TestTabMenuDrawsLabelsAndHighlightsTheCursorRow(t *testing.T) {
 	s := newTestScreen(t, 20, 5)
 	drawTabMenu(m, ws, s, 20)
 
-	if got := screenLines(s)[0]; got != "a.txt" {
-		t.Fatalf("fila 0 = %q, se esperaba %q", got, "a.txt")
+	if got := screenLines(s)[0]; got != "> a.txt" {
+		t.Fatalf("fila 0 = %q, se esperaba %q (marcador de la pestaña activa)", got, "> a.txt")
 	}
-	// La sucia lleva el mismo marcador que la TabBar.
-	if got := screenLines(s)[1]; got != "b.txt [+]" {
-		t.Fatalf("fila 1 = %q, se esperaba %q", got, "b.txt [+]")
+	// La sucia lleva el mismo marcador que la TabBar, con indent de no-activa.
+	if got := screenLines(s)[1]; got != "  b.txt [+]" {
+		t.Fatalf("fila 1 = %q, se esperaba %q", got, "  b.txt [+]")
 	}
 	if !cellReverse(s, 0, 0) {
 		t.Fatal("la fila del cursor debe ir en estilo invertido")
@@ -106,8 +106,8 @@ func TestTabMenuScrollKeepsTheCursorVisible(t *testing.T) {
 
 	s := newTestScreen(t, 20, 5)
 	drawTabMenu(m, ws, s, 20)
-	if got := screenLines(s)[4]; got != "t29.txt" {
-		t.Fatalf("última fila visible = %q, se esperaba %q", got, "t29.txt")
+	if got := screenLines(s)[4]; got != "> t29.txt" {
+		t.Fatalf("última fila visible = %q, se esperaba %q (activa marcada)", got, "> t29.txt")
 	}
 	if !cellReverse(s, 0, 4) {
 		t.Fatal("la pestaña activa 29 debe dibujarse resaltada en la última fila")

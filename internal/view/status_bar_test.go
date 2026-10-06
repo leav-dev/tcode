@@ -265,3 +265,26 @@ func TestWriteStringAdvancesByDisplayWidth(t *testing.T) {
 		t.Fatalf("celda (2,0) = %q, se esperaba 'b'", c)
 	}
 }
+
+// TestStatusBarPromptStandsOut: el pedido activo se distingue del nombre del
+// archivo con el prefijo » y el estilo de mensaje.
+func TestStatusBarPromptStandsOut(t *testing.T) {
+	s := newStatusScreen(t, 40)
+	bar := NewStatusBar()
+	bar.SetFile("main.go", false)
+	bar.SetPrompt("¿Borrar a.txt? [s/N] ")
+	bar.Draw(s, 0, 40)
+
+	if got := statusRow(t, s); !strings.HasPrefix(got, "» ¿Borrar a.txt? [s/N]") {
+		t.Fatalf("barra = %q, se esperaba el pedido con prefijo »", got)
+	}
+	_, _, promptStyle, _ := s.GetContent(0, 0)
+	plain := NewStatusBar()
+	plain.SetFile("main.go", false)
+	s2 := newStatusScreen(t, 40)
+	plain.Draw(s2, 0, 40)
+	_, _, fileStyle, _ := s2.GetContent(0, 0)
+	if promptStyle == fileStyle {
+		t.Fatal("el pedido debe pintar con un estilo distinto al del nombre del archivo")
+	}
+}

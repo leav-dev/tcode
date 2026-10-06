@@ -207,6 +207,13 @@ func (m *TabMenu) Draw(s Surface, ws *model.Workspace, width int) {
 		for x := 0; x < width; x++ {
 			s.SetContent(x, row, ' ', nil, style)
 		}
-		writeString(s, 0, row, tabLabel(ws.BufferAt(idx)), style, width)
+		// La pestaña ACTIVA lleva su marcador («> ») aunque el cursor esté
+		// en otra fila: al abrir, cursor y activa coinciden, pero al navegar
+		// el menú conviene seguir viendo cuál es la abierta.
+		prefix := "  "
+		if idx == ws.ActiveIndex() {
+			prefix = "> "
+		}
+		writeString(s, 0, row, prefix+tabLabel(ws.BufferAt(idx)), style, width)
 	}
 }
