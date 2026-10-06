@@ -30,6 +30,11 @@ go install github.com/leav-dev/tcode@latest
 El binario queda en `$(go env GOPATH)/bin` (en tu caso ya está en el PATH).
 Para actualizar, se repite el mismo comando.
 
+> Nota: `@latest` lo resuelve el proxy de Go, que cachea la lista de versiones
+> unos minutos. Si acabás de publicar un tag y todavía trae la anterior,
+> pedí la versión explícita (`go install github.com/leav-dev/tcode@vX.Y.Z`)
+> o salteá el caché con `GOPROXY=direct`.
+
 ### Homebrew (macOS / Linux)
 
 La vía recomendada para macOS y Linux con Homebrew:
