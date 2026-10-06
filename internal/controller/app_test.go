@@ -1456,16 +1456,17 @@ func panelRow(app *App, y int) string {
 	return strings.TrimRight(sb.String(), " ")
 }
 
-// TestReadEntriesSkipsDotfiles: readEntries —la única puerta de datos del
-// disco al árbol— NO lista los dotfiles: carpetas y archivos que arrancan
-// con "." (.git/, .tcode/, .oculto) quedan fuera, en el nivel raíz y en
-// cualquier subdirectorio. Es el contrato "el árbol muestra código, no el
-// estado de la herramienta".
-func TestReadEntriesSkipsDotfiles(t *testing.T) {
+// TestReadEntriesHidesOnlyToolDirs: readEntries —la única puerta de datos del
+// disco al árbol— oculta SOLO el estado conocido de la herramienta (.git/,
+// .tcode/); las demás convenciones con punto (.github/, .gitignore, .oculto)
+// se listan, en el nivel raíz y en cualquier subdirectorio. Es el contrato
+// "el árbol muestra código, no el estado de la herramienta".
+func TestReadEntriesHidesOnlyToolDirs(t *testing.T) {
 	dir := t.TempDir()
-	for _, name := range []string{".git", ".tcode", "docs", "visible.txt", ".oculto.txt"} {
+	dirs := map[string]bool{".git": true, ".tcode": true, ".github": true, "docs": true}
+	for _, name := range []string{".git", ".tcode", ".github", "docs", "visible.txt", ".gitignore", ".oculto.txt"} {
 		p := filepath.Join(dir, name)
-		if name == ".git" || name == ".tcode" || name == "docs" {
+		if dirs[name] {
 			if err := os.MkdirAll(p, 0o755); err != nil {
 				t.Fatalf("no se pudo crear el dir %s: %v", name, err)
 			}
@@ -1474,6 +1475,9 @@ func TestReadEntriesSkipsDotfiles(t *testing.T) {
 		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
 			t.Fatalf("no se pudo crear %s: %v", name, err)
 		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".github", "release.yml"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 
 	entries, err := readEntries(dir)
@@ -1484,25 +1488,21 @@ func TestReadEntriesSkipsDotfiles(t *testing.T) {
 	for _, e := range entries {
 		names = append(names, e.Name)
 	}
-	want := []string{"docs", "visible.txt"} // dirs primero, sin dotfiles
+	// Dirs primero (.github, docs), después archivos (.gitignore, .oculto.txt,
+	// visible.txt); .git y .tcode fuera.
+	want := []string{".github", "docs", ".gitignore", ".oculto.txt", "visible.txt"}
 	if got := strings.Join(names, ","); got != strings.Join(want, ",") {
-		t.Fatalf("readEntries = %v, se esperaba %v (los dotfiles no se listan)", names, want)
+		t.Fatalf("readEntries = %v, se esperaba %v (solo .git/.tcode se ocultan)", names, want)
 	}
 
-	// Un subdirectorio con dotfiles tampoco los muestra.
-	sub := filepath.Join(dir, "docs")
-	if err := os.MkdirAll(filepath.Join(sub, ".escondido"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sub, "nota.md"), []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	// Un subdirectorio con dotfiles los muestra (salvo estado conocido).
+	sub := filepath.Join(dir, ".github")
 	entries, err = readEntries(sub)
 	if err != nil {
 		t.Fatalf("readEntries del subdir falló: %v", err)
 	}
-	if len(entries) != 1 || entries[0].Name != "nota.md" {
-		t.Fatalf("readEntries del subdir = %+v, se esperaba solo nota.md", entries)
+	if len(entries) != 1 || entries[0].Name != "release.yml" {
+		t.Fatalf("readEntries del subdir = %+v, se esperaba solo release.yml", entries)
 	}
 }
 

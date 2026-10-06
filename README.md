@@ -9,7 +9,7 @@ resaltado de sintaxis, temas y configuración desde una ventana flotante.
 | Área | Qué incluye |
 | --- | --- |
 | Edición | Undo/redo, auto-indent, salto de palabra visual, guardado con detección de cambios externos y recarga segura, `Ctrl+S` con confirmación de pisado |
-| Explorador de archivos | Árbol lateral con lazy loading (los directorios se leen al expandir), reveal del archivo activo, creación de archivos y carpetas (`Ctrl+N` / `Ctrl+Shift+N`, o los botones del pie del panel) y borrado del nodo del cursor (`Delete`, con confirmación), archivos ocultos fuera del árbol |
+| Explorador de archivos | Árbol lateral con lazy loading (los directorios se leen al expandir), reveal del archivo activo, creación de archivos y carpetas (`Ctrl+N` / `Ctrl+Shift+N`, o los botones del pie del panel) y borrado del nodo del cursor (`Delete`, con confirmación), solo `.git`/`.tcode` fuera del árbol (el resto de los dotfiles se muestra) |
 | Selección | Por teclado (`Shift`+flechas/Home/End, `Ctrl+A`) y por mouse (arrastrar, `Shift`+clic extiende); `Ctrl+C`/`Ctrl+X`/`Ctrl+V` con el portapapeles del sistema |
 | Pestañas | Fila de pestañas, menú (`Ctrl+T`), cambio rápido desde teclado, reabrir y deduplicar rutas |
 | Apariencia | 7 paletas (Light, Dark, Light/Dark HC, Tokyo Night, Dracula, Mocha) con fondo propio, resaltado por rol para Go, Python, JS/TS, C-like y JSON, tema del usuario por JSON |

@@ -2243,12 +2243,20 @@ func (a *App) resizeEditors() {
 	}
 }
 
+// hiddenToolDirs son los únicos nombres que el árbol nunca muestra: estado
+// de la herramienta, no código (.git el control de versiones, .tcode la
+// sesión y las extensiones del proyecto). El resto de las convenciones con
+// punto SÍ entra: .github, .gitignore, .vscode y demás dotfiles son código o
+// config que se edita, no estado que ocultar.
+var hiddenToolDirs = map[string]bool{".git": true, ".tcode": true}
+
 // readEntries lee un directorio con las reglas del árbol: directorios primero
-// y luego archivos, ambos alfabéticos (os.ReadDir ya ordena), ocultos
-// incluidos; lo que no es directorio ni archivo regular queda fuera. Sin la
-// entrada sintética "..": la base del árbol es la cima fija de la sesión y
-// nunca se sube. El error se devuelve para que el llamador decida —el arranque
-// muestra el primer nivel vacío, la expansión es un no-op silencioso—.
+// y luego archivos, ambos alfabéticos (os.ReadDir ya ordena); lo que no es
+// directorio ni archivo regular queda fuera, igual que los directorios de
+// hiddenToolDirs. Sin la entrada sintética "..": la base del árbol es la cima
+// fija de la sesión y nunca se sube. El error se devuelve para que el llamador
+// decida —el arranque muestra el primer nivel vacío, la expansión es un no-op
+// silencioso—.
 func readEntries(dir string) ([]view.Entry, error) {
 	infos, err := os.ReadDir(dir)
 	if err != nil {
@@ -2257,11 +2265,11 @@ func readEntries(dir string) ([]view.Entry, error) {
 
 	var dirs, files []view.Entry
 	for _, de := range infos {
-		// Los dotfiles (nombres que arrancan con ".") no entran al árbol: .git,
-		// .tcode y el resto son estado de la herramienta, no código. El filtro
-		// vive acá, en la ÚNICA puerta de datos del disco a la vista: cubre el
-		// nivel raíz y toda expansión de subdirectorio con la misma regla.
-		if strings.HasPrefix(de.Name(), ".") {
+		// Solo el estado conocido de la herramienta queda fuera; las demás
+		// convenciones con punto se listan. El filtro vive acá, en la ÚNICA
+		// puerta de datos del disco a la vista: cubre el nivel raíz y toda
+		// expansión de subdirectorio con la misma regla.
+		if hiddenToolDirs[de.Name()] {
 			continue
 		}
 		info, err := de.Info()
