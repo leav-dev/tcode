@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
-	"tcode/internal/view"
+	"github.com/leav-dev/tcode/internal/view"
 )
 
 // TestAppLoadsThemeFromUserFile: el arranque lee ~/.tcode/theme.json y la

@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
-	"tcode/internal/model"
+	"github.com/leav-dev/tcode/internal/model"
 )
 
 // newGoTable abre un archivo .go en memoria (para el resaltado por extensión).

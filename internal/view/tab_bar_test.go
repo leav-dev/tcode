@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
-	"tcode/internal/model"
+	"github.com/leav-dev/tcode/internal/model"
 )
 
 // newTabWorkspace crea un workspace con archivos reales en t.TempDir(), en el

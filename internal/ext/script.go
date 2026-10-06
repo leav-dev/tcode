@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	lua "github.com/yuin/gopher-lua"
-	"tcode/internal/view"
+	"github.com/leav-dev/tcode/internal/view"
 )
 
 // ScriptAPI es el puente que el backend de scripting usa para tocar el editor

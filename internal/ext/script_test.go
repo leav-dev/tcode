@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"tcode/internal/view"
+	"github.com/leav-dev/tcode/internal/view"
 )
 
 // notif registra una llamada a Notify: el mensaje y el kind pedido.

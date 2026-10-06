@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
-	"tcode/internal/model"
+	"github.com/leav-dev/tcode/internal/model"
 )
 
 // eventos de teclado simulados de la sesión de edición.

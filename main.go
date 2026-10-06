@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"tcode/internal/controller"
-	"tcode/internal/ext"
+	"github.com/leav-dev/tcode/internal/controller"
+	"github.com/leav-dev/tcode/internal/ext"
 )
 
 // Modos comando de la CLI: instalan, listan o eliminan extensiones sobre la

@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
-	"tcode/internal/view"
+	"github.com/leav-dev/tcode/internal/view"
 )
 
 // TestCtrlRReloadsCleanBufferDirectly: Ctrl+R sobre un buffer limpio recarga

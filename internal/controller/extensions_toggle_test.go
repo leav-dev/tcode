@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
-	"tcode/internal/ext"
-	"tcode/internal/view"
+	"github.com/leav-dev/tcode/internal/ext"
+	"github.com/leav-dev/tcode/internal/view"
 )
 
 // installedExtSrc es una extensión instalada con un comando con script (para

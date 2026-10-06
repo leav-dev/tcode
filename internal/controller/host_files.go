@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"tcode/internal/ext"
+	"github.com/leav-dev/tcode/internal/ext"
 )
 
 // Cotas del proveedor de archivos para scripts (directriz de memoria del

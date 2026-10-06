@@ -2,7 +2,7 @@ package view
 
 import (
 	"github.com/gdamore/tcell/v2"
-	"tcode/internal/model"
+	"github.com/leav-dev/tcode/internal/model"
 )
 
 // TabMenu es el superpuesto transitorio de pestañas (Ctrl+T): una lista de una

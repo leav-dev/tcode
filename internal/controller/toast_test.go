@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
-	"tcode/internal/view"
+	"github.com/leav-dev/tcode/internal/view"
 )
 
 // newToastApp arma una app sobre un archivo nuevo en un temp dir, con una

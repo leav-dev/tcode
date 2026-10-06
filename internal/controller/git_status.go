@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"tcode/internal/ext"
+	"github.com/leav-dev/tcode/internal/ext"
 )
 
 // GitStatus implementa ScriptAPI: información de git del directorio del buffer

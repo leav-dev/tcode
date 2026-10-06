@@ -19,6 +19,17 @@ resaltado de sintaxis, temas y configuración desde una ventana flotante.
 
 ## Instalación
 
+### Go install (un solo comando)
+
+La vía más corta (requiere Go 1.25+):
+
+```bash
+go install github.com/leav-dev/tcode@latest
+```
+
+El binario queda en `$(go env GOPATH)/bin` (en tu caso ya está en el PATH).
+Para actualizar, se repite el mismo comando.
+
 ### Homebrew (macOS / Linux)
 
 La vía recomendada para macOS y Linux con Homebrew:

@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
-	"tcode/internal/ext"
-	"tcode/internal/view"
+	"github.com/leav-dev/tcode/internal/ext"
+	"github.com/leav-dev/tcode/internal/view"
 )
 
 // resetConfigVars fija las vars globales de configuración de view a sus

@@ -6,7 +6,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/uniseg"
-	"tcode/internal/model"
+	"github.com/leav-dev/tcode/internal/model"
 )
 
 // tabWidth es la cantidad de columnas a la que se expande una tabulación.

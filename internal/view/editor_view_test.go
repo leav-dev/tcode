@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
-	"tcode/internal/model"
+	"github.com/leav-dev/tcode/internal/model"
 )
 
 // newTestScreen crea una pantalla simulada de tcell (sin TTY) del tamaño dado.

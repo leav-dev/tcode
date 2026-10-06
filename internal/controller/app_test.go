@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
-	"tcode/internal/ext"
-	"tcode/internal/model"
-	"tcode/internal/view"
+	"github.com/leav-dev/tcode/internal/ext"
+	"github.com/leav-dev/tcode/internal/model"
+	"github.com/leav-dev/tcode/internal/view"
 )
 
 // TestMain aísla la suite del entorno REAL del usuario: ni ~/.tcode/config.json

@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 
 	"github.com/gdamore/tcell/v2"
-	"tcode/internal/model"
+	"github.com/leav-dev/tcode/internal/model"
 )
 
 // TabBar es la fila 0 de la composición: las pestañas abiertas del workspace.

@@ -13,9 +13,9 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
-	"tcode/internal/ext"
-	"tcode/internal/model"
-	"tcode/internal/view"
+	"github.com/leav-dev/tcode/internal/ext"
+	"github.com/leav-dev/tcode/internal/model"
+	"github.com/leav-dev/tcode/internal/view"
 )
 
 // statusHeight es la cantidad de filas que ocupa la barra de estado.

@@ -1,4 +1,4 @@
-module tcode
+module github.com/leav-dev/tcode
 
 go 1.25.8
 

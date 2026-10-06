@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
-	"tcode/internal/ext"
-	"tcode/internal/view"
+	"github.com/leav-dev/tcode/internal/ext"
+	"github.com/leav-dev/tcode/internal/view"
 )
 
 // validExtSrc es un manifest sano con un comando declarado.
