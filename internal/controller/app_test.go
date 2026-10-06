@@ -1787,8 +1787,8 @@ func TestEnterExpandsADirectoryAndItsChildrenAppear(t *testing.T) {
 	if got := panelRow(app, 0); got != "▾ carpeta/" {
 		t.Fatalf("fila 0 del panel = %q, se esperaba %q (dir expandido)", got, "▾ carpeta/")
 	}
-	if got := panelRow(app, 1); got != "    fuente.txt" {
-		t.Fatalf("fila 1 del panel = %q, se esperaba %q (el hijo, con la indentación de su nivel)", got, "    fuente.txt")
+	if got := panelRow(app, 1); got != "  · fuente.txt" {
+		t.Fatalf("fila 1 del panel = %q, se esperaba %q (el hijo, con la indentación de su nivel)", got, "  · fuente.txt")
 	}
 }
 
@@ -2235,8 +2235,8 @@ func TestSubdirsAreNotReadUntilExpanded(t *testing.T) {
 	// sus hijos aparecen.
 	press(app, tcell.KeyEnter)
 	app.redraw()
-	if got := panelRow(app, 1); got != "    fuente.txt" {
-		t.Fatalf("fila 1 del panel = %q tras expandir, se esperaba %q", got, "    fuente.txt")
+	if got := panelRow(app, 1); got != "  · fuente.txt" {
+		t.Fatalf("fila 1 del panel = %q tras expandir, se esperaba %q", got, "  · fuente.txt")
 	}
 }
 
@@ -2263,8 +2263,8 @@ func TestEnterTogglesAnExpandedDirectory(t *testing.T) {
 	if got := panelRow(app, 0); got != "▾ carpeta/" {
 		t.Fatalf("fila 0 del panel tras el primer Enter = %q, se esperaba %q", got, "▾ carpeta/")
 	}
-	if got := panelRow(app, 1); got != "    fuente.txt" {
-		t.Fatalf("fila 1 del panel = %q, se esperaba %q", got, "    fuente.txt")
+	if got := panelRow(app, 1); got != "  · fuente.txt" {
+		t.Fatalf("fila 1 del panel = %q, se esperaba %q", got, "  · fuente.txt")
 	}
 
 	press(app, tcell.KeyEnter) // lo colapsa (toggle)
@@ -2284,8 +2284,8 @@ func TestEnterTogglesAnExpandedDirectory(t *testing.T) {
 	if got := panelRow(app, 0); got != "▾ carpeta/" {
 		t.Fatalf("fila 0 del panel tras el tercer Enter = %q, se esperaba %q", got, "▾ carpeta/")
 	}
-	if got := panelRow(app, 2); got != "    otra.txt" {
-		t.Fatalf("fila 2 del panel = %q, se esperaba %q (los hijos no se duplican en el toggle)", got, "    otra.txt")
+	if got := panelRow(app, 2); got != "  · otra.txt" {
+		t.Fatalf("fila 2 del panel = %q, se esperaba %q (los hijos no se duplican en el toggle)", got, "  · otra.txt")
 	}
 }
 

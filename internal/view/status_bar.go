@@ -82,8 +82,8 @@ func (s *StatusBar) Message() string { return s.message }
 func (s *StatusBar) Sections() map[string]string { return s.sections }
 
 // sectionsText devuelve las secciones del buffer activo en orden de id,
-// separadas por dos espacios. Orden estable: la barra no puede cambiar entre
-// redibujos.
+// separadas por un filete vertical. Orden estable: la barra no puede cambiar
+// entre redibujos.
 func (s *StatusBar) sectionsText() string {
 	if len(s.sections) == 0 {
 		return ""
@@ -97,7 +97,7 @@ func (s *StatusBar) sectionsText() string {
 	for _, id := range ids {
 		parts = append(parts, s.sections[id])
 	}
-	return strings.Join(parts, "  ")
+	return strings.Join(parts, " │ ")
 }
 
 // Draw pinta la barra completa en la fila y.

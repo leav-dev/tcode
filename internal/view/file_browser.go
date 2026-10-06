@@ -705,12 +705,12 @@ func (fb *FileBrowser) HandleEvent(ev tcell.Event) (Action, bool) {
 
 // Draw pinta el árbol en coordenadas propias desde (0,0): el nodo activo va
 // con la barra de selección (TreeCursor, fondo de acento) a todo el ancho del
-// panel. Cada fila es indent + prefijo + nombre (+ "/" en los directorios),
-// con la indentación de dos celdas por nivel y el prefijo como señal del tipo:
-// "▸ " dir colapsado, "▾ " dir expandido, "  " archivo inactivo y "> "
-// archivo ACTIVO —el marcador viaja con la selección y refuerza la barra sin
-// salir de las dos celdas, así los nombres quedan alineados con los carets de
-// los directorios—. Los nombres que no entran se recortan contra el ancho del
+// panel. Cada fila es guías + prefijo + nombre (+ "/" en los directorios),
+// con dos celdas por nivel («│ » donde el ancestro continúa, espacios donde
+// ya cerró) y el prefijo como señal del tipo: "▸ " dir colapsado, "▾ " dir
+// expandido, "· " archivo inactivo y "> " archivo ACTIVO —el marcador viaja
+// con la selección y refuerza la barra sin salir de las dos celdas, así los
+// nombres quedan alineados con los carets de los directorios—. Los nombres que no entran se recortan contra el ancho del
 // panel (writeString avanza por grapheme cluster). Sin nodos o sin alto no hay
 // nada que dibujar.
 func (fb *FileBrowser) Draw(s Surface) {
@@ -744,7 +744,7 @@ func (fb *FileBrowser) drawTree(s Surface) {
 			s.SetContent(x, row, ' ', nil, style)
 		}
 
-		prefix := "  "
+		prefix := "· "
 		if n.isDir {
 			// Los directorios conservan su caret también en la fila activa: el
 			// caret es el indicador de expansión, reemplazarlo en la selección
@@ -759,12 +759,41 @@ func (fb *FileBrowser) drawTree(s Surface) {
 			// de selección, "> " señala dónde está el cursor en el árbol.
 			prefix = "> "
 		}
-		line := strings.Repeat(" ", n.depth*2) + prefix + n.name
+		line := fb.guides(idx) + prefix + n.name
 		if n.isDir {
 			line += "/"
 		}
 		writeString(s, 0, row, line, style, fb.width)
 	}
+}
+
+// guides devuelve la indentación de la fila idx: dos celdas por nivel, con
+// «│ » en los niveles cuyo ancestro continúa (tiene un hermano siguiente)
+// y dos espacios donde el ancestro ya cerró. El ancho por nivel no cambia,
+// así el hit-test del mouse sobre la flecha (▸/▾) sigue valiendo.
+func (fb *FileBrowser) guides(idx int) string {
+	var b strings.Builder
+	for level := 0; level < fb.nodes[idx].depth; level++ {
+		if fb.continues(idx, level) {
+			b.WriteString("│ ")
+		} else {
+		b.WriteString("  ")
+		}
+	}
+	return b.String()
+}
+
+// continues dice si el ancestro de la fila idx en el nivel level tiene un
+// hermano siguiente: mirando hacia adelante, el primer nodo con profundidad
+// menor o igual al nivel decide —si está justo en el nivel, el ancestro
+// continúa; si está por encima, el ancestro ya era el último hijo.
+func (fb *FileBrowser) continues(idx, level int) bool {
+	for j := idx + 1; j < len(fb.nodes); j++ {
+		if fb.nodes[j].depth <= level {
+			return fb.nodes[j].depth == level
+		}
+	}
+	return false
 }
 
 // buttonRanges devuelve los rangos [x0,x1) que ocupan los dos botones del pie:

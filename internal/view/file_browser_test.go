@@ -26,6 +26,39 @@ func newList(n int) []Entry {
 // TestFileBrowserDrawsIndentedWithPrefixes: cada nodo se dibuja con su
 // indentación (2 celdas por nivel) y su prefijo —"▸ " dir colapsado, "▾ "
 // dir expandido, "  " archivo—, y los directorios con el sufijo "/".
+// TestFileBrowserDrawsGuidesForContinuingLevels: los niveles cuyo ancestro
+// tiene un hermano siguiente llevan guía vertical («│ »); el último hijo
+// lleva dos espacios. El ancho por nivel no cambia (2 celdas).
+func TestFileBrowserDrawsGuidesForContinuingLevels(t *testing.T) {
+	fb := NewFileBrowser()
+	fb.Resize(20, 6)
+	fb.SetRoot("/cwd")
+	fb.SetRootEntries([]Entry{
+		{Name: "docs", Path: "/cwd/docs", IsDir: true},
+		{Name: "notas.txt", Path: "/cwd/notas.txt"},
+	})
+	fb.SetChildren([]Entry{
+		{Name: "a.txt", Path: "/cwd/docs/a.txt"},
+		{Name: "b.txt", Path: "/cwd/docs/b.txt"},
+	})
+
+	s := newTestScreen(t, 20, 6)
+	fb.Draw(s)
+	s.Show()
+	want := []string{
+		"▾ docs/",
+		"│ · a.txt",
+		"│ · b.txt",
+		"· notas.txt",
+	}
+	lines := screenLines(s)
+	for i, w := range want {
+		if lines[i] != w {
+			t.Fatalf("fila %d = %q, se esperaba %q", i, lines[i], w)
+		}
+	}
+}
+
 func TestFileBrowserDrawsIndentedWithPrefixes(t *testing.T) {
 	fb := NewFileBrowser()
 	fb.Resize(20, 6)
@@ -42,8 +75,8 @@ func TestFileBrowserDrawsIndentedWithPrefixes(t *testing.T) {
 	if got := screenLines(s)[0]; got != "▸ docs/" {
 		t.Fatalf("fila 0 = %q, se esperaba %q (dir colapsado con prefijo y sufijo)", got, "▸ docs/")
 	}
-	if got := screenLines(s)[1]; got != "  notas.txt" {
-		t.Fatalf("fila 1 = %q, se esperaba %q (archivo con prefijo de 2 celdas)", got, "  notas.txt")
+	if got := screenLines(s)[1]; got != "· notas.txt" {
+		t.Fatalf("fila 1 = %q, se esperaba %q (archivo con bullet)", got, "· notas.txt")
 	}
 	if got := screenLines(s)[2]; got != "" {
 		t.Fatalf("fila 2 = %q, se esperaba vacía: el árbol termina", got)
@@ -117,15 +150,15 @@ func TestFileBrowserActiveFileRowShowsMarker(t *testing.T) {
 	if got := screenLines(s)[0]; got != "> a.txt" {
 		t.Fatalf("fila activa de archivo = %q, se esperaba %q (marcador de posición)", got, "> a.txt")
 	}
-	if got := screenLines(s)[1]; got != "  b.txt" {
-		t.Fatalf("fila inactiva de archivo = %q, se esperaba %q (prefijo sin marcador)", got, "  b.txt")
+	if got := screenLines(s)[1]; got != "· b.txt" {
+		t.Fatalf("fila inactiva de archivo = %q, se esperaba %q (bullet sin marcador)", got, "· b.txt")
 	}
 
 	fb.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
 	fb.Draw(s)
 	s.Show()
-	if got := screenLines(s)[0]; got != "  a.txt" {
-		t.Fatalf("fila inactiva de archivo = %q, se esperaba %q (prefijo sin marcador)", got, "  a.txt")
+	if got := screenLines(s)[0]; got != "· a.txt" {
+		t.Fatalf("fila inactiva de archivo = %q, se esperaba %q (bullet sin marcador)", got, "· a.txt")
 	}
 	if got := screenLines(s)[1]; got != "> b.txt" {
 		t.Fatalf("fila activa tras Down = %q, se esperaba %q (el marcador viaja con el cursor)", got, "> b.txt")
@@ -185,9 +218,9 @@ func TestFileBrowserExpandingShowsChildrenIndented(t *testing.T) {
 	// archivo de profundidad 1 va con 4 espacios y uno de profundidad 2 con 6.
 	want := []string{
 		"▾ src/",
-		"    main.go",
+		"  · main.go",
 		"  ▾ internal/",
-		"      code.go",
+		"    · code.go",
 	}
 	for i, w := range want {
 		if lines[i] != w {
@@ -241,8 +274,8 @@ func TestFileBrowserCollapsingHidesChildrenAndKeepsTheCursorOnTheDir(t *testing.
 	if got := screenLines(s)[0]; got != "▾ docs/" {
 		t.Fatalf("fila 0 = %q tras re-expandir, se esperaba %q (dir expandido)", got, "▾ docs/")
 	}
-	if got := screenLines(s)[1]; got != "    a.txt" {
-		t.Fatalf("fila 1 = %q tras re-expandir, se esperaba %q (única, con su indentación)", got, "    a.txt")
+	if got := screenLines(s)[1]; got != "  · a.txt" {
+		t.Fatalf("fila 1 = %q tras re-expandir, se esperaba %q (única, con bullet)", got, "  · a.txt")
 	}
 	if got := screenLines(s)[2]; got != "" {
 		t.Fatalf("fila 2 = %q, se esperaba vacía: los hijos no se duplican", got)
@@ -272,8 +305,8 @@ func TestFileBrowserSetChildrenIsDefensive(t *testing.T) {
 	s := newTestScreen(t, 10, 5)
 	fb.Draw(s)
 	s.Show()
-	if got := screenLines(s)[1]; got != "    a.txt" {
-		t.Fatalf("fila 1 = %q, se esperaba %q (un solo hijo, con su indentación)", got, "    a.txt")
+	if got := screenLines(s)[1]; got != "  · a.txt" {
+		t.Fatalf("fila 1 = %q, se esperaba %q (un solo hijo, con bullet)", got, "  · a.txt")
 	}
 	if got := screenLines(s)[2]; got != "" {
 		t.Fatalf("fila 2 = %q, se esperaba vacía: el segundo SetChildren no duplicó", got)

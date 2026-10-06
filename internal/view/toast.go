@@ -83,25 +83,35 @@ func (t *Toast) Draw(sc tcell.Screen, width int) {
 
 	th := themeOr(t.theme)
 	style := th.ToastSuccess
+	glyph := "✓"
 	switch t.kind {
 	case ToastError:
 		style = th.ToastError
+		glyph = "✕"
 	case ToastInfo:
 		style = th.ToastInfo
+		glyph = "ℹ"
 	}
 
+	// El glifo anuncia el kind sin leer el color; el padding simétrico deja
+	// aire a ambos lados del texto.
 	msg := t.message
-	if w := displayWidth(msg); w > width-2 {
-		msg = truncateWidth(msg, width-3) + "…"
+	if maxMsg := width - 2 - 2; displayWidth(msg) > maxMsg {
+		if maxMsg < 1 {
+			msg = ""
+		} else {
+			msg = truncateWidth(msg, maxMsg-1) + "…"
+		}
 	}
+	line := glyph + " " + msg
 
 	// La caja ocupa el mensaje más un padding de un lado: arranca en la
 	// columna que la deja pegada al borde derecho.
-	start := width - displayWidth(msg) - 2
+	start := width - displayWidth(line) - 2
 	for x := start; x < width; x++ {
 		sc.SetContent(x, 0, ' ', nil, style)
 	}
-	writeString(sc, start+1, 0, msg, style, displayWidth(msg))
+	writeString(sc, start+1, 0, line, style, displayWidth(line))
 }
 
 // truncateWidth corta s a lo sumo max columnas de ancho de display, sin

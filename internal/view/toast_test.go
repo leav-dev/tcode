@@ -100,6 +100,9 @@ func TestToastDrawsRightAlignedWithPadding(t *testing.T) {
 	if got := statusRow(t, s); !strings.HasSuffix(got, " Guardado") {
 		t.Fatalf("fila = %q, se esperaba el mensaje con padding al final", got)
 	}
+	if c, _, _, _ := s.GetContent(29, 0); c != '✓' {
+		t.Fatalf("celda (29,0) = %q, se esperaba el glifo de éxito", c)
+	}
 }
 
 func TestToastDrawsHiddenWhenNotVisible(t *testing.T) {

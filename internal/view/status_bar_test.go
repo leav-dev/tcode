@@ -156,8 +156,8 @@ func TestStatusBarDrawsSectionsSortedByID(t *testing.T) {
 	bar.Draw(s, 0, 60)
 
 	got := statusRow(t, s)
-	if !strings.Contains(got, "primera  segunda  tercera") {
-		t.Fatalf("barra = %q, se esperaba las secciones en orden de id", got)
+	if !strings.Contains(got, "primera │ segunda │ tercera") {
+		t.Fatalf("barra = %q, se esperaba las secciones en orden de id con filete", got)
 	}
 }
 
