@@ -70,6 +70,9 @@ func TestStatusBarShowsMessageRightAligned(t *testing.T) {
 	if !strings.HasSuffix(got, "Guardado") {
 		t.Fatalf("barra = %q, se esperaba el mensaje al final", got)
 	}
+	if !strings.Contains(got, " Guardado") {
+		t.Fatalf("barra = %q, se esperaba el cerrador del prompt antes del mensaje", got)
+	}
 }
 
 func TestStatusBarMessageWinsOverTheLabelAndTruncates(t *testing.T) {
@@ -83,7 +86,7 @@ func TestStatusBarMessageWinsOverTheLabelAndTruncates(t *testing.T) {
 	bar.Draw(s, 0, 12)
 
 	got := statusRow(t, s)
-	if !strings.HasPrefix(got, "Cambios sin") {
+	if !strings.HasPrefix(got, " Cambios si") {
 		t.Fatalf("barra = %q, se esperaba el mensaje con prioridad sobre la etiqueta", got)
 	}
 	if !strings.HasSuffix(got, "…") {
@@ -156,8 +159,8 @@ func TestStatusBarDrawsSectionsSortedByID(t *testing.T) {
 	bar.Draw(s, 0, 60)
 
 	got := statusRow(t, s)
-	if !strings.Contains(got, "primera │ segunda │ tercera") {
-		t.Fatalf("barra = %q, se esperaba las secciones en orden de id con filete", got)
+	if !strings.Contains(got, "primera segunda tercera") {
+		t.Fatalf("barra = %q, se esperaba las secciones en orden de id como segmentos", got)
 	}
 }
 

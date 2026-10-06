@@ -82,8 +82,8 @@ func (s *StatusBar) Message() string { return s.message }
 func (s *StatusBar) Sections() map[string]string { return s.sections }
 
 // sectionsText devuelve las secciones del buffer activo en orden de id,
-// separadas por un filete vertical. Orden estable: la barra no puede cambiar
-// entre redibujos.
+// separadas por un espacio, como los segmentos del prompt de la shell. Orden
+// estable: la barra no puede cambiar entre redibujos.
 func (s *StatusBar) sectionsText() string {
 	if len(s.sections) == 0 {
 		return ""
@@ -97,7 +97,7 @@ func (s *StatusBar) sectionsText() string {
 	for _, id := range ids {
 		parts = append(parts, s.sections[id])
 	}
-	return strings.Join(parts, " │ ")
+	return strings.Join(parts, " ")
 }
 
 // Draw pinta la barra completa en la fila y.
@@ -130,7 +130,7 @@ func (s *StatusBar) Draw(sc tcell.Screen, y, width int) {
 		// Sin mensaje: la etiqueta y las secciones ocupan la barra.
 		col := writeString(sc, 0, y, label, labelStyle, width)
 		if sections != "" && col < width {
-			writeString(sc, col, y, " │ "+sections, section, width-col)
+			writeString(sc, col, y, " "+sections, section, width-col)
 		}
 		return
 	}
@@ -139,9 +139,10 @@ func (s *StatusBar) Draw(sc tcell.Screen, y, width int) {
 	// derecha, se recorta la etiqueta —y el mensaje mismo, con '…'— en vez de
 	// desaparecer. Un aviso invisible por el ancho de la terminal es un aviso
 	// perdido: la confirmación de «cambios sin guardar» tiene que verse siempre.
-	msgWidth := displayWidth(s.message)
+	msg := " " + s.message
+	msgWidth := displayWidth(msg)
 	if msgWidth >= width {
-		writeString(sc, 0, y, s.message, message, width-1)
+		writeString(sc, 0, y, msg, message, width-1)
 		sc.SetContent(width-1, y, '…', nil, message)
 		return
 	}
@@ -153,9 +154,9 @@ func (s *StatusBar) Draw(sc tcell.Screen, y, width int) {
 	left := start - 1
 	col := writeString(sc, 0, y, label, labelStyle, left)
 	if sections != "" && col < left {
-		writeString(sc, col, y, " │ "+sections, section, left-col)
+		writeString(sc, col, y, " "+sections, section, left-col)
 	}
-	writeString(sc, start, y, s.message, message, msgWidth)
+	writeString(sc, start, y, msg, message, msgWidth)
 }
 
 // writeString escribe s en la fila y desde la columna x, respetando maxWidth
