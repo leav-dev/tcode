@@ -24,6 +24,7 @@ type Theme struct {
 	Message      tcell.Style // mensaje transitorio de la barra
 	ToastSuccess tcell.Style // notificación de éxito (toast superior derecho)
 	ToastError   tcell.Style // notificación de error (toast superior derecho)
+	ToastInfo    tcell.Style // notificación neutra (toast superior derecho)
 	Section      tcell.Style // secciones de extensiones en la barra de estado
 	Button       tcell.Style // botones del pie del explorador (chips)
 	Modified     tcell.Style // marca [+] de documento sucio
@@ -95,6 +96,7 @@ func DarkTheme() Theme {
 		Message:      on(tcell.PaletteColor(220), tcell.PaletteColor(24)),
 		ToastSuccess: on(tcell.PaletteColor(42), tcell.PaletteColor(24)),
 		ToastError:   on(tcell.PaletteColor(208), tcell.PaletteColor(24)),
+		ToastInfo:    on(tcell.PaletteColor(39), tcell.PaletteColor(24)),
 		Section:      on(tcell.PaletteColor(244), tcell.PaletteColor(24)),
 		Button:       active(tcell.PaletteColor(45)),
 		Modified:     fg(tcell.PaletteColor(208)),
@@ -130,6 +132,7 @@ func LightTheme() Theme {
 		Message:      on(tcell.PaletteColor(220), tcell.PaletteColor(24)),
 		ToastSuccess: on(tcell.NewHexColor(0x098658), tcell.PaletteColor(24)),
 		ToastError:   on(tcell.NewHexColor(0xA31515), tcell.PaletteColor(24)),
+		ToastInfo:    on(tcell.NewHexColor(0x007ACC), tcell.PaletteColor(24)),
 		Section:      on(tcell.NewHexColor(0x808080), tcell.PaletteColor(24)),
 		Button:       active(tcell.PaletteColor(21)),
 		Modified:     fg(tcell.NewHexColor(0xA31515)),
@@ -163,6 +166,7 @@ func LightHighContrastTheme() Theme {
 		Message:      on(tcell.PaletteColor(0), tcell.PaletteColor(226)),
 		ToastSuccess: on(tcell.NewHexColor(0x098658), tcell.PaletteColor(226)),
 		ToastError:   on(tcell.PaletteColor(1), tcell.PaletteColor(226)),
+		ToastInfo:    on(tcell.NewHexColor(0x0000CC), tcell.PaletteColor(226)),
 		Section:      on(tcell.NewHexColor(0x808080), tcell.PaletteColor(226)),
 		Button:       active(tcell.PaletteColor(0)),
 		Modified:     fg(tcell.PaletteColor(1)),
@@ -196,6 +200,7 @@ func DarkHighContrastTheme() Theme {
 		Message:      on(tcell.PaletteColor(226), tcell.PaletteColor(0)),
 		ToastSuccess: on(tcell.NewHexColor(0x00FF00), tcell.PaletteColor(0)),
 		ToastError:   on(tcell.PaletteColor(9), tcell.PaletteColor(0)),
+		ToastInfo:    on(tcell.PaletteColor(51), tcell.PaletteColor(0)),
 		Section:      on(tcell.NewHexColor(0xCCCCCC), tcell.PaletteColor(0)),
 		Button:       active(tcell.PaletteColor(226)),
 		Modified:     fg(tcell.PaletteColor(9)),
@@ -228,6 +233,7 @@ func TokyoNightTheme() Theme {
 		Message:      on(tcell.PaletteColor(215), tcell.PaletteColor(24)),
 		ToastSuccess: on(tcell.NewHexColor(0x9ECE6A), tcell.PaletteColor(24)),
 		ToastError:   on(tcell.NewHexColor(0xF7768E), tcell.PaletteColor(24)),
+		ToastInfo:    on(tcell.NewHexColor(0x7AA2F7), tcell.PaletteColor(24)),
 		Section:      on(tcell.NewHexColor(0x565F89), tcell.PaletteColor(24)),
 		Button:       active(tcell.PaletteColor(69)),
 		Modified:     fg(tcell.NewHexColor(0xF7768E)),
@@ -261,6 +267,7 @@ func DraculaTheme() Theme {
 		Message:      on(tcell.PaletteColor(228), tcell.NewHexColor(0x44475A)),
 		ToastSuccess: on(tcell.NewHexColor(0x50FA7B), tcell.NewHexColor(0x44475A)),
 		ToastError:   on(tcell.NewHexColor(0xFF5555), tcell.NewHexColor(0x44475A)),
+		ToastInfo:    on(tcell.NewHexColor(0x8BE9FD), tcell.NewHexColor(0x44475A)),
 		Section:      on(tcell.NewHexColor(0x6272A4), tcell.NewHexColor(0x44475A)),
 		Button:       active(tcell.PaletteColor(212)),
 		Modified:     fg(tcell.NewHexColor(0xFF5555)),
@@ -378,6 +385,7 @@ func LoadTheme(data []byte) Theme {
 	fg(&t.Message, "message")
 	fg(&t.ToastSuccess, "toastSuccess")
 	fg(&t.ToastError, "toastError")
+	fg(&t.ToastInfo, "toastInfo")
 	fg(&t.Section, "section")
 	fg(&t.Button, "button")
 	fg(&t.Modified, "modified")

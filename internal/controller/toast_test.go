@@ -139,8 +139,8 @@ func TestToastExpiresOnItsOwn(t *testing.T) {
 }
 
 // TestAppNotifyKinds: Notify (ScriptAPI) muestra el toast con el kind
-// pedido —ausente y "success" son éxito, "error" es error— y rechaza un kind
-// desconocido con un error que la extensión ve.
+// pedido —ausente y "success" son éxito, "error" es error, "info" es
+// neutro— y rechaza un kind desconocido con un error que la extensión ve.
 func TestAppNotifyKinds(t *testing.T) {
 	app, _ := newToastApp(t)
 
@@ -159,6 +159,11 @@ func TestAppNotifyKinds(t *testing.T) {
 	app.Notify("falló", "error")
 	if !app.toast.Visible() || app.toast.Kind() != view.ToastError {
 		t.Fatalf("Notify error: visible=%v kind=%d, se esperaba toast de error", app.toast.Visible(), app.toast.Kind())
+	}
+
+	app.Notify("dato", "info")
+	if !app.toast.Visible() || app.toast.Kind() != view.ToastInfo {
+		t.Fatalf("Notify info: visible=%v kind=%d, se esperaba toast neutro", app.toast.Visible(), app.toast.Kind())
 	}
 
 	if err := app.Notify("x", "raro"); err == nil {

@@ -24,8 +24,8 @@ type ScriptAPI interface {
 	// StatusMessage muestra un mensaje en la barra de estado.
 	StatusMessage(msg string)
 	// Notify muestra una notificación en la esquina superior derecha (toast,
-	// con desaparición automática): kind es "success" (default) o "error";
-	// un kind desconocido es un error.
+	// con desaparición automática): kind es "success" (default), "error" o
+	// "info"; un kind desconocido es un error.
 	Notify(msg string, kind string) error
 	// SetSection escribe una sección de la barra de estado con el id de la
 	// extensión (p. ej. su manifest id): cada extensión tiene su propia
@@ -144,13 +144,13 @@ func NewScriptHost(code string, api ScriptAPI, source string) (*ScriptHost, erro
 	}))
 	// tcode.notify(msg, kind): notificación en la esquina superior derecha, con
 	// desaparición automática —la misma que muestra el editor al guardar. kind
-	// es "success" (default) o "error"; un kind desconocido es un error de Lua.
+	// es "success" (default), "error" o "info"; un kind desconocido es un error de Lua.
 	L.SetField(tcode, "notify", L.NewFunction(func(L *lua.LState) int {
 		msg := L.CheckString(1)
 		kind := ""
 		if v := L.Get(2); v.Type() != lua.LTNil {
 			if v.Type() != lua.LTString {
-				L.RaiseError("tcode.notify: el kind debe ser un string (\"success\" | \"error\")")
+				L.RaiseError("tcode.notify: el kind debe ser un string (\"success\" | \"error\" | \"info\")")
 			}
 			kind = string(v.(lua.LString))
 		}

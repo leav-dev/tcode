@@ -975,16 +975,18 @@ func (a *App) StatusMessage(msg string) { a.statusBar.SetMessage(msg) }
 
 // Notify muestra una notificación del toast desde una extensión (ScriptAPI):
 // mismo camino que las confirmaciones de guardado —mismo timer, mismo dibujo—.
-// kind es "success" (default) o "error"; un kind desconocido es un error que
-// la extensión ve.
+// kind es "success" (default), "error" o "info"; un kind desconocido es un
+// error que la extensión ve.
 func (a *App) Notify(msg string, kind string) error {
 	switch kind {
 	case "", "success":
 		a.showToast(msg, view.ToastSuccess)
 	case "error":
 		a.showToast(msg, view.ToastError)
+	case "info":
+		a.showToast(msg, view.ToastInfo)
 	default:
-		return fmt.Errorf("tcode.notify: kind %q desconocido (\"success\" | \"error\")", kind)
+		return fmt.Errorf("tcode.notify: kind %q desconocido (\"success\" | \"error\" | \"info\")", kind)
 	}
 	return nil
 }
@@ -1545,7 +1547,7 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 					if err := ed.CopySelection(); err != nil {
 						a.statusBar.SetMessage("Error al copiar: " + err.Error())
 					} else {
-						a.statusBar.SetMessage("Copiado")
+						a.showToast("Copiado", view.ToastSuccess)
 					}
 					a.redraw()
 					return false
@@ -1860,7 +1862,7 @@ func (a *App) handlePromptKey(ev *tcell.EventKey) {
 	switch ev.Key() {
 	case tcell.KeyEscape, tcell.KeyCtrlC:
 		a.endPrompt()
-		a.statusBar.SetMessage("Cancelado")
+		a.showToast("Cancelado", view.ToastInfo)
 		a.redraw()
 		return
 
@@ -1921,7 +1923,7 @@ func (a *App) quitEscape() bool {
 // a trabajar sobre ella.
 func (a *App) saveAs(target *model.PieceTable, path string) {
 	if path == "" {
-		a.statusBar.SetMessage("Save As cancelado")
+		a.showToast("Save As cancelado", view.ToastInfo)
 		a.redraw()
 		return
 	}
@@ -2266,7 +2268,7 @@ func (a *App) promptDeleteEntry() {
 	name := filepath.Base(path)
 	a.openPrompt("¿Borrar "+name+"? [s/N] ", "", func(answer string) error {
 		if !isYesAnswer(answer) {
-			a.statusBar.SetMessage("Cancelado")
+			a.showToast("Cancelado", view.ToastInfo)
 			return nil
 		}
 		return a.deletePath(path)
@@ -2311,7 +2313,7 @@ func (a *App) deletePath(path string) error {
 		a.explorerFocused = true
 	}
 	a.syncStatus()
-	a.statusBar.SetMessage("Borrado: " + filepath.Base(path))
+	a.showToast("Borrado: " + filepath.Base(path), view.ToastSuccess)
 	return nil
 }
 
@@ -2465,7 +2467,7 @@ func (a *App) createEntry(dir, name string, folder bool) error {
 			return err
 		}
 		a.explorer.AddChild(dir, view.Entry{Name: name, Path: path, IsDir: true})
-		a.statusBar.SetMessage("Carpeta creada: " + name)
+		a.showToast("Carpeta creada: " + name, view.ToastSuccess)
 		return nil
 	}
 
@@ -2486,7 +2488,7 @@ func (a *App) createEntry(dir, name string, folder bool) error {
 	a.explorerFocused = false
 	a.explorer.AddChild(dir, view.Entry{Name: name, Path: path})
 	a.syncStatus()
-	a.statusBar.SetMessage("Archivo creado: " + name)
+	a.showToast("Archivo creado: " + name, view.ToastSuccess)
 	return nil
 }
 
@@ -2963,7 +2965,7 @@ func (a *App) promptInstallExtension(item view.ExtItem) {
 	}
 	a.openPrompt("¿Instalar "+item.Ref+"? [s/N] ", "", func(answer string) error {
 		if !isYesAnswer(answer) {
-			a.statusBar.SetMessage("Cancelado")
+			a.showToast("Cancelado", view.ToastInfo)
 			return nil
 		}
 		return a.installExtension(item)
@@ -2988,14 +2990,12 @@ func (a *App) installExtension(item view.ExtItem) error {
 	// Instalar clona por red y tarda segundos: se anuncia ANTES del llamado
 	// bloqueante (con redibujado sincrónico) para que el progreso se vea, y
 	// al terminar se confirma con un toast —más visible que la barra—.
-	a.statusBar.SetMessage("Instalando " + item.Ref + "…")
-	a.redraw()
+	a.showToast("Instalando " + item.Ref + "…", view.ToastInfo)
 	res, err := ext.InstallByID(item.ID, providers, userRoot, startupExtFetch, nil)
 	a.refreshExtData()
 	if err != nil {
 		return err
 	}
-	a.statusBar.SetMessage("")
 	a.showToast("Instalada: "+res.Ref(), view.ToastSuccess)
 	return nil
 }
@@ -3012,7 +3012,7 @@ func (a *App) installExtension(item view.ExtItem) error {
 func (a *App) promptUpdateExtension(item view.ExtItem) {
 	a.openPrompt("¿Actualizar "+item.Ref+"? [s/N] ", "", func(answer string) error {
 		if !isYesAnswer(answer) {
-			a.statusBar.SetMessage("Cancelado")
+			a.showToast("Cancelado", view.ToastInfo)
 			return nil
 		}
 		providers, userRoot, err := extensionUserSources()
@@ -3027,8 +3027,10 @@ func (a *App) promptUpdateExtension(item view.ExtItem) {
 		}
 		if len(errs) > 0 {
 			msg += " — con errores: " + errs[len(errs)-1].Error()
+			a.showToast(msg, view.ToastError)
+		} else {
+			a.showToast(msg, view.ToastSuccess)
 		}
-		a.statusBar.SetMessage(msg)
 		return nil
 	})
 }
@@ -3040,7 +3042,7 @@ func (a *App) promptUpdateExtension(item view.ExtItem) {
 func (a *App) promptRemoveExtension(item view.ExtItem) {
 	a.openPrompt("¿Eliminar "+item.Ref+"? [s/N] ", "", func(answer string) error {
 		if !isYesAnswer(answer) {
-			a.statusBar.SetMessage("Cancelado")
+			a.showToast("Cancelado", view.ToastInfo)
 			return nil
 		}
 		var err error
@@ -3053,7 +3055,7 @@ func (a *App) promptRemoveExtension(item view.ExtItem) {
 		if err != nil {
 			return err
 		}
-		a.statusBar.SetMessage("Eliminada: " + item.Ref)
+		a.showToast("Eliminada: " + item.Ref, view.ToastSuccess)
 		return nil
 	})
 }
@@ -3136,7 +3138,7 @@ func (a *App) addProviderSource(source string) error {
 	a.extSnapshot = nil
 	a.prefetchExtensions()
 	a.loadExtManagerData()
-	a.statusBar.SetMessage("Proveedor agregado (sin aprobar): " + name)
+	a.showToast("Proveedor agregado (sin aprobar): " + name, view.ToastSuccess)
 	return nil
 }
 

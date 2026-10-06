@@ -20,6 +20,9 @@ const (
 	ToastSuccess ToastKind = iota
 	// ToastError avisa un fallo («Error al guardar: …»).
 	ToastError
+	// ToastInfo informa un estado neutro («Cancelado», «Instalando…»): ni
+	// éxito ni fallo, con su propio color.
+	ToastInfo
 )
 
 // Toast es la notificación transitoria de la esquina superior derecha: un
@@ -80,8 +83,11 @@ func (t *Toast) Draw(sc tcell.Screen, width int) {
 
 	th := themeOr(t.theme)
 	style := th.ToastSuccess
-	if t.kind == ToastError {
+	switch t.kind {
+	case ToastError:
 		style = th.ToastError
+	case ToastInfo:
+		style = th.ToastInfo
 	}
 
 	msg := t.message

@@ -2788,8 +2788,8 @@ func TestCtrlCCopiesSelectionInsteadOfQuitting(t *testing.T) {
 	if quit := press(app, tcell.KeyCtrlC); quit {
 		t.Fatal("Ctrl+C con selección no debe cerrar el editor")
 	}
-	if msg := app.statusBar.Message(); msg != "Copiado" && !strings.Contains(msg, "Error al copiar") {
-		t.Errorf("mensaje = %q, esperaba el aviso del copiado", msg)
+	if msg := app.toast.Message(); msg != "Copiado" && !strings.Contains(app.statusBar.Message(), "Error al copiar") {
+		t.Errorf("toast = %q, esperaba el aviso del copiado", msg)
 	}
 	if app.ws.Active() == nil {
 		t.Fatal("el editor no debe haber salido")
@@ -2896,8 +2896,11 @@ func TestCtrlNCreatesFileInRootAndOpensIt(t *testing.T) {
 	if !treeHasPath(app, path) {
 		t.Fatalf("el nodo nuevo no entró al árbol del explorador")
 	}
-	if !strings.Contains(app.statusBar.Message(), "nuevo.txt") {
-		t.Fatalf("mensaje = %q, se esperaba el nombre del archivo creado", app.statusBar.Message())
+	if !strings.Contains(app.toast.Message(), "nuevo.txt") {
+		t.Fatalf("toast = %q, se esperaba el nombre del archivo creado", app.toast.Message())
+	}
+	if app.toast.Kind() != view.ToastSuccess {
+		t.Fatalf("el toast es de tipo %v, se esperaba éxito", app.toast.Kind())
 	}
 }
 
@@ -3100,8 +3103,11 @@ func TestPromptCancelClearsTheRequest(t *testing.T) {
 	if app.promptActive || app.promptBuf != "" || app.promptAction != nil {
 		t.Fatalf("Escape debe apagar el pedido (buf %q, acción nil: %v)", app.promptBuf, app.promptAction == nil)
 	}
-	if !strings.Contains(app.statusBar.Label(), "") || app.statusBar.Message() != "Cancelado" {
-		t.Fatalf("mensaje = %q, se esperaba el aviso de cancelación", app.statusBar.Message())
+	if !strings.Contains(app.statusBar.Label(), "") || app.toast.Message() != "Cancelado" {
+		t.Fatalf("toast = %q, se esperaba el aviso de cancelación", app.toast.Message())
+	}
+	if app.toast.Kind() != view.ToastInfo {
+		t.Fatalf("el toast es de tipo %v, se esperaba neutro", app.toast.Kind())
 	}
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -3521,8 +3527,8 @@ func TestDeleteKeyConfirmsAndRemovesTheFile(t *testing.T) {
 	if got := app.explorer.CursorPath(); got == path {
 		t.Fatalf("CursorPath() = %q, el nodo borrado no puede seguir en el árbol", got)
 	}
-	if !strings.Contains(app.statusBar.Message(), "Borrado: a.txt") {
-		t.Fatalf("mensaje = %q, se esperaba el aviso de borrado", app.statusBar.Message())
+	if !strings.Contains(app.toast.Message(), "Borrado: a.txt") {
+		t.Fatalf("toast = %q, se esperaba el aviso de borrado", app.toast.Message())
 	}
 	// El hermano que no estaba bajo el cursor sobrevive.
 	if _, err := os.Stat(filepath.Join(dir, "b.txt")); err != nil {
@@ -3550,8 +3556,8 @@ func TestDeleteDefaultsToNo(t *testing.T) {
 		if got := app.explorer.CursorPath(); got != path {
 			t.Fatalf("respuesta %q: CursorPath() = %q, el nodo debía seguir", answer, got)
 		}
-		if !strings.Contains(app.statusBar.Message(), "Cancelado") {
-			t.Fatalf("respuesta %q: mensaje = %q, se esperaba el aviso de cancelación", answer, app.statusBar.Message())
+		if app.toast.Message() != "Cancelado" || app.toast.Kind() != view.ToastInfo {
+			t.Fatalf("respuesta %q: toast = %q, se esperaba el aviso neutro de cancelación", answer, app.toast.Message())
 		}
 	}
 }
@@ -3591,8 +3597,8 @@ func TestDeleteFolderRemovesItRecursively(t *testing.T) {
 	if got := app.explorer.CursorPath(); got == sub {
 		t.Fatal("el nodo del directorio borrado no puede seguir en el árbol")
 	}
-	if !strings.Contains(app.statusBar.Message(), "Borrado: docs") {
-		t.Fatalf("mensaje = %q, se esperaba el aviso de borrado", app.statusBar.Message())
+	if !strings.Contains(app.toast.Message(), "Borrado: docs") {
+		t.Fatalf("toast = %q, se esperaba el aviso de borrado", app.toast.Message())
 	}
 }
 
@@ -3904,8 +3910,8 @@ func TestExtensionWindowCancelsInstallWithoutConfirmation(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(userRoot, "remoto", "tcode.tema")); !os.IsNotExist(err) {
 		t.Fatal("un Enter vacío no puede instalar (el default es NO)")
 	}
-	if !strings.Contains(app.statusBar.Message(), "Cancelado") {
-		t.Fatalf("el mensaje es %q, debe decir que se canceló", app.statusBar.Message())
+	if app.toast.Message() != "Cancelado" || app.toast.Kind() != view.ToastInfo {
+		t.Fatalf("el toast es %q, debe decir que se canceló en neutro", app.toast.Message())
 	}
 	if !app.extActive {
 		t.Fatal("cancelar debe dejar la ventana abierta")

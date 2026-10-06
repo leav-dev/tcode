@@ -85,7 +85,7 @@ siempre); solo cambia la implementación. El host expone la tabla global
 | `tcode.lineCount()` / `tcode.line(n)` | Líneas del buffer activo y su contenido por línea (`n` 1-indexado; errores "sin buffer activo"/"línea fuera de rango"). |
 | `tcode.diagnostics.set(lista)` / `tcode.diagnostics.clear()` | Reemplaza las **anotaciones** del buffer activo: lista de `{line, message, severity}` (severidad `error`\|`warning`\|`info`, default `error`; un elemento inválido aborta todo). |
 | `tcode.message(msg)` | Muestra un mensaje en la barra de estado. |
-| `tcode.notify(msg, kind)` | Muestra una **notificación** en la esquina superior derecha (toast con desaparición automática, ~2.5 s): la misma que muestra el editor al guardar. `kind` es `"success"` (default) o `"error"`; un kind desconocido o no textual es un error de Lua. |
+| `tcode.notify(msg, kind)` | Muestra una **notificación** en la esquina superior derecha (toast con desaparición automática, ~2.5 s): la misma que muestra el editor al guardar. `kind` es `"success"` (default), `"error"` o `"info"`; un kind desconocido o no textual es un error de Lua. |
 | `tcode.statusBar.setSection(id, text)` | Escribe una **sección** propia en la barra de estado (id = manifest id de la extensión, p. ej. `"tcode.gitchanges"`): las secciones de las extensiones se muestran lado a lado y no se pisan entre sí ni con los mensajes del editor. `text` vacío remueve la sección; `id` vacío es un error de Lua. |
 
 ### Ejemplo: un mini-linter con diagnostics

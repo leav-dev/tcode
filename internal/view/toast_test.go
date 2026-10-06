@@ -181,3 +181,29 @@ func TestToastErrorKindUsesTheErrorStyle(t *testing.T) {
 		t.Fatal("el kind error y el kind success deben pintar con estilos distintos")
 	}
 }
+
+func TestToastInfoKindUsesItsOwnStyle(t *testing.T) {
+	th := Theme{
+		ToastSuccess: tcell.StyleDefault.Foreground(tcell.PaletteColor(42)),
+		ToastError:   tcell.StyleDefault.Foreground(tcell.PaletteColor(208)),
+		ToastInfo:    tcell.StyleDefault.Foreground(tcell.PaletteColor(39)),
+	}
+	s := newToastScreen(t, 40)
+	toast := newStubbedToast(time.Now())
+	toast.SetTheme(th)
+	toast.Show("Instalando remoto/tcode.tema…", ToastInfo)
+	toast.Draw(s, 40)
+
+	_, _, infoStyle, _ := s.GetContent(40-displayWidth("Instalando remoto/tcode.tema…"), 0)
+
+	ok := newStubbedToast(time.Now())
+	ok.SetTheme(th)
+	ok.Show("Guardado", ToastSuccess)
+	s2 := newToastScreen(t, 40)
+	ok.Draw(s2, 40)
+	_, _, okStyle, _ := s2.GetContent(40-displayWidth("Guardado"), 0)
+
+	if infoStyle == okStyle {
+		t.Fatal("el kind info y el kind success deben pintar con estilos distintos")
+	}
+}

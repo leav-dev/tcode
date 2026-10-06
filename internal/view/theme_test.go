@@ -54,6 +54,9 @@ func TestLoadThemeParsesRoles(t *testing.T) {
 		"string": "173",
 		"status": "white",
 		"message": "red",
+		"toastSuccess": "42",
+		"toastError": "208",
+		"toastInfo": "39",
 		"comment": "244",
 		"number": "114",
 		"tabActive": "36",
@@ -89,6 +92,15 @@ func TestLoadThemeParsesRoles(t *testing.T) {
 	}
 	if th.Text != tcell.StyleDefault {
 		t.Errorf("text = %v, esperaba default", th.Text)
+	}
+	if fgOf(th.ToastSuccess) != tcell.PaletteColor(42) {
+		t.Errorf("toastSuccess fg = %v, esperaba índice 42", fgOf(th.ToastSuccess))
+	}
+	if fgOf(th.ToastError) != tcell.PaletteColor(208) {
+		t.Errorf("toastError fg = %v, esperaba índice 208", fgOf(th.ToastError))
+	}
+	if fgOf(th.ToastInfo) != tcell.PaletteColor(39) {
+		t.Errorf("toastInfo fg = %v, esperaba índice 39", fgOf(th.ToastInfo))
 	}
 }
 
