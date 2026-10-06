@@ -49,6 +49,14 @@ type ScriptAPI interface {
 	// analizadora. Cotas del proveedor: solo *.go, máx 64 archivos y 2 MiB
 	// totales; el buffer activo no se repite. Error legible si no hay buffer.
 	DirFiles() ([]HostFile, error)
+	// ReadFile devuelve UN archivo por ruta relativa al directorio del buffer
+	// activo (p. ej. el módulo que un import relativo nombra). La ruta debe
+	// quedar contenida en ese directorio: absolutos y escapes con .. se
+	// rechazan, y los symlinks se resuelven y se re-validan contra él. Cotas:
+	// solo extensiones de código (ver readFileExts) y maxReadFileBytes por
+	// archivo. Error legible si no hay buffer, la ruta escapa, el archivo no
+	// existe o no cumple las cotas; el host lo traduce a nil silencioso.
+	ReadFile(relpath string) (HostFile, error)
 	// GitStatus devuelve información de git del directorio del buffer activo:
 	// archivos con cambios (staged, unstaged, untracked) y conteo de líneas
 	// agregadas/borradas. El host Lua no tiene io/os: el editor ejecuta git.
@@ -293,6 +301,28 @@ func NewScriptHost(code string, api ScriptAPI, source string) (*ScriptHost, erro
 			it.RawSetString("content", lua.LString(f.Content))
 			t.RawSetInt(i+1, it)
 		}
+		L.Push(t)
+		return 1
+	}))
+	// tcode.read_file(relpath): lectura puntual de UN archivo relativo al
+	// directorio del buffer activo (p. ej. el módulo que un import nombra).
+	// Devuelve {path, content} con la ruta absoluta canónica, o nil cuando no
+	// hay buffer, la ruta escapa del directorio, el archivo no existe o no
+	// cumple las cotas: el script degrada sin cortar (nil silencioso, como
+	// dir_files). Pensada para 1 archivo por llamada; el cacheo entre
+	// invocaciones vive en el estado Lua del host (el Manager lo conserva).
+	// Es una lectura local acotada (extensiones de código, ~2 MiB máx), así
+	// que corre en el hilo del hook sin espera perceptible: sin goroutine ni
+	// proceso aparte, que romperían el sandbox sin IPC del otro lado.
+	L.SetField(tcode, "read_file", L.NewFunction(func(L *lua.LState) int {
+		rel := L.CheckString(1)
+		f, err := api.ReadFile(rel)
+		if err != nil {
+			return 0
+		}
+		t := L.NewTable()
+		t.RawSetString("path", lua.LString(f.Path))
+		t.RawSetString("content", lua.LString(f.Content))
 		L.Push(t)
 		return 1
 	}))

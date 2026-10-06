@@ -3776,6 +3776,28 @@ func answerPrompt(app *App, answer string) {
 	app.handleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
 }
 
+// awaitExtJob espera la entrega de un job de escritura (instalar/actualizar)
+// y la aplica como lo haría el bucle de eventos. El job corre en goroutine
+// con un fake local, así que llega rápido; el loop con timeout es por si el
+// scheduler tarda. Consume eventos hasta que el job termina.
+func awaitExtJob(t *testing.T, app *App) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for app.extJobRunning {
+		if time.Now().After(deadline) {
+			t.Fatal("el job de escritura no terminó a tiempo")
+		}
+		events := make(chan tcell.Event, 1)
+		go func() { events <- app.screen.PollEvent() }()
+		select {
+		case ev := <-events:
+			app.handleEvent(ev)
+		case <-time.After(10 * time.Second):
+			t.Fatal("el job de escritura no entregó su resultado")
+		}
+	}
+}
+
 // TestExtensionWindowOpensFromTheConfigRow: la fila Extensiones de la ventana
 // de configuración dispara la acción (Enter) y el controlador abre la ventana
 // de extensiones — cerrando la de configuración — con los datos ya cargados: la
@@ -3874,11 +3896,21 @@ func TestExtensionWindowInstallsAfterConfirmation(t *testing.T) {
 		t.Fatal("no se puede instalar antes de confirmar")
 	}
 
-	// El sí instala.
+	// El sí lanza el job en segundo plano: el pedido se cierra y el editor
+	// queda libre de inmediato (sin bloqueo), con el job en vuelo.
 	answerPrompt(app, "s")
 	if app.promptActive {
 		t.Fatal("el pedido debe cerrarse al confirmar")
 	}
+	if !app.extJobRunning {
+		t.Fatal("confirmar debe lanzar el job de instalación en segundo plano")
+	}
+	if got := app.toast.Message(); !strings.Contains(got, "segundo plano") {
+		t.Fatalf("el toast es %q, debe avisar que la instalación corre en segundo plano", got)
+	}
+	// El job termina y entrega por el bucle: recién ahí la extensión queda
+	// en disco y el éxito se confirma.
+	awaitExtJob(t, app)
 	if _, err := os.Stat(filepath.Join(userRoot, "remoto", "tcode.tema", "extension.json")); err != nil {
 		t.Fatalf("la extensión confirmada debe quedar instalada: %v", err)
 	}
@@ -3958,6 +3990,10 @@ func TestExtensionWindowUpdatesAfterConfirmation(t *testing.T) {
 		t.Fatalf("Enter sobre una actualización debe pedir confirmación; rótulo %q, activo=%v", app.promptLabel, app.promptActive)
 	}
 	answerPrompt(app, "s")
+	if !app.extJobRunning {
+		t.Fatal("confirmar debe lanzar el job de actualización en segundo plano")
+	}
+	awaitExtJob(t, app)
 
 	data, err := os.ReadFile(filepath.Join(userRoot, "remoto", "tcode.linter", "extension.json"))
 	if err != nil {
@@ -3968,6 +4004,128 @@ func TestExtensionWindowUpdatesAfterConfirmation(t *testing.T) {
 	}
 	if got := app.extManager.Items(view.ExtTabUpdatable); len(got) != 0 {
 		t.Fatalf("las actualizables = %+v, después de actualizar no debe quedar ninguna", got)
+	}
+}
+
+// awaitManualRefresh espera la entrega de una validación manual (tecla r)
+// y la aplica como lo haría el bucle de eventos. Consume eventos hasta que
+// el flag manual se apaga en handleExtSnapshot.
+func awaitManualRefresh(t *testing.T, app *App) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for app.extRefreshManual {
+		if time.Now().After(deadline) {
+			t.Fatal("la validación manual no terminó a tiempo")
+		}
+		events := make(chan tcell.Event, 1)
+		go func() { events <- app.screen.PollEvent() }()
+		select {
+		case ev := <-events:
+			app.handleEvent(ev)
+		case <-time.After(10 * time.Second):
+			t.Fatal("la validación manual no entregó su resultado")
+		}
+	}
+}
+
+// pressR pulsa la tecla r con la ventana de extensiones abierta, como lo
+// haría el teclado.
+func pressR(app *App) {
+	app.handleEvent(tcell.NewEventKey(tcell.KeyRune, 'r', tcell.ModNone))
+}
+
+// TestManualRefreshReportsNews: r con la ventana abierta relanza la
+// validación sin cerrarla; al llegar, el toast avisa lo que hay para mirar.
+func TestManualRefreshReportsNews(t *testing.T) {
+	resetConfigVars(t)
+	app, _, _ := extWindowFixture(t, true)
+	extTabItems(t, app, view.ExtTabInstalled)
+
+	pressR(app)
+	if !app.extActive {
+		t.Fatal("r no debe cerrar la ventana de extensiones")
+	}
+	if !app.extRefreshManual {
+		t.Fatal("r debe marcar la validación como manual")
+	}
+	if !strings.Contains(app.statusBar.Message(), "Buscando actualizaciones") {
+		t.Fatalf("el mensaje es %q, debe avisar que la validación corre en segundo plano", app.statusBar.Message())
+	}
+
+	awaitManualRefresh(t, app)
+	if !app.extActive {
+		t.Fatal("la ventana debe seguir abierta cuando llega el resultado")
+	}
+	if got := app.toast.Message(); !strings.Contains(got, "actualización") {
+		t.Fatalf("el toast es %q, debe avisar lo que hay para mirar", got)
+	}
+	if got := app.extManager.Items(view.ExtTabUpdatable); len(got) != 1 {
+		t.Fatalf("las actualizables = %+v, la revalidación debe repintar la ventana", got)
+	}
+}
+
+// TestManualRefreshReportsUpToDate: sin actualizaciones ni novedades, la
+// validación manual lo dice con toast en vez de quedarse callada.
+func TestManualRefreshReportsUpToDate(t *testing.T) {
+	resetConfigVars(t)
+	src := startupProviderFixture(t, map[string][3]string{
+		"linter": {"tcode.linter", "Linter", "1.0.0"},
+	})
+	userRoot := t.TempDir()
+	p := ext.Provider{Name: "remoto", Source: src, Approved: true}
+	if _, err := ext.InstallByID("tcode.linter", []ext.Provider{p}, userRoot, extFetchFake(src), nil); err != nil {
+		t.Fatalf("InstallByID: %v", err)
+	}
+	pinExtSources(t, []ext.Provider{p}, userRoot)
+	app, _ := newTestApp(t, "uno")
+	awaitExtSnapshot(t, app)
+	app.openExtManager()
+
+	pressR(app)
+	awaitManualRefresh(t, app)
+	if got := app.toast.Message(); got != "Extensiones al día" {
+		t.Fatalf("el toast es %q, debe decir que no hay nada pendiente", got)
+	}
+	if !app.extActive {
+		t.Fatal("la ventana debe seguir abierta")
+	}
+}
+
+// TestManualRefreshRejectedWhileJobRunning: con una instalación en vuelo, r
+// no relanza: avisa en la barra y la ventana sigue donde estaba.
+func TestManualRefreshRejectedWhileJobRunning(t *testing.T) {
+	resetConfigVars(t)
+	app, _, _ := extWindowFixture(t, true)
+	extTabItems(t, app, view.ExtTabInstalled)
+	app.extJobRunning = true
+
+	pressR(app)
+	if app.extRefreshManual {
+		t.Fatal("con un job en vuelo no se puede relanzar la validación")
+	}
+	if !strings.Contains(app.statusBar.Message(), "en curso") {
+		t.Fatalf("el mensaje es %q, debe avisar que hay una instalación en curso", app.statusBar.Message())
+	}
+	if !app.extActive {
+		t.Fatal("la ventana debe seguir abierta")
+	}
+}
+
+// TestExtensionWindowRejectsConcurrentJob: con un job en vuelo, otra
+// instalación no se encola: se avisa en la barra y el job vigente sigue.
+func TestExtensionWindowRejectsConcurrentJob(t *testing.T) {
+	resetConfigVars(t)
+	app, _, _ := extWindowFixture(t, true)
+	app.extJobRunning = true
+	item := view.ExtItem{Kind: view.ExtItemInstall, ID: "tcode.tema", Provider: "remoto", Ref: "remoto/tcode.tema"}
+	if err := app.installExtension(item); err != nil {
+		t.Fatalf("rechazar un job concurrente no es error: %v", err)
+	}
+	if !strings.Contains(app.statusBar.Message(), "en curso") {
+		t.Fatalf("el mensaje es %q, debe avisar que hay una instalación en curso", app.statusBar.Message())
+	}
+	if !app.extJobRunning {
+		t.Fatal("el job vigente debe seguir en vuelo")
 	}
 }
 

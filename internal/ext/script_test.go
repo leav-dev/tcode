@@ -35,6 +35,9 @@ type fakeAPI struct {
 	diagErr         error
 	files           []HostFile
 	filesErr        error
+	readPath        string
+	readFile        HostFile
+	readErr         error
 	gitInfo         GitInfo
 	gitErr          error
 	fileDiffLines   []FileDiffLine
@@ -97,13 +100,66 @@ func (f *fakeAPI) SetDiagnostics(source string, d []view.Diagnostic) error {
 
 func (f *fakeAPI) DirFiles() ([]HostFile, error) { return f.files, f.filesErr }
 
+func (f *fakeAPI) ReadFile(relpath string) (HostFile, error) {
+	f.readPath = relpath
+	return f.readFile, f.readErr
+}
+
 func (f *fakeAPI) GitStatus() (GitInfo, error) { return f.gitInfo, f.gitErr }
 
 func (f *fakeAPI) GetFileDiff(path string, staged bool) ([]FileDiffLine, error) {
 	return f.fileDiffLines, f.fileDiffErr
 }
 
-// TestScriptHostCallsFunction: la función global llama a la API tcode.* y el
+// TestScriptHostReadFile: tcode.read_file pide UN archivo por ruta relativa y
+// recibe {path, content} con la ruta absoluta canónica.
+func TestScriptHostReadFile(t *testing.T) {
+	api := &fakeAPI{readFile: HostFile{Path: "/dir/util.ts", Content: "export {}"}}
+	h, err := NewScriptHost(`
+		function f()
+			local r = tcode.read_file("./util.ts")
+			tcode.message(r.path .. "|" .. r.content)
+		end
+	`, api, "src")
+	if err != nil {
+		t.Fatalf("NewScriptHost falló: %v", err)
+	}
+	defer h.Close()
+
+	if err := h.Call("f"); err != nil {
+		t.Fatalf("Call falló: %v", err)
+	}
+	if api.readPath != "./util.ts" {
+		t.Errorf("ReadFile llamado con %q, esperaba [./util.ts]", api.readPath)
+	}
+	if len(api.msgs) != 1 || api.msgs[0] != "/dir/util.ts|export {}" {
+		t.Errorf("mensajes = %v, esperaba [/dir/util.ts|export {}]", api.msgs)
+	}
+}
+
+// TestScriptHostReadFileNilOnError: si el proveedor falla (sin buffer, escape,
+// inexistente, cota), el host devuelve nil silencioso como dir_files: el
+// script degrada sin cortar.
+func TestScriptHostReadFileNilOnError(t *testing.T) {
+	api := &fakeAPI{readErr: errors.New("no existe")}
+	h, err := NewScriptHost(`
+		function f()
+			local r = tcode.read_file("./falta.ts")
+			tcode.message(tostring(r))
+		end
+	`, api, "src")
+	if err != nil {
+		t.Fatalf("NewScriptHost falló: %v", err)
+	}
+	defer h.Close()
+
+	if err := h.Call("f"); err != nil {
+		t.Fatalf("Call falló: %v", err)
+	}
+	if len(api.msgs) != 1 || api.msgs[0] != "nil" {
+		t.Errorf("mensajes = %v, esperaba [nil]", api.msgs)
+	}
+}
 // host la enruta al editor. tcode.message y tcode.buffer (con ok=false: sin
 // buffer activo, la función Lua simplemente recibe nil) corren limpio, y el
 // error de tcode.command se propaga como error del Call.

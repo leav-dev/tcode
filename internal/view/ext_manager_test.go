@@ -281,6 +281,49 @@ func TestExtManagerResizeReencuadra(t *testing.T) {
 
 // TestExtManagerSpaceTogglesInstalledRow: Space sobre una fila de Instaladas
 // propone alternar el estado de esa extensión.
+// TestExtManagerRefreshesWithR: la tecla r propone relanzar la validación
+// en cualquier pestaña, sin cerrar la ventana. Con Ctrl no vale: es una r
+// de la ventana, no un atajo del editor.
+func TestExtManagerRefreshesWithR(t *testing.T) {
+	m := extManagerFixture(t)
+
+	handled, intent := m.HandleEvent(tcell.NewEventKey(tcell.KeyRune, 'r', tcell.ModNone))
+	if !handled {
+		t.Fatal("r es una tecla de la ventana: no debe caer al controlador")
+	}
+	if intent.Kind != ExtIntentRefresh {
+		t.Fatalf("intent = %v, se esperaba ExtIntentRefresh", intent.Kind)
+	}
+
+	// En otra pestaña también vale.
+	m.HandleEvent(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone))
+	if handled, intent := m.HandleEvent(tcell.NewEventKey(tcell.KeyRune, 'r', tcell.ModNone)); !handled || intent.Kind != ExtIntentRefresh {
+		t.Fatalf("(handled=%v, intent=%v), r debe refrescar en cualquier pestaña", handled, intent.Kind)
+	}
+
+	// Con Ctrl es otra tecla: la ventana no la reclama como refresh.
+	if _, intent := m.HandleEvent(tcell.NewEventKey(tcell.KeyRune, 'r', tcell.ModCtrl)); intent.Kind == ExtIntentRefresh {
+		t.Fatal("Ctrl+r no es el refresh de la ventana")
+	}
+}
+
+// TestExtManagerShowsTheRefreshHint: la pista de r vive en el borde inferior
+// de TODAS las pestañas —la acción no puede vivir solo en la documentación—.
+func TestExtManagerShowsTheRefreshHint(t *testing.T) {
+	for tab := ExtTab(0); tab < extTabCount; tab++ {
+		m := extManagerFixture(t)
+		for i := ExtTab(0); i < tab; i++ {
+			m.HandleEvent(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone))
+		}
+		s := newTestScreen(t, 80, ExtManagerHeight())
+		m.Draw(s)
+		s.Show()
+		if got := screenLines(s)[ExtManagerHeight()-1]; !strings.Contains(got, "r: buscar actualizaciones") {
+			t.Fatalf("pestaña %v: borde inferior = %q, se esperaba la pista de r", tab, got)
+		}
+	}
+}
+
 func TestExtManagerSpaceTogglesInstalledRow(t *testing.T) {
 	m := extManagerFixture(t)
 

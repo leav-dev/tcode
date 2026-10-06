@@ -83,6 +83,7 @@ siempre); solo cambia la implementación. El host expone la tabla global
 | `tcode.buffer()` | Devuelve `{path, content, ok}` del buffer activo (`ok=false` sin buffer). `content` es el documento completo (límite del hito 1). |
 | `tcode.insert(text)` | Inserta `text` en la posición del cursor del buffer activo. |
 | `tcode.lineCount()` / `tcode.line(n)` | Líneas del buffer activo y su contenido por línea (`n` 1-indexado; errores "sin buffer activo"/"línea fuera de rango"). |
+| `tcode.read_file(relpath)` | Lee UN archivo por ruta relativa al directorio del buffer activo (p. ej. el módulo que un import nombra). Devuelve `{path, content}` con la ruta absoluta canónica, o nil si no hay buffer, la ruta escapa del directorio, el archivo no existe o no cumple las cotas (solo extensiones de código, máx ~2 MiB). Pensada para 1 archivo por llamada; el cacheo entre invocaciones vive en el estado Lua. |
 | `tcode.diagnostics.set(lista)` / `tcode.diagnostics.clear()` | Reemplaza las **anotaciones** del buffer activo: lista de `{line, message, severity}` (severidad `error`\|`warning`\|`info`, default `error`; un elemento inválido aborta todo). |
 | `tcode.message(msg)` | Muestra un mensaje en la barra de estado. |
 | `tcode.notify(msg, kind)` | Muestra una **notificación** en la esquina superior derecha (toast con desaparición automática, ~2.5 s): la misma que muestra el editor al guardar. `kind` es `"success"` (default), `"error"` o `"info"`; un kind desconocido o no textual es un error de Lua. |
@@ -304,6 +305,7 @@ instaladas. Listar un proveedor es E/S con git y no puede correr al abrir.
 | `Left` / `Right` | Cambia de pestaña (con wrap) |
 | `Up` / `Down`, `PgUp` / `PgDn`, `Home` / `End` | Mueve el cursor en la pestaña |
 | `Enter` | Actúa **según la fila**: Disponible → instala; Actualizable → actualiza; Instalada → borra; `+ Agregar proveedor` → pide la URL o la carpeta |
+| `r` | Relanza la validación de actualizaciones en segundo plano, en cualquier pestaña y sin cerrar la ventana |
 | `Space` | En **Instaladas**, alterna **activar/desactivar** la extensión del cursor. En las demás pestañas no hace nada (la tecla es de la ventana) |
 | `Escape` (o cualquier tecla ajena) | Cierra la ventana descartando |
 
@@ -323,7 +325,12 @@ trasera a lo que `--install-extension` pide confirmar.
 La ventana **no reimplementa nada**: llama a las mismas funciones que la CLI
 (`InstallByID`, `UpdateAll`, `RemoveNamespaced`, `CanonicalSource` +
 `DeriveName` + `SaveProviders`; las listas salen de `ext.LoadAll` y sus derivados).
-Una acción que falla se reporta en la barra de estado y la ventana queda abierta
+Instalar y actualizar corren en **segundo plano** (una goroutine por job, con
+entrega por `EventInterrupt` como la lectura de arranque): el pedido se cierra
+al confirmar y el editor sigue respondiendo mientras git clona; al terminar, un
+toast avisa y la ventana se repinta con recarga de la sesión. Solo corre un job
+a la vez. Borrar es disco local y sigue sincrónico. Una acción que falla se
+reporta en la barra de estado y la ventana queda abierta
 con los datos recalculados.
 
 ## El manifest (`extension.json`)

@@ -46,12 +46,12 @@ var extTabEmpty = [extTabCount]string{
 
 // extTabHint es la pista de la acción propia de cada pestaña, escrita sobre el
 // borde inferior para que la acción no viva solo en la documentación. Vacía =
-// sin pista.
+// sin pista. La de r (relanzar la validación) vale en todas las pestañas.
 var extTabHint = [extTabCount]string{
-	"espacio: activar/desactivar",
-	"",
-	"",
-	"",
+	"espacio: activar/desactivar · r: buscar actualizaciones",
+	"r: buscar actualizaciones",
+	"r: buscar actualizaciones",
+	"r: buscar actualizaciones",
 }
 
 // ExtItemKind es lo que Enter hace con una fila. La ventana NO decide qué
@@ -101,6 +101,9 @@ const (
 	// ExtIntentToggle propone alternar el estado (activa/desactivada) de la
 	// extensión instalada del cursor.
 	ExtIntentToggle
+	// ExtIntentRefresh propone relanzar la validación de actualizaciones:
+	// releer los proveedores en segundo plano sin cerrar la ventana.
+	ExtIntentRefresh
 )
 
 // ExtIntent es la intención que HandleEvent devuelve: qué pidió la ventana y
@@ -311,7 +314,8 @@ func (m *ExtManager) Resize(width, height int) {
 // (true, ExtIntentAction) con la fila del cursor si la fila actúa (instalar,
 // actualizar, borrar), (true, ExtIntentAddProvider) si es la de agregar
 // proveedor y (true, ExtIntentNone) si la fila es informativa o la pestaña está
-// vacía. Escape, Ctrl+C y toda otra tecla devuelven (false, ExtIntent{}) y caen
+// vacía. La tecla r devuelve (true, ExtIntentRefresh) en cualquier pestaña:
+// relanza la validación sin cerrar la ventana. Escape, Ctrl+C y toda otra tecla devuelven (false, ExtIntent{}) y caen
 // al controlador, que cierra la ventana descartando. El mouse no se maneja acá:
 // con la ventana abierta el controlador descarta el mouse entero.
 func (m *ExtManager) HandleEvent(ev tcell.Event) (handled bool, intent ExtIntent) {
@@ -359,6 +363,12 @@ func (m *ExtManager) HandleEvent(ev tcell.Event) (handled bool, intent ExtIntent
 			// nada, pero sigue siendo suya.
 			if ev.Rune() == ' ' {
 				return true, m.toggleIntent()
+			}
+			// r relanza la validación de actualizaciones en segundo plano.
+			// Vale en cualquier pestaña y no cierra la ventana: el resultado
+			// llega por el bucle y la repinta sola.
+			if ev.Rune() == 'r' && ev.Modifiers()&(tcell.ModCtrl|tcell.ModAlt) == 0 {
+				return true, ExtIntent{Kind: ExtIntentRefresh, Tab: m.tab}
 			}
 		}
 	}

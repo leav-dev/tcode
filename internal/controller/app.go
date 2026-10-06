@@ -174,6 +174,19 @@ type App struct {
 	// vieja que llegue tarde no puede pisar el dato fresco.
 	extPrefetchSeq int
 
+	// extJobSeq numera los jobs de escritura (instalar/actualizar) y
+	// extJobRunning dice si hay uno en vuelo. Solo corre uno a la vez:
+	// clonar por red tarda segundos y dos escrituras concurrentes sobre
+	// la misma raíz se pisarían. El job corre en goroutine y entrega por
+	// EventInterrupt (como el prefetch): el loop nunca se bloquea.
+	extJobSeq     int
+	extJobRunning bool
+
+	// extRefreshManual dice si la lectura en vuelo la pidió el usuario con
+	// la tecla r (y no el arranque): el resultado manual SIEMPRE se reporta
+	// con toast, incluso sin novedades. Lo consume handleExtSnapshot.
+	extRefreshManual bool
+
 	// extPanel es el panel de extensiones del catálogo (legado de
 	// feat/extension-catalog) y extPanelActive dice si está abierto. La fila
 	// de configuración hoy abre el ExtManager (camino testeado); el panel se
@@ -735,6 +748,11 @@ func lastError(errs []error) error {
 // handleExtSnapshot cachea el snapshot que trajo la goroutine y avisa en la
 // barra. Con la ventana de extensiones abierta, la repinta con el dato nuevo:
 // abrirla antes de que llegue muestra "cargando…", no una espera.
+//
+// Si la lectura la pidió el usuario (tecla r), el resultado se reporta SIEMPRE
+// con toast —éxito con conteos, error, o "al día"— porque un relanzamiento
+// manual sin respuesta parece que no hizo nada. El arranque sigue silencioso
+// cuando no hay nada que ofrecer.
 func (a *App) handleExtSnapshot(ev extSnapshotEvent) {
 	if ev.Seq < a.extPrefetchSeq {
 		return // llegó una lectura vieja: el dato fresco ya está en caché
@@ -744,13 +762,26 @@ func (a *App) handleExtSnapshot(ev extSnapshotEvent) {
 	// Derivar es local y barato: aunque la ventana esté cerrada, las listas
 	// quedan al día para el aviso y para cuando abra.
 	a.applyExtSnapshot()
+	manual := a.extRefreshManual
+	a.extRefreshManual = false
 	if ev.Err != nil {
-		a.statusBar.SetMessage("Aviso de extensiones: " + ev.Err.Error())
+		if manual {
+			a.showToast("No se pudo validar: "+ev.Err.Error(), view.ToastError)
+		} else {
+			a.statusBar.SetMessage("Aviso de extensiones: " + ev.Err.Error())
+		}
 		return
 	}
 	n, m := len(a.extUpdates), len(a.extAvailable)
 	if n == 0 && m == 0 {
+		if manual {
+			a.showToast("Extensiones al día", view.ToastSuccess)
+		}
 		return // nada que ofrecer: el estado de la barra sigue siendo el de la sesión
+	}
+	if manual {
+		a.showToast(extPendingNotice(n, m), view.ToastInfo)
+		return
 	}
 	a.statusBar.SetMessage(extPendingNotice(n, m))
 }
@@ -1622,6 +1653,11 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		// ignora: no es de la aplicación.
 		if p, ok := ev.Data().(extSnapshotEvent); ok {
 			a.handleExtSnapshot(p)
+			a.redraw()
+		}
+
+		if p, ok := ev.Data().(extJobEvent); ok {
+			a.handleExtJob(p)
 			a.redraw()
 		}
 
@@ -2898,7 +2934,25 @@ func (a *App) handleExtIntent(intent view.ExtIntent) {
 		}
 	case view.ExtIntentToggle:
 		a.toggleExtension(intent.Item.ID, intent.Item.Label)
+	case view.ExtIntentRefresh:
+		a.refreshExtensions()
 	}
+}
+
+// refreshExtensions relanza la validación de actualizaciones a pedido del
+// usuario (tecla r en la ventana): relee los proveedores en segundo plano
+// con el mismo prefetch del arranque, así que el editor sigue respondiendo.
+// La ventana NO se cierra y muestra lo ya cacheado hasta que llega lo nuevo.
+// Con un job de escritura en vuelo no se relanza: leer el disco a mitad de
+// una instalación vería un estado partido.
+func (a *App) refreshExtensions() {
+	if a.extJobRunning {
+		a.statusBar.SetMessage("ya hay una instalación en curso")
+		return
+	}
+	a.extRefreshManual = true
+	a.prefetchExtensions()
+	a.statusBar.SetMessage("Buscando actualizaciones en segundo plano…")
 }
 
 // toggleExtension activa o desactiva la extensión por manifest id: invierte el
@@ -2950,6 +3004,97 @@ func (a *App) clearExtArtifacts(id string) {
 	a.syncStatus()
 }
 
+// extJobKind dice qué escritura corre un job en segundo plano: instalar una
+// extensión suelta o actualizar las que difieren. Borrar es disco local y
+// queda sincrónico.
+type extJobKind int
+
+const (
+	extJobInstall extJobKind = iota
+	extJobUpdate
+)
+
+// extJobEvent es el sobre con el que la goroutine de un job entrega su
+// resultado al bucle de eventos. Viaja como tcell.EventInterrupt porque
+// screen.PostEvent es la única puerta thread-safe hacia el loop: ninguna
+// goroutine toca la UI, solo publica el dato y el manejador lo aplica en el
+// hilo de los eventos. Seq es el número del job que lo produjo: una entrega
+// vieja no puede pisar a un job más nuevo.
+type extJobEvent struct {
+	Seq     int
+	Kind    extJobKind
+	Ref     string
+	Applied int
+	ErrMsg  string
+}
+
+// handleExtJob aplica el resultado de un job de escritura: limpia el flag de
+// job en vuelo, repinta la ventana desde el disco local (el catálogo no
+// cambió, así que no se relee el proveedor) con recarga de la sesión, y
+// avisa con toast. La ventana NO se cierra: el usuario sigue donde estaba.
+func (a *App) handleExtJob(ev extJobEvent) {
+	if ev.Seq < a.extJobSeq {
+		return // llegó un job viejo: el dato fresco ya está en caché
+	}
+	a.extJobRunning = false
+	a.refreshExtData()
+	if ev.ErrMsg != "" {
+		a.showToast(ev.Ref+": "+ev.ErrMsg, view.ToastError)
+		return
+	}
+	switch ev.Kind {
+	case extJobInstall:
+		a.showToast("Instalada: "+ev.Ref, view.ToastSuccess)
+	case extJobUpdate:
+		if ev.Applied == 0 {
+			a.showToast(ev.Ref+" ya estaba al día", view.ToastSuccess)
+		} else {
+			a.showToast(plural(ev.Applied, "actualización aplicada", "actualizaciones aplicadas"), view.ToastSuccess)
+		}
+	}
+}
+
+// startInstallJob lanza la instalación en una goroutine y vuelve de
+// inmediato: el loop queda libre y el editor no se congela mientras git
+// clona. Los datos se capturan POR VALOR acá, en el hilo de los eventos: la
+// goroutine no vuelve a leer estado mutable del App, solo el puntero de la
+// pantalla para entregar. El resultado llega como extJobEvent.
+func (a *App) startInstallJob(item view.ExtItem, providers []ext.Provider, userRoot string, fetcher ext.FetchFunc) {
+	a.extJobSeq++
+	seq := a.extJobSeq
+	a.extJobRunning = true
+	a.showToast("Instalando "+item.Ref+" en segundo plano…", view.ToastInfo)
+	go func() {
+		res, err := ext.InstallByID(item.ID, providers, userRoot, fetcher, nil)
+		ev := extJobEvent{Seq: seq, Kind: extJobInstall, Ref: item.Ref}
+		if err != nil {
+			ev.ErrMsg = err.Error()
+		} else {
+			ev.Ref = res.Ref()
+		}
+		a.screen.PostEvent(tcell.NewEventInterrupt(ev))
+	}()
+}
+
+// startUpdateJob lanza la actualización en una goroutine con el mismo
+// contrato que startInstallJob: vuelve de inmediato y entrega por
+// EventInterrupt. Actualizar no pide confianza: la extensión instalada ya
+// salió de ese proveedor.
+func (a *App) startUpdateJob(ref string, providers []ext.Provider, userRoot string, fetcher ext.FetchFunc) {
+	a.extJobSeq++
+	seq := a.extJobSeq
+	a.extJobRunning = true
+	a.showToast("Actualizando "+ref+" en segundo plano…", view.ToastInfo)
+	go func() {
+		applied, errs := ext.UpdateAll(providers, userRoot, fetcher)
+		ev := extJobEvent{Seq: seq, Kind: extJobUpdate, Ref: ref, Applied: len(applied)}
+		if len(errs) > 0 {
+			ev.ErrMsg = errs[len(errs)-1].Error()
+		}
+		a.screen.PostEvent(tcell.NewEventInterrupt(ev))
+	}()
+}
+
 // promptInstallExtension pide confirmación antes de instalar la novedad de la
 // fila. Un proveedor SIN aprobar no llega al pedido: instalar desde ahí es una
 // decisión de confianza que la ventana no toma —el aviso dice cómo hacerlo por la
@@ -2974,29 +3119,21 @@ func (a *App) promptInstallExtension(item view.ExtItem) {
 
 // installExtension instala la extensión por id con la MISMA ruta que la CLI
 // (ext.InstallByID, no una reinvención): resolución por orden de proveedores y
-// validación del manifest antes de tocar el destino. Los datos de la ventana se
-// repintan pase lo que pase —instalar agrega o quita filas— y el error, si lo
-// hay, lo muestra el pedido.
-//
-// La extensión recién instalada entra en la MISMA sesión: el catálogo no cambió
-// (no se relee el proveedor), así que solo se relee la lista local y las
-// extensiones de disco se recargan —con Manager.Reload, que también descarta el
-// host de Lua cacheado— para que sus comandos existan desde ya.
+// validación del manifest antes de tocar el destino. Corre en SEGUNDO PLANO
+// (startInstallJob): esta función vuelve de inmediato y el editor sigue
+// respondiendo mientras git clona; el resultado llega por EventInterrupt y
+// repinta la ventana con recarga de la sesión. Si ya hay un job en vuelo se
+// rechaza: dos escrituras concurrentes sobre la raíz se pisarían.
 func (a *App) installExtension(item view.ExtItem) error {
+	if a.extJobRunning {
+		a.statusBar.SetMessage("ya hay una instalación en curso")
+		return nil
+	}
 	providers, userRoot, err := extensionUserSources()
 	if err != nil {
 		return err
 	}
-	// Instalar clona por red y tarda segundos: se anuncia ANTES del llamado
-	// bloqueante (con redibujado sincrónico) para que el progreso se vea, y
-	// al terminar se confirma con un toast —más visible que la barra—.
-	a.showToast("Instalando " + item.Ref + "…", view.ToastInfo)
-	res, err := ext.InstallByID(item.ID, providers, userRoot, startupExtFetch, nil)
-	a.refreshExtData()
-	if err != nil {
-		return err
-	}
-	a.showToast("Instalada: "+res.Ref(), view.ToastSuccess)
+	a.startInstallJob(item, providers, userRoot, startupExtFetch)
 	return nil
 }
 
@@ -3015,22 +3152,15 @@ func (a *App) promptUpdateExtension(item view.ExtItem) {
 			a.showToast("Cancelado", view.ToastInfo)
 			return nil
 		}
+		if a.extJobRunning {
+			a.statusBar.SetMessage("ya hay una instalación en curso")
+			return nil
+		}
 		providers, userRoot, err := extensionUserSources()
 		if err != nil {
 			return err
 		}
-		applied, errs := ext.UpdateAll(providers, userRoot, startupExtFetch)
-		a.refreshExtData()
-		msg := plural(len(applied), "actualización aplicada", "actualizaciones aplicadas")
-		if len(applied) == 0 {
-			msg = item.Ref + " ya estaba al día"
-		}
-		if len(errs) > 0 {
-			msg += " — con errores: " + errs[len(errs)-1].Error()
-			a.showToast(msg, view.ToastError)
-		} else {
-			a.showToast(msg, view.ToastSuccess)
-		}
+		a.startUpdateJob(item.Ref, providers, userRoot, startupExtFetch)
 		return nil
 	})
 }

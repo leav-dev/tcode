@@ -216,9 +216,14 @@ Cuando llega, si hay actualizaciones o novedades, la barra de estado lo avisa
 De ahí se gestiona todo: la ventana de extensiones abre **instantánea** con los
 datos ya cacheados (si la lectura todavía no terminó, muestra `cargando…` y se
 rellena sola), y `Enter` sobre la fila instala, actualiza o borra con su
-confirmación. La ventana no vuelve a leer los proveedores: tras una acción solo
+confirmación. La tecla `r` relanza la validación en segundo plano sin cerrar
+la ventana: al terminar, un toast avisa lo que hay (o que está todo al día). La ventana no vuelve a leer los proveedores: tras una acción solo
 relee la lista local de instaladas y vuelve a derivar las dos listas del mismo
-catálogo, así que instalar o actualizar es inmediato. La extensión instalada o
+catálogo, así que no se paga de nuevo la lectura de red. Instalar o actualizar
+corre en **segundo plano**: el pedido se cierra al confirmar y podés seguir
+escribiendo mientras git clona; al terminar, un toast avisa éxito o error y la
+ventana se repinta sola. Solo corre una instalación a la vez: si hay otra en
+curso, la ventana lo dice en la barra. La extensión instalada o
 actualizada entra en la sesión en el acto (sus comandos y keybindings quedan
 registrados al instante, con el código nuevo).
 
