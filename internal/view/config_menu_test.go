@@ -307,6 +307,87 @@ func TestConfigMenuThemeCyclesThroughPalettes(t *testing.T) {
 	}
 }
 
+// TestConfigMenuExtensionsAction: la fila "Extensions" existe al final de la
+// ventana, Enter la activa (devuelve (true, true) con un onAction inyectado
+// que marca una bandera), Left/Right sobre ella no mutan nada ((true, false)),
+// Enter sin onAction no abre nada ((true, false)) y Escape cierra la ventana.
+func TestConfigMenuExtensionsAction(t *testing.T) {
+	resetConfigDefaults(t)
+	m := NewConfigMenu()
+	m.Resize(30, 7)
+
+	// La fila "Extensions" es la última (índice 4, tras las 4 de ajuste).
+	items := configItems()
+	if got := len(items); got != 5 {
+		t.Fatalf("configItems() tiene %d filas, se esperaba 5 (4 ajustes + Extensions)", got)
+	}
+	last := items[len(items)-1]
+	if last.label != "Extensions" || last.kind != ConfigAction {
+		t.Fatalf("la última fila = {label:%q, kind:%v}, se esperaba {Extensions, ConfigAction}", last.label, last.kind)
+	}
+
+	// Mover el cursor a la fila Extensions (Down ×4).
+	for range 4 {
+		m.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
+	}
+
+	// Enter con un onAction inyectado: (true, true) y la bandera marcada.
+	activated := false
+	m.SetOnAction(func(label string) bool {
+		if label == "Extensions" {
+			activated = true
+			return true
+		}
+		return false
+	})
+	if handled, changed := m.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone)); !handled || !changed {
+		t.Fatalf("Enter en Extensions devolvió (handled=%v, changed=%v), se esperaba (true, true)", handled, changed)
+	}
+	if !activated {
+		t.Fatal("Enter en Extensions debe disparar el onAction inyectado")
+	}
+
+	// Left/Right sobre la acción no mutan nada: (true, false).
+	if handled, changed := m.HandleEvent(tcell.NewEventKey(tcell.KeyLeft, 0, tcell.ModNone)); !handled || changed {
+		t.Fatalf("Left en Extensions devolvió (handled=%v, changed=%v), se esperaba (true, false)", handled, changed)
+	}
+	if handled, changed := m.HandleEvent(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone)); !handled || changed {
+		t.Fatalf("Right en Extensions devolvió (handled=%v, changed=%v), se esperaba (true, false)", handled, changed)
+	}
+
+	// Enter sin onAction: (true, false) — no abrió nada.
+	m.SetOnAction(nil)
+	if handled, changed := m.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone)); !handled || changed {
+		t.Fatalf("Enter sin onAction devolvió (handled=%v, changed=%v), se esperaba (true, false)", handled, changed)
+	}
+
+	// Escape cierra la ventana: (false, false).
+	if handled, changed := m.HandleEvent(tcell.NewEventKey(tcell.KeyEscape, 0, tcell.ModNone)); handled || changed {
+		t.Fatalf("Escape devolvió (handled=%v, changed=%v), se esperaba (false, false)", handled, changed)
+	}
+}
+
+// TestConfigMenuDrawsActionRowWithoutValue: la fila de acción (Extensions) se
+// dibuja solo con su etiqueta, sin valor a la derecha (las actions no tienen
+// get/set).
+func TestConfigMenuDrawsActionRowWithoutValue(t *testing.T) {
+	resetConfigDefaults(t)
+	m := NewConfigMenu()
+	m.Resize(30, 7)
+	s := newTestScreen(t, 30, 7)
+	drawConfigMenu(m, s)
+
+	// La fila Extensions es la última interior (fila 5): solo la etiqueta,
+	// sin valor alineado a la derecha.
+	line := screenLines(s)[5]
+	if !strings.Contains(line, "Extensions") {
+		t.Fatalf("fila Extensions = %q, debe contener la etiqueta %q", line, "Extensions")
+	}
+	if got := strings.Trim(line, "│ "); got != "Extensions" {
+		t.Fatalf("fila Extensions = %q, debe tener solo la etiqueta (sin valor), got %q", line, got)
+	}
+}
+
 // TestConfigMenuThemeCustomClearsTheID: Left desde "Custom" desanda el ciclo
 // (Left y Right son reversibles): "" → dracula → tokyo-night, y el ciclo
 // cierra por ambos extremos (Right desde Custom vuelve a light; Left desde

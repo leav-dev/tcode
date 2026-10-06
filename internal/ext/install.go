@@ -121,6 +121,24 @@ func fetchSparseGit(url, dest, pattern string) error {
 // extensión) es el flujo normal del autor. Un manifest inválido aborta SIN
 // tocar el destino.
 func InstallFromGit(url string, userRoot string, cloner CloneFunc) (string, error) {
+	return installFrom(url, "", userRoot, cloner)
+}
+
+// InstallFromGitSubdir es InstallFromGit para monorepos: clona url, valida el
+// extension.json de la subcarpeta subdir y copia SOLO esa subcarpeta a
+// userRoot/<id> — sin el .git del repo, que vive en la raíz del clon. Si el
+// clon no trae subdir, el error lo dice claro. Si cloner es nil, se usa clone
+// (la implementación real).
+func InstallFromGitSubdir(url, subdir, userRoot string, cloner CloneFunc) (string, error) {
+	return installFrom(url, subdir, userRoot, cloner)
+}
+
+// installFrom es el núcleo compartido de InstallFromGit (subdir vacío =
+// manifest en la raíz del clon) e InstallFromGitSubdir (manifest en
+// <tmp>/<subdir>). Clona, valida el manifest con Load ANTES de tocar el
+// destino, reemplaza si userRoot/<id> ya existe y copia el árbol fuente a
+// userRoot/<id> excluyendo .git.
+func installFrom(url, subdir, userRoot string, cloner CloneFunc) (string, error) {
 	if cloner == nil {
 		cloner = clone
 	}
@@ -136,9 +154,22 @@ func InstallFromGit(url string, userRoot string, cloner CloneFunc) (string, erro
 		return "", err
 	}
 
-	data, err := os.ReadFile(filepath.Join(tmp, "extension.json"))
+	// Fuente del manifest y de la copia: la raíz del clon (repo de una sola
+	// extensión) o <tmp>/<subdir> (monorepo, una extensión por carpeta).
+	src := tmp
+	if subdir != "" {
+		src = filepath.Join(tmp, subdir)
+		if info, statErr := os.Stat(src); statErr != nil || !info.IsDir() {
+			return "", fmt.Errorf("el repositorio no contiene %s", subdir)
+		}
+	}
+
+	data, err := os.ReadFile(filepath.Join(src, "extension.json"))
 	if err != nil {
 		if os.IsNotExist(err) {
+			if subdir != "" {
+				return "", fmt.Errorf("%s no tiene extension.json", subdir)
+			}
 			return "", errors.New("el repositorio no tiene extension.json en su raíz")
 		}
 		return "", fmt.Errorf("leyendo extension.json: %w", err)
@@ -169,7 +200,9 @@ func InstallFromGit(url string, userRoot string, cloner CloneFunc) (string, erro
 		return "", fmt.Errorf("revisando %s: %w", dest, err)
 	}
 
-	if err := copyTree(tmp, dest, true); err != nil {
+	// En monorepo se copia solo el subdir de la extensión: el resto del repo
+	// (y su .git, en la raíz del clon) queda fuera de la instalación.
+	if err := copyTree(src, dest, true); err != nil {
 		return "", fmt.Errorf("copiando a %s: %w", dest, err)
 	}
 	return id, nil

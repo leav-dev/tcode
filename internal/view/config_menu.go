@@ -7,32 +7,38 @@ import (
 	"github.com/gdamore/tcell/v2"
 )
 
-// ConfigKind distingue los tres tipos de ajuste de la ventana de
-// configuración: un entero con rango y paso (Tab size, Panel width), un
-// booleano (Word wrap) o un enum de opciones con nombre (Theme).
+// ConfigKind distingue los tipos de fila de la ventana de configuración: un
+// entero con rango y paso (Tab size, Panel width), un booleano (Word wrap),
+// un enum de opciones con nombre (Theme) o una acción sin valor que dispara
+// un callback del controlador (Extensions).
 type ConfigKind int
 
 const (
 	ConfigBool ConfigKind = iota
 	ConfigInt
 	ConfigEnum
+	ConfigAction
 )
 
 // configItem es una fila de la ventana de configuración: la etiqueta, el tipo
 // de ajuste, el rango y paso (solo los enteros), las opciones con nombre
-// (solo el enum) y las puertas get/set sobre la var del paquete. get devuelve
-// el valor NORMALIZADO (el booleano como 0/1, el enum como índice) y set lo
-// aplica. Las filas se construyen SIEMPRE con closures sobre las vars
-// globales de view: la ventana edita la configuración viva del editor.
+// (solo el enum), las puertas get/set sobre la var del paquete y, para las
+// acciones, el callback activate. get devuelve el valor NORMALIZADO (el
+// booleano como 0/1, el enum como índice) y set lo aplica. Las filas se
+// construyen SIEMPRE con closures sobre las vars globales de view: la
+// ventana edita la configuración viva del editor. Las acciones no tienen
+// get/set: su activate lo decide el controlador (p. ej. Extensions abre el
+// panel de extensiones).
 type configItem struct {
-	label string
-	kind  ConfigKind
-	min   int
-	max   int
-	step  int
-	names []string // opciones del enum, en orden (Theme: registry + "Custom")
-	get   func() int
-	set   func(int)
+	label    string
+	kind     ConfigKind
+	min      int
+	max      int
+	step     int
+	names    []string // opciones del enum, en orden (Theme: registry + "Custom")
+	get      func() int
+	set      func(int)
+	activate func() bool // acciones: el callback del controlador (Enter)
 }
 
 // configItems construye las cuatro filas fijas de la ventana de configuración,
@@ -76,29 +82,33 @@ func configItems() []configItem {
 				SetActiveThemeID(ThemeIDs()[i])
 			},
 		},
+		{label: "Extensions", kind: ConfigAction},
 	}
 }
 
 // ConfigMenuHeight es el alto que la ventana necesita para mostrar TODAS sus
-// filas: el marco de arriba y el de abajo más las cuatro filas. El controlador
-// lo usa para dimensionar la región flotante (configRegion).
+// filas: el marco de arriba y el de abajo más las filas de ajuste y la acción.
+// El controlador lo usa para dimensionar la región flotante (configRegion).
 func ConfigMenuHeight() int { return len(configItems()) + 2 }
 
 // ConfigMenu es la ventana flotante de configuración (Ctrl+P): una lista de
-// cuatro filas con cursor (la mecánica exacta del menú de pestañas —cursor/top
-// y su scroll mínimo—) dentro de un marco centrado sobre el área del editor.
+// filas con cursor (la mecánica exacta del menú de pestañas —cursor/top y su
+// scroll mínimo—) dentro de un marco centrado sobre el área del editor.
 // Left/Right mutan la fila del cursor (y Enter alterna el booleano); Up/Down y
 // el resto de la navegación mueven el cursor. En el enum, Left/Right circulan
 // por las opciones (wrap por los extremos) y Enter no hace nada, como en los
-// enteros. Escape, Ctrl+C y toda tecla ajena devuelven (false, false) y el
-// controlador cierra la ventana descartando; mientras está abierta posee el
-// teclado y el mouse, así que el documento no recibe nada por accidente.
+// enteros. Sobre una acción (Extensions), Enter dispara el callback del
+// controlador (onAction) y Left/Right no hacen nada. Escape, Ctrl+C y toda
+// tecla ajena devuelven (false, false) y el controlador cierra la ventana
+// descartando; mientras está abierta posee el teclado y el mouse, así que el
+// documento no recibe nada por accidente.
 type ConfigMenu struct {
-	cursor int // índice de la fila del cursor
-	top    int // primera fila visible
-	width  int // ancho de la ventana (Resize)
-	height int // alto de la ventana (Resize)
-	theme  Theme
+	cursor   int // índice de la fila del cursor
+	top      int // primera fila visible
+	width    int // ancho de la ventana (Resize)
+	height   int // alto de la ventana (Resize)
+	theme    Theme
+	onAction func(label string) bool // callback de las acciones (Extensions)
 }
 
 func NewConfigMenu() *ConfigMenu {
@@ -107,6 +117,12 @@ func NewConfigMenu() *ConfigMenu {
 
 // SetTheme reemplaza la paleta del componente.
 func (m *ConfigMenu) SetTheme(th Theme) { m.theme = th }
+
+// SetOnAction fija el callback de las acciones de la ventana: lo llama Enter
+// sobre una fila de acción (Extensions) con la etiqueta de la fila, y su
+// retorno dice si abrió algo (changed, para que el controlador persista y
+// reencuadre). Sin callback, Enter sobre una acción no hace nada.
+func (m *ConfigMenu) SetOnAction(fn func(label string) bool) { m.onAction = fn }
 
 // count es la cantidad de filas fijas de la ventana.
 func (m *ConfigMenu) count() int { return len(configItems()) }
@@ -202,6 +218,9 @@ func (m *ConfigMenu) Resize(width, height int) {
 // desde "light" vuelve a "Custom"), con el ciclo reversible.
 func (m *ConfigMenu) mutate(delta int) bool {
 	it := configItems()[m.cursor]
+	if it.kind == ConfigAction {
+		return false // las acciones no tienen valor que mutar
+	}
 	var nuevo int
 	if it.kind == ConfigBool {
 		nuevo = 1 - it.get()
@@ -268,12 +287,24 @@ func (m *ConfigMenu) HandleEvent(ev tcell.Event) (handled, changed bool) {
 			m.setCursor(m.count() - 1)
 			return true, false
 		case tcell.KeyLeft:
+			// Left/Right sobre una acción no mutan nada: son de la ventana.
+			if it := configItems()[m.cursor]; it.kind == ConfigAction {
+				return true, false
+			}
 			return true, m.mutate(-1)
 		case tcell.KeyRight:
+			if it := configItems()[m.cursor]; it.kind == ConfigAction {
+				return true, false
+			}
 			return true, m.mutate(1)
 		case tcell.KeyEnter, tcell.KeyLF:
 			// Enter en un entero y en el enum no hace nada (delta 0); en un
-			// booleano alterna. Siempre es de la ventana.
+			// booleano alterna. Sobre una acción dispara el callback del
+			// controlador: changed dice si abrió algo. Siempre es de la
+			// ventana.
+			if it := configItems()[m.cursor]; it.kind == ConfigAction {
+				return true, m.onAction != nil && m.onAction(it.label)
+			}
 			return true, m.mutate(0)
 		}
 	}
@@ -353,10 +384,13 @@ func (m *ConfigMenu) Draw(s Surface) {
 			}
 		}
 		text := it.label
-		if gap := m.width - 2 - displayWidth(text) - displayWidth(configValueText(it)); gap > 0 {
-			text += strings.Repeat(" ", gap)
+		// Las acciones no tienen valor: se dibujan solo con la etiqueta.
+		if it.kind != ConfigAction {
+			if gap := m.width - 2 - displayWidth(text) - displayWidth(configValueText(it)); gap > 0 {
+				text += strings.Repeat(" ", gap)
+			}
+			text += configValueText(it)
 		}
-		text += configValueText(it)
 		writeString(s, 1, y, text, style, m.width-2)
 	}
 }
