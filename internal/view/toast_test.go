@@ -88,20 +88,27 @@ func TestToastDrawsRightAlignedWithPadding(t *testing.T) {
 	toast.Show("Guardado", ToastSuccess)
 	toast.Draw(s, 40)
 
-	// Alineado a la derecha: el mensaje ocupa las columnas 31-38, con padding
-	// en la 30 y en el borde (39). screenLines recorta los espacios finales, así
-	// que la alineación exacta se verifica celda por celda.
-	if c, _, _, _ := s.GetContent(31, 0); c != 'G' {
-		t.Fatalf("celda (31,0) = %q, se esperaba 'G' del mensaje alineado a la derecha", c)
+	// Alineado a la derecha: la caja ocupa las columnas 25-39 (barra en la
+	// 25, padding doble, glifo en la 28, mensaje 30-37, padding en 38-39).
+	// screenLines recorta los espacios finales, así que la alineación exacta
+	// se verifica celda por celda.
+	if c, _, _, _ := s.GetContent(30, 0); c != 'G' {
+		t.Fatalf("celda (30,0) = %q, se esperaba 'G' del mensaje alineado a la derecha", c)
 	}
 	if c, _, _, _ := s.GetContent(39, 0); c != ' ' {
 		t.Fatalf("celda (39,0) = %q, se esperaba el padding del borde", c)
 	}
-	if got := statusRow(t, s); !strings.HasSuffix(got, " Guardado") {
-		t.Fatalf("fila = %q, se esperaba el mensaje con padding al final", got)
+	if got := statusRow(t, s); !strings.HasSuffix(got, "✓ Guardado") {
+		t.Fatalf("fila = %q, se esperaba el mensaje con glifo al final", got)
 	}
-	if c, _, _, _ := s.GetContent(29, 0); c != '✓' {
-		t.Fatalf("celda (29,0) = %q, se esperaba el glifo de éxito", c)
+	if c, _, _, _ := s.GetContent(28, 0); c != '✓' {
+		t.Fatalf("celda (28,0) = %q, se esperaba el glifo de éxito", c)
+	}
+	// La barra de acento abre la caja con el color fuerte del kind.
+	_, _, barStyle, _ := s.GetContent(25, 0)
+	_, _, bodyStyle, _ := s.GetContent(30, 0)
+	if barStyle == bodyStyle {
+		t.Fatal("la barra de acento debe pintar distinto al cuerpo del toast")
 	}
 }
 

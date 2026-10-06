@@ -93,10 +93,16 @@ func (t *Toast) Draw(sc tcell.Screen, width int) {
 		glyph = "ℹ"
 	}
 
-	// El glifo anuncia el kind sin leer el color; el padding simétrico deja
-	// aire a ambos lados del texto.
+	// El glifo anuncia el kind sin leer el color; el padding doble deja aire
+	// a ambos lados del texto y la barra de acento (el fg del kind a pleno)
+	// marca el borde izquierdo.
+	fg, _, _ := style.Decompose()
+	accent := tcell.StyleDefault.Background(fg)
+	if fg == tcell.ColorDefault {
+		accent = style
+	}
 	msg := t.message
-	if maxMsg := width - 2 - 2; displayWidth(msg) > maxMsg {
+	if maxMsg := width - 1 - 2 - 2; displayWidth(msg) > maxMsg {
 		if maxMsg < 1 {
 			msg = ""
 		} else {
@@ -105,13 +111,18 @@ func (t *Toast) Draw(sc tcell.Screen, width int) {
 	}
 	line := glyph + " " + msg
 
-	// La caja ocupa el mensaje más un padding de un lado: arranca en la
-	// columna que la deja pegada al borde derecho.
-	start := width - displayWidth(line) - 2
-	for x := start; x < width; x++ {
+	// La caja ocupa barra + padding + contenido + padding, pegada al borde
+	// derecho. Con poco ancho el contenido se recorta contra el borde.
+	total := 1 + 2 + displayWidth(line) + 2
+	start := width - total
+	if start < 0 {
+		start = 0
+	}
+	sc.SetContent(start, 0, ' ', nil, accent)
+	for x := start + 1; x < width; x++ {
 		sc.SetContent(x, 0, ' ', nil, style)
 	}
-	writeString(sc, start+1, 0, line, style, displayWidth(line))
+	writeString(sc, start+3, 0, line, style, width-start-3)
 }
 
 // truncateWidth corta s a lo sumo max columnas de ancho de display, sin
