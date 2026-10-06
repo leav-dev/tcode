@@ -2985,12 +2985,18 @@ func (a *App) installExtension(item view.ExtItem) error {
 	if err != nil {
 		return err
 	}
+	// Instalar clona por red y tarda segundos: se anuncia ANTES del llamado
+	// bloqueante (con redibujado sincrónico) para que el progreso se vea, y
+	// al terminar se confirma con un toast —más visible que la barra—.
+	a.statusBar.SetMessage("Instalando " + item.Ref + "…")
+	a.redraw()
 	res, err := ext.InstallByID(item.ID, providers, userRoot, startupExtFetch, nil)
 	a.refreshExtData()
 	if err != nil {
 		return err
 	}
-	a.statusBar.SetMessage("Instalada: " + res.Ref())
+	a.statusBar.SetMessage("")
+	a.showToast("Instalada: "+res.Ref(), view.ToastSuccess)
 	return nil
 }
 

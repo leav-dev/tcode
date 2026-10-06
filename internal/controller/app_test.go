@@ -3869,8 +3869,12 @@ func TestExtensionWindowInstallsAfterConfirmation(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(userRoot, "remoto", "tcode.tema", "extension.json")); err != nil {
 		t.Fatalf("la extensión confirmada debe quedar instalada: %v", err)
 	}
-	if !strings.Contains(app.statusBar.Message(), "Instalada") {
-		t.Fatalf("el mensaje es %q, debe confirmar la instalación", app.statusBar.Message())
+	// El progreso se vio en la barra ("Instalando…") y el éxito en el toast.
+	if got := app.toast.Message(); !strings.Contains(got, "Instalada") {
+		t.Fatalf("el toast es %q, debe confirmar la instalación", got)
+	}
+	if app.toast.Kind() != view.ToastSuccess {
+		t.Fatalf("el toast es de tipo %v, se esperaba éxito", app.toast.Kind())
 	}
 	if !app.extActive {
 		t.Fatal("la ventana debe seguir abierta después de instalar")
