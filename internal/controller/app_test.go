@@ -4187,21 +4187,86 @@ func pollEvent(app *App) <-chan tcell.Event {
 	return ch
 }
 
-// TestExtensionWindowRejectsConcurrentJob: con un job en vuelo, otra
-// instalación no se encola: se avisa en la barra y el job vigente sigue.
-func TestExtensionWindowRejectsConcurrentJob(t *testing.T) {
+// TestExtensionWindowQueuesConcurrentInstall: con un job en vuelo, otra
+// instalación no se rechaza: queda EN COLA, se avisa en la barra con cuántas
+// hay en espera y el job vigente sigue. Pedir dos veces la misma no duplica.
+func TestExtensionWindowQueuesConcurrentInstall(t *testing.T) {
 	resetConfigVars(t)
 	app, _, _ := extWindowFixture(t, true)
 	app.extJobRunning = true
 	item := view.ExtItem{Kind: view.ExtItemInstall, ID: "tcode.tema", Provider: "remoto", Ref: "remoto/tcode.tema"}
 	if err := app.installExtension(item); err != nil {
-		t.Fatalf("rechazar un job concurrente no es error: %v", err)
+		t.Fatalf("encolar un job concurrente no es error: %v", err)
 	}
-	if !strings.Contains(app.statusBar.Message(), "en curso") {
-		t.Fatalf("el mensaje es %q, debe avisar que hay una instalación en curso", app.statusBar.Message())
+	if len(app.extInstallQueue) != 1 {
+		t.Fatalf("la cola tiene %d pedidos, se esperaba 1", len(app.extInstallQueue))
+	}
+	if !strings.Contains(app.statusBar.Message(), "En cola") {
+		t.Fatalf("el mensaje es %q, debe avisar que quedó en cola", app.statusBar.Message())
 	}
 	if !app.extJobRunning {
 		t.Fatal("el job vigente debe seguir en vuelo")
+	}
+	// La misma dos veces no duplica: ya está pedida.
+	if err := app.installExtension(item); err != nil {
+		t.Fatalf("repetir un pedido encolado no es error: %v", err)
+	}
+	if len(app.extInstallQueue) != 1 {
+		t.Fatalf("la cola tiene %d pedidos, la repetida no debe duplicar", len(app.extInstallQueue))
+	}
+	if !strings.Contains(app.statusBar.Message(), "ya está en cola") {
+		t.Fatalf("el mensaje es %q, debe avisar que ya está en cola", app.statusBar.Message())
+	}
+}
+
+// TestExtensionWindowDrainsInstallQueue: lo encolado arranca solo al terminar
+// el job vigente, DE A UNA: con dos novedades pedidas seguidas, ambas quedan
+// instaladas en disco sin otro pedido de por medio y la cola queda vacía.
+func TestExtensionWindowDrainsInstallQueue(t *testing.T) {
+	resetConfigVars(t)
+	src := startupProviderFixture(t, map[string][3]string{
+		"linter": {"tcode.linter", "Linter", "1.0.0"},
+		"tema":   {"tcode.tema", "Tema", "2.0.0"},
+		"otra":   {"tcode.otra", "Otra", "3.0.0"},
+	})
+	userRoot := t.TempDir()
+	p := ext.Provider{Name: "remoto", Source: src, Approved: true}
+	if _, err := ext.InstallByID("tcode.linter", []ext.Provider{p}, userRoot, extFetchFake(src), nil); err != nil {
+		t.Fatalf("InstallByID del linter: %v", err)
+	}
+	pinExtSources(t, []ext.Provider{p}, userRoot)
+	app, _ := newTestApp(t, "uno")
+	awaitExtSnapshot(t, app)
+
+	first := view.ExtItem{Kind: view.ExtItemInstall, ID: "tcode.tema", Provider: "remoto", Ref: "remoto/tcode.tema"}
+	second := view.ExtItem{Kind: view.ExtItemInstall, ID: "tcode.otra", Provider: "remoto", Ref: "remoto/tcode.otra"}
+	if err := app.installExtension(first); err != nil {
+		t.Fatalf("installExtension: %v", err)
+	}
+	if !app.extJobRunning {
+		t.Fatal("el primer pedido debe lanzar el job en segundo plano")
+	}
+	// El segundo llega con el primero en vuelo: queda en cola.
+	if err := app.installExtension(second); err != nil {
+		t.Fatalf("installExtension: %v", err)
+	}
+	if len(app.extInstallQueue) != 1 {
+		t.Fatalf("la cola tiene %d pedidos, se esperaba 1", len(app.extInstallQueue))
+	}
+	// Un solo await consume la cadena entera: al terminar cada job el
+	// manejador arranca solo el siguiente, así que el flag sigue en vuelo
+	// hasta vaciar la cola.
+	awaitExtJob(t, app)
+	if app.extJobRunning {
+		t.Fatal("vaciada la cola no debe quedar ningún job en vuelo")
+	}
+	if len(app.extInstallQueue) != 0 {
+		t.Fatalf("la cola tiene %d pedidos, debe quedar vacía", len(app.extInstallQueue))
+	}
+	for _, id := range []string{"tcode.tema", "tcode.otra"} {
+		if _, err := os.Stat(filepath.Join(userRoot, "remoto", id, "extension.json")); err != nil {
+			t.Fatalf("la extensión %s debe quedar instalada: %v", id, err)
+		}
 	}
 }
 

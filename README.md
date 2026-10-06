@@ -252,7 +252,8 @@ catálogo, así que no se paga de nuevo la lectura de red. Instalar o actualizar
 corre en **segundo plano**: el pedido se cierra al confirmar y podés seguir
 escribiendo mientras git clona; al terminar, un toast avisa éxito o error y la
 ventana se repinta sola. Solo corre una instalación a la vez: si hay otra en
-curso, la ventana lo dice en la barra. La extensión instalada o
+curso, la pedida queda **en cola** y arranca sola al terminar la vigente (la
+barra dice cuántas hay en espera). La extensión instalada o
 actualizada entra en la sesión en el acto (sus comandos y keybindings quedan
 registrados al instante, con el código nuevo).
 
