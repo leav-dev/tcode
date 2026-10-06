@@ -85,6 +85,8 @@ siempre); solo cambia la implementación. El host expone la tabla global
 | `tcode.lineCount()` / `tcode.line(n)` | Líneas del buffer activo y su contenido por línea (`n` 1-indexado; errores "sin buffer activo"/"línea fuera de rango"). |
 | `tcode.diagnostics.set(lista)` / `tcode.diagnostics.clear()` | Reemplaza las **anotaciones** del buffer activo: lista de `{line, message, severity}` (severidad `error`\|`warning`\|`info`, default `error`; un elemento inválido aborta todo). |
 | `tcode.message(msg)` | Muestra un mensaje en la barra de estado. |
+| `tcode.notify(msg, kind)` | Muestra una **notificación** en la esquina superior derecha (toast con desaparición automática, ~2.5 s): la misma que muestra el editor al guardar. `kind` es `"success"` (default) o `"error"`; un kind desconocido o no textual es un error de Lua. |
+| `tcode.statusBar.setSection(id, text)` | Escribe una **sección** propia en la barra de estado (id = manifest id de la extensión, p. ej. `"tcode.gitchanges"`): las secciones de las extensiones se muestran lado a lado y no se pisan entre sí ni con los mensajes del editor. `text` vacío remueve la sección; `id` vacío es un error de Lua. |
 
 ### Ejemplo: un mini-linter con diagnostics
 
@@ -132,8 +134,54 @@ Las extensiones se instalan por **id**, resolviendo contra los **proveedores**
 
 Reinstalar la misma extensión reemplaza el árbol anterior (iterar sobre la
 propia extensión es el flujo normal). Un manifest inválido se rechaza sin tocar
-nada. La extensión queda disponible en la **próxima sesión** (no hay recarga
-en caliente).
+nada. La extensión queda disponible **en la misma sesión**: al volver de la
+ventana, las extensiones de disco se recargan con `Manager.Reload`.
+
+### La lectura en segundo plano: actualizaciones y novedades
+
+Al abrir el editor, `tcode` lanza una **goroutine** que lee el catálogo de cada
+proveedor. El arranque **no la espera** —leer es un partial clone contra GitHub,
+medido en ~3,8 s— así que el editor se usa mientras corre.
+
+Cuando la lectura llega, el bucle de eventos cachea el resultado y, si hay algo
+que mirar, lo avisa **en la barra de estado**:
+
+```
+2 actualizaciones, 1 novedad — Ctrl+P → Extensiones
+```
+
+No hay prompt de arranque: no se aplica nada solo, y la gestión es por la ventana.
+
+- **Una sola lectura, un solo snapshot**: `ext.LoadAll(providers, userRoot, fetcher)`
+  lee el catálogo de cada proveedor **una vez** y devuelve un `Snapshot`
+  (`Providers`, `Catalogs`, `Installed`). Las actualizaciones y las novedades se
+  **derivan** de ese snapshot (`Snapshot.Updates()`, `Snapshot.Available()`), no
+  se releen. Antes cada vista leía los proveedores por su cuenta: 7,05 s por las
+  dos, 3,84 s con el snapshot.
+- **El snapshot se cachea**: la ventana y el aviso lo consumen. Tras una acción
+  (instalar, actualizar, borrar) el proveedor **no se relee** —el catálogo no
+  cambió, solo la lista local de instaladas—, así que se relee `ext.List` (local)
+  y se vuelve a derivar del mismo snapshot. Por eso las acciones son instantáneas.
+- **Cómo llega**: la goroutine no toca la UI. Publica el snapshot con
+  `tcell.NewEventInterrupt(snapshot)` + `screen.PostEvent` —la puerta
+  thread-safe que despierta el loop— y `handleEvent` lo atiende en el hilo de los
+  eventos.
+- **Ventana instantánea**: abierta antes de que llegue, muestra `cargando…` y se
+  rellena sola cuando llega el evento. La pestaña de proveedores sí aparece ya:
+  `~/.tcode/providers.json` es local.
+- **Recarga segura de la sesión**: `Registry.Unregister(id)` +
+  `Manager.Reload(exts)` desregistran **solo** los comandos que las extensiones
+  anteriores registraron —los built-ins `tcode.*` quedan intactos—, reconstruyen
+  el keymap y los estados, y **descartan los hosts de Lua cacheados**: una
+  extensión actualizada tiene código nuevo y el host viejo lo ejecutaría. Por eso
+  una extensión instalada o actualizada entra en la sesión en el acto.
+- **Nunca impide arrancar**: sin cambios no hay aviso; un proveedor caído se
+  avisa en la barra y el editor abre igual con lo que ya está instalado.
+
+> El chequeo vivía en `main.go` y se ejecutaba antes de abrir la TUI, así que
+> solo se veía por stdout y las extensiones se aplicaban en silencio. Después
+> pasó a ser un prompt de arranque, que bloqueaba el editor mientras decidía.
+> Hoy corre en segundo plano y se gestiona desde la ventana.
 
 > El comando clásico sin `script`/`fn` sigue siendo un stub "sin implementación":
 > dale lógica declarándole la función Lua (sección de arriba).
@@ -233,6 +281,42 @@ hoy el camino único es git.
 > locales), que avisan `filtering not recognized by server`; el sparse
 > checkout sigue acotando el materializado, así que el comportamiento observable
 > (no bajar los `.lua`) se mantiene igual.
+
+## Gestión desde el editor (ventana de extensiones)
+
+Todo lo que la CLI hace se puede hacer sin salir del editor: `Ctrl+P` abre la
+ventana de configuración, y su última fila —**Extensiones**— abre una **ventana
+flotante** de gestión. Es una ventana de **pestañas**, una por sección, y sus datos
+salen del **snapshot cacheado** por la lectura en segundo plano (ver arriba), no de
+una lectura propia: la ventana abre al instante, muestra `cargando…` mientras la
+lectura no llega, y tras cada acción se repinta releyendo solo la lista local de
+instaladas. Listar un proveedor es E/S con git y no puede correr al abrir.
+
+| Pestaña | Qué muestra |
+| --- | --- |
+| **Instaladas** | Las extensiones instaladas, con su versión y su proveedor |
+| **Actualizables** | Las instaladas cuyo proveedor ofrece otra versión, con el salto `vieja → nueva` |
+| **Disponibles** | Las que los proveedores ofrecen y no están instaladas |
+| **Proveedores** | Las fuentes registradas, con la fila `+ Agregar proveedor` al final |
+
+| Tecla | Qué hace |
+| --- | --- |
+| `Left` / `Right` | Cambia de pestaña (con wrap) |
+| `Up` / `Down`, `PgUp` / `PgDn`, `Home` / `End` | Mueve el cursor en la pestaña |
+| `Enter` | Actúa **según la fila**: Disponible → instala; Actualizable → actualiza; Instalada → borra; `+ Agregar proveedor` → pide la URL o la carpeta |
+| `Escape` (o cualquier tecla ajena) | Cierra la ventana descartando |
+
+Los tres actos que traen o borran código —**instalar, actualizar y borrar**— piden
+**confirmación sí/no** antes de tocar el disco (solo `s` confirma; el default es NO).
+Las novedades de un proveedor **sin aprobar** se listan marcadas: instalarlas sigue
+exigiendo la aprobación del modelo de confianza, así que la ventana no es una puerta
+trasera a lo que `--install-extension` pide confirmar.
+
+La ventana **no reimplementa nada**: llama a las mismas funciones que la CLI
+(`InstallByID`, `UpdateAll`, `RemoveNamespaced`, `CanonicalSource` +
+`DeriveName` + `SaveProviders`; las listas salen de `ext.LoadAll` y sus derivados).
+Una acción que falla se reporta en la barra de estado y la ventana queda abierta
+con los datos recalculados.
 
 ## El manifest (`extension.json`)
 

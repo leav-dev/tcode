@@ -1039,3 +1039,108 @@ func TestFileBrowserCursorDirIsContextual(t *testing.T) {
 		t.Fatalf("CursorDir() sobre un archivo = %q, se esperaba su directorio", got)
 	}
 }
+
+// TestFileBrowserRemoveNodeTakesTheNodeOutOfTheTree: RemoveNode es el reverso
+// de AddChild — borra un archivo del nivel raíz y un directorio con todo lo que
+// teníaExpanded debajo, reconstruye el aplanado y deja el cursor clampeado y
+// apuntando a un nodo que existe.
+func TestFileBrowserRemoveNodeTakesTheNodeOutOfTheTree(t *testing.T) {
+	fb := NewFileBrowser()
+	fb.Resize(20, 2)
+	fb.SetRoot("/cwd")
+	fb.SetRootEntries([]Entry{
+		{Name: "docs", Path: "/cwd/docs", IsDir: true},
+		{Name: "a.txt", Path: "/cwd/a.txt"},
+		{Name: "b.txt", Path: "/cwd/b.txt"},
+	})
+
+	// El cursor estaba sobre a.txt (índice 1): al borrarlo, el aplanado queda
+	// [docs, b.txt] y el cursor queda clampeado en un nodo que existe —la fila
+	// que ocupa esa posición ahora—.
+	fb.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
+	if !fb.RemoveNode("/cwd/a.txt") {
+		t.Fatal("RemoveNode debe quitar un nodo visible")
+	}
+	if len(fb.nodes) != 2 {
+		t.Fatalf("aplanado = %d nodos, se esperaban 2", len(fb.nodes))
+	}
+	if got := fb.CursorPath(); got != "/cwd/b.txt" {
+		t.Fatalf("CursorPath() = %q, se esperaba el nodo que quedó en esa posición", got)
+	}
+
+	// Un directorio se va con sus descendientes expandidos: sin re-leer nada.
+	fb.HandleEvent(tcell.NewEventKey(tcell.KeyHome, 0, tcell.ModNone)) // vuelve a docs
+	fb.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	fb.SetChildren([]Entry{{Name: "hi.txt", Path: "/cwd/docs/hi.txt"}})
+	if len(fb.nodes) != 3 {
+		t.Fatalf("aplanado expandido = %d nodos, se esperaban 3", len(fb.nodes))
+	}
+	if !fb.RemoveNode("/cwd/docs") {
+		t.Fatal("RemoveNode debe quitar un directorio visible")
+	}
+	if len(fb.nodes) != 1 || fb.nodes[0].path != "/cwd/b.txt" {
+		t.Fatalf("aplanado = %+v, se esperaba solo b.txt", fb.nodes[0].path)
+	}
+	if fb.cursor != 0 || fb.top != 0 {
+		t.Fatalf("cursor/top = %d/%d, se esperaban 0/0", fb.cursor, fb.top)
+	}
+}
+
+// TestFileBrowserRemoveNodeOnAChildAndIsDefensive: un hijo visible de un
+// directorio expandido se quita del padre —y el directorio sobrevive—, y una
+// ruta ausente, vacía o escondida en un nivel que nunca se expandió no rompen
+// nada: la vista no lee el disco, solo el aplanado.
+func TestFileBrowserRemoveNodeOnAChildAndIsDefensive(t *testing.T) {
+	fb := NewFileBrowser()
+	fb.Resize(20, 6)
+	fb.SetRoot("/cwd")
+	fb.SetRootEntries([]Entry{{Name: "docs", Path: "/cwd/docs", IsDir: true}})
+	fb.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	fb.SetChildren([]Entry{
+		{Name: "a.txt", Path: "/cwd/docs/a.txt"},
+		{Name: "b.txt", Path: "/cwd/docs/b.txt"},
+	})
+
+	if !fb.RemoveNode("/cwd/docs/a.txt") {
+		t.Fatal("RemoveNode debe quitar un hijo visible")
+	}
+	if len(fb.nodes) != 2 {
+		t.Fatalf("aplanado = %d nodos, se esperaban 2 (docs y b.txt)", len(fb.nodes))
+	}
+	if got := fb.CursorPath(); got != "/cwd/docs" {
+		t.Fatalf("CursorPath() = %q, se esperaba el directorio padre", got)
+	}
+
+	if fb.RemoveNode("/cwd/docs/ausente.txt") {
+		t.Fatal("una ruta que no está en el árbol no se puede quitar")
+	}
+	if fb.RemoveNode("") {
+		t.Fatal("una ruta vacía no se puede quitar")
+	}
+	if fb.RemoveNode("/cwd/oculto/x.txt") {
+		t.Fatal("un nodo fuera del árbol visible no se puede quitar")
+	}
+}
+
+// TestFileBrowserDeleteKeyAsksTheControllerToDelete: Delete y Backspace sobre
+// el nodo activo devuelven (ActionDelete, true) —la vista avisa, el controlador
+// borra— y se consumen también con el árbol vacío, para que la tecla nunca
+// caiga al documento.
+func TestFileBrowserDeleteKeyAsksTheControllerToDelete(t *testing.T) {
+	fb := NewFileBrowser()
+	fb.Resize(20, 6)
+	fb.SetRoot("/cwd")
+
+	for _, key := range []tcell.Key{tcell.KeyDelete, tcell.KeyBackspace, tcell.KeyBackspace2} {
+		if action, handled := fb.HandleEvent(tcell.NewEventKey(key, 0, tcell.ModNone)); action != ActionDelete || !handled {
+			t.Fatalf("tecla %v con árbol vacío devolvió (action=%v, handled=%v), se esperaba (ActionDelete, true)", key, action, handled)
+		}
+	}
+
+	fb.SetRootEntries([]Entry{{Name: "a.txt", Path: "/cwd/a.txt"}})
+	for _, key := range []tcell.Key{tcell.KeyDelete, tcell.KeyBackspace, tcell.KeyBackspace2} {
+		if action, handled := fb.HandleEvent(tcell.NewEventKey(key, 0, tcell.ModNone)); action != ActionDelete || !handled {
+			t.Fatalf("tecla %v sobre el cursor devolvió (action=%v, handled=%v), se esperaba (ActionDelete, true)", key, action, handled)
+		}
+	}
+}

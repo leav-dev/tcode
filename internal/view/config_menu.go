@@ -8,43 +8,45 @@ import (
 )
 
 // ConfigKind distingue los tipos de fila de la ventana de configuración: un
-// entero con rango y paso (Tab size, Panel width), un booleano (Word wrap),
-// un enum de opciones con nombre (Theme) o una acción sin valor que dispara
-// un callback del controlador (Extensions).
+// entero con rango y paso (Tab size, Panel width), un booleano (Word wrap), un
+// enum de opciones con nombre (Theme) o una fila que no muta un valor sino que
+// DISPARA algo (Extensiones, que abre la ventana de gestión de extensiones).
 type ConfigKind int
 
 const (
 	ConfigBool ConfigKind = iota
 	ConfigInt
 	ConfigEnum
+	// ConfigAction es una fila que no guarda ningún valor: Left/Right no hacen
+	// nada y Enter dispara la acción nombrada en configItem.action.
 	ConfigAction
 )
 
 // configItem es una fila de la ventana de configuración: la etiqueta, el tipo
 // de ajuste, el rango y paso (solo los enteros), las opciones con nombre
-// (solo el enum), las puertas get/set sobre la var del paquete y, para las
-// acciones, el callback activate. get devuelve el valor NORMALIZADO (el
-// booleano como 0/1, el enum como índice) y set lo aplica. Las filas se
-// construyen SIEMPRE con closures sobre las vars globales de view: la
-// ventana edita la configuración viva del editor. Las acciones no tienen
-// get/set: su activate lo decide el controlador (p. ej. Extensions abre el
-// panel de extensiones).
+// (solo el enum) y las puertas get/set sobre la var del paquete. get devuelve
+// el valor NORMALIZADO (el booleano como 0/1, el enum como índice) y set lo
+// aplica. Las filas se construyen SIEMPRE con closures sobre las vars
+// globales de view: la ventana edita la configuración viva del editor.
 type configItem struct {
-	label    string
-	kind     ConfigKind
-	min      int
-	max      int
-	step     int
-	names    []string // opciones del enum, en orden (Theme: registry + "Custom")
-	get      func() int
-	set      func(int)
-	activate func() bool // acciones: el callback del controlador (Enter)
+	label  string
+	kind   ConfigKind
+	min    int
+	max    int
+	step   int
+	names  []string // opciones del enum, en orden (Theme: registry + "Custom")
+	action string   // nombre de la acción de la fila ConfigAction
+	get    func() int
+	set    func(int)
 }
 
-// configItems construye las cuatro filas fijas de la ventana de configuración,
+// configItems construye las filas fijas de la ventana de configuración,
 // con sus rangos: Tab size de 1 a 8, Word wrap sin rango (booleano), Panel
 // width de 16 a 48 en pasos de 2 y Theme con las paletas del registry más
-// "Custom" al final (el tema del usuario o el default, id activo "").
+// "Custom" al final (el tema del usuario o el default, id activo "") y, al
+// final de todas, la fila de acción "Extensiones" —que abre la ventana flotante
+// de gestión de extensiones—. Va última a propósito: es la puerta a otra
+// ventana, no un ajuste de edición.
 func configItems() []configItem {
 	return []configItem{
 		{label: "Tab size", kind: ConfigInt, min: 1, max: 8, step: 1, get: IndentSize, set: SetIndentSize},
@@ -82,33 +84,70 @@ func configItems() []configItem {
 				SetActiveThemeID(ThemeIDs()[i])
 			},
 		},
-		{label: "Extensions", kind: ConfigAction},
+		{label: "Extensiones", kind: ConfigAction, action: "extensions"},
 	}
 }
 
+// Los topes de geometría de la ventana flotante. La base de ancho es el ancho
+// actual (34): la ventana arranca así y solo se ensancha si el contenido lo
+// exige. El ancho máximo (40) es el tope de ese crecimiento por contenido. El
+// alto máximo (10) son 8 filas visibles más el marco: con más filas, el scroll
+// interno (cursor/top) navega; con menos, la ventana mide lo que necesita. El
+// controlador recorta ambos topes al tamaño real del editor.
+const (
+	ConfigMenuBaseWidth = 34
+	ConfigMenuMaxWidth  = 40
+	ConfigMenuMaxHeight = 10
+)
+
 // ConfigMenuHeight es el alto que la ventana necesita para mostrar TODAS sus
-// filas: el marco de arriba y el de abajo más las filas de ajuste y la acción.
-// El controlador lo usa para dimensionar la región flotante (configRegion).
+// filas: el marco de arriba y el de abajo más las filas. El controlador lo usa
+// para dimensionar la región flotante (configRegion), recortado al alto máximo
+// (ConfigMenuMaxHeight): cada fila nueva la agranda hasta el tope, nunca más.
 func ConfigMenuHeight() int { return len(configItems()) + 2 }
 
+// ConfigMenuContentWidth es el ancho que la ventana necesita para su fila más
+// ancha: la etiqueta, un espacio de separación, el valor y el marco de los
+// lados. El controlador lo usa para el crecimiento por contenido: la ventana
+// se ensancha cuando una fila supera la base, hasta el ancho máximo.
+func ConfigMenuContentWidth() int {
+	w := 0
+	for _, it := range configItems() {
+		if n := displayWidth(it.label) + 1 + displayWidth(configValueText(it)); n > w {
+			w = n
+		}
+	}
+	return w + 2 // el marco de los lados
+}
+
 // ConfigMenu es la ventana flotante de configuración (Ctrl+P): una lista de
-// filas con cursor (la mecánica exacta del menú de pestañas —cursor/top y su
-// scroll mínimo—) dentro de un marco centrado sobre el área del editor.
+// cuatro filas con cursor (la mecánica exacta del menú de pestañas —cursor/top
+// y su scroll mínimo—) dentro de un marco centrado sobre el área del editor.
 // Left/Right mutan la fila del cursor (y Enter alterna el booleano); Up/Down y
 // el resto de la navegación mueven el cursor. En el enum, Left/Right circulan
 // por las opciones (wrap por los extremos) y Enter no hace nada, como en los
-// enteros. Sobre una acción (Extensions), Enter dispara el callback del
-// controlador (onAction) y Left/Right no hacen nada. Escape, Ctrl+C y toda
-// tecla ajena devuelven (false, false) y el controlador cierra la ventana
-// descartando; mientras está abierta posee el teclado y el mouse, así que el
-// documento no recibe nada por accidente.
+// enteros. Escape, Ctrl+C y toda tecla ajena devuelven (false, false) y el
+// controlador cierra la ventana descartando; mientras está abierta posee el
+// teclado y el mouse, así que el documento no recibe nada por accidente.
 type ConfigMenu struct {
-	cursor   int // índice de la fila del cursor
-	top      int // primera fila visible
-	width    int // ancho de la ventana (Resize)
-	height   int // alto de la ventana (Resize)
-	theme    Theme
-	onAction func(label string) bool // callback de las acciones (Extensions)
+	cursor int // índice de la fila del cursor
+	top    int // primera fila visible
+	width  int // ancho de la ventana (Resize)
+	height int // alto de la ventana (Resize)
+	theme  Theme
+
+	// pending es la acción disparada por la última fila de acción que todavía
+	// no leyó el controlador. HandleEvent devuelve (handled, changed), que no
+	// alcanzan para decir "abrí la ventana de extensiones": el par está lleno
+	// con la semántica de la ventana (tecla suya, fila mutada). Activated
+	// devuelve y limpia el valor, así que una acción se lee una sola vez.
+	pending string
+
+	// onAction es el callback compat de las acciones (Enter): si está fijado
+	// se llama con la etiqueta y su retorno va en changed. Existe por la
+	// suite anterior (TestConfigMenuExtensionsAction); el camino nuevo es
+	// pending/Activated, que siempre se fija.
+	onAction func(label string) bool
 }
 
 func NewConfigMenu() *ConfigMenu {
@@ -118,16 +157,11 @@ func NewConfigMenu() *ConfigMenu {
 // SetTheme reemplaza la paleta del componente.
 func (m *ConfigMenu) SetTheme(th Theme) { m.theme = th }
 
-// SetOnAction fija el callback de las acciones de la ventana: lo llama Enter
-// sobre una fila de acción (Extensions) con la etiqueta de la fila, y su
-// retorno dice si abrió algo (changed, para que el controlador persista y
-// reencuadre). Sin callback, Enter sobre una acción no hace nada.
-func (m *ConfigMenu) SetOnAction(fn func(label string) bool) { m.onAction = fn }
-
 // count es la cantidad de filas fijas de la ventana.
 func (m *ConfigMenu) count() int { return len(configItems()) }
 
-// clamp mantiene cursor y top dentro del rango de filas (y del alto).
+// clamp mantiene cursor y top dentro del rango de filas (y de las filas
+// visibles).
 func (m *ConfigMenu) clamp() {
 	n := m.count()
 	if n == 0 {
@@ -135,25 +169,36 @@ func (m *ConfigMenu) clamp() {
 		return
 	}
 	m.cursor = min(max(m.cursor, 0), n-1)
-	maxTop := n - m.height
+	maxTop := n - m.visibleRows()
 	if maxTop < 0 {
 		maxTop = 0
 	}
 	m.top = min(max(m.top, 0), maxTop)
 }
 
+// visibleRows es cuántas filas del interior muestra la ventana (el alto menos
+// el marco de arriba y abajo), mínimo 0. Es el alto real del scroll: con más
+// filas que estas, cursor y top navegan (como ExtManager.visibleRows).
+func (m *ConfigMenu) visibleRows() int {
+	if rows := m.height - 2; rows > 0 {
+		return rows
+	}
+	return 0
+}
+
 // ensureCursorVisible corre top lo mínimo para que la fila del cursor quede
-// dentro del alto de la ventana, como el explorador con su lista.
+// dentro de las filas visibles, como el explorador con su lista.
 func (m *ConfigMenu) ensureCursorVisible() {
 	n := m.count()
-	if n == 0 || m.height <= 0 {
+	rows := m.visibleRows()
+	if n == 0 || rows <= 0 {
 		return
 	}
 	if m.cursor < m.top {
 		m.top = m.cursor
 	}
-	if m.cursor >= m.top+m.height {
-		m.top = m.cursor - m.height + 1
+	if m.cursor >= m.top+rows {
+		m.top = m.cursor - rows + 1
 	}
 	m.clamp()
 }
@@ -187,13 +232,18 @@ func (m *ConfigMenu) moveCursor(delta int) bool {
 	return true
 }
 
-// page es el salto de página: lo que cabe en el alto de la ventana, mínimo 1.
+// page es el salto de página: lo que cabe en las filas visibles, mínimo 1.
 func (m *ConfigMenu) page() int {
-	if m.height > 1 {
-		return m.height
+	if rows := m.visibleRows(); rows > 1 {
+		return rows
 	}
 	return 1
 }
+
+// Top expone el scroll de la ventana para los tests del reencuadre: con más
+// filas que el alto, top dice cuál es la primera visible (patrón de
+// ExtManager.topFor).
+func (m *ConfigMenu) Top() int { return m.top }
 
 // Resize actualiza las dimensiones de la ventana y reencuadra el scroll, como
 // el resize del explorador: la fila del cursor queda visible y el top dentro
@@ -219,7 +269,10 @@ func (m *ConfigMenu) Resize(width, height int) {
 func (m *ConfigMenu) mutate(delta int) bool {
 	it := configItems()[m.cursor]
 	if it.kind == ConfigAction {
-		return false // las acciones no tienen valor que mutar
+		// Una fila de acción no muta nada con Left/Right: solo Enter la
+		// dispara (HandleEvent). Que la tecla sea de la ventana no depende de
+		// que haya hecho algo.
+		return false
 	}
 	var nuevo int
 	if it.kind == ConfigBool {
@@ -287,23 +340,20 @@ func (m *ConfigMenu) HandleEvent(ev tcell.Event) (handled, changed bool) {
 			m.setCursor(m.count() - 1)
 			return true, false
 		case tcell.KeyLeft:
-			// Left/Right sobre una acción no mutan nada: son de la ventana.
-			if it := configItems()[m.cursor]; it.kind == ConfigAction {
-				return true, false
-			}
 			return true, m.mutate(-1)
 		case tcell.KeyRight:
-			if it := configItems()[m.cursor]; it.kind == ConfigAction {
-				return true, false
-			}
 			return true, m.mutate(1)
 		case tcell.KeyEnter, tcell.KeyLF:
 			// Enter en un entero y en el enum no hace nada (delta 0); en un
-			// booleano alterna. Sobre una acción dispara el callback del
-			// controlador: changed dice si abrió algo. Siempre es de la
-			// ventana.
+			// booleano alterna; en una fila de acción dispara la acción. Siempre
+			// es de la ventana: la ventana NO se cierra y changed queda false,
+			// porque una acción no es una mutación de la configuración.
 			if it := configItems()[m.cursor]; it.kind == ConfigAction {
-				return true, m.onAction != nil && m.onAction(it.label)
+				m.pending = it.action
+				if m.onAction != nil {
+					return true, m.onAction(it.label)
+				}
+				return true, false
 			}
 			return true, m.mutate(0)
 		}
@@ -311,9 +361,27 @@ func (m *ConfigMenu) HandleEvent(ev tcell.Event) (handled, changed bool) {
 	return false, false
 }
 
+// Activated devuelve y limpia la acción disparada por la fila de acción desde
+// el último Enter: "" si no hay ninguna. El controlador la lee después de
+// HandleEvent y abre lo que corresponda (hoy, la ventana de extensiones).
+func (m *ConfigMenu) Activated() string {
+	action := m.pending
+	m.pending = ""
+	return action
+}
+
+// SetOnAction fija el callback compat de las acciones: lo llama Enter con la
+// etiqueta y su retorno va en changed. Nil lo desactiva (el camino
+// pending/Activated sigue funcionando).
+func (m *ConfigMenu) SetOnAction(fn func(label string) bool) { m.onAction = fn }
+
 // configValueText es el valor de la fila como texto: el entero con sus dígitos,
-// "off"/"on" para el booleano o el NOMBRE de la opción para el enum.
+// "off"/"on" para el booleano, el NOMBRE de la opción para el enum o la
+// palabra que anuncia la acción en una fila sin valor.
 func configValueText(it configItem) string {
+	if it.kind == ConfigAction {
+		return "abrir"
+	}
 	if it.kind == ConfigBool {
 		if it.get() == 1 {
 			return "on"
@@ -366,31 +434,29 @@ func (m *ConfigMenu) Draw(s Surface) {
 		writeString(s, 0, 0, title, th.Text, m.width)
 	}
 
-	// Filas visibles: interior desde la fila 1, una fila por item a partir de
-	// top. La del cursor se pinta entera con la barra de selección (TreeCursor)
-	// sobre el ancho interior; las demás solo escriben su texto.
+	// Toda fila del interior se pinta entera ANTES de escribir su texto. Sin
+	// esto, una fila sin item —o el resto de una fila cuyo texto no llega al
+	// ancho— deja ver el documento de atrás, y la ventana flotante parece
+	// transparente: se lee el archivo a través de ella y confunde.
 	for row := 0; row < m.height-2; row++ {
+		y := row + 1
 		idx := m.top + row
+		style := th.Text
+		if idx == m.cursor && idx < len(items) {
+			style = th.TreeCursor
+		}
+		for x := 1; x < m.width-1; x++ {
+			s.SetContent(x, y, ' ', nil, style)
+		}
 		if idx >= len(items) {
-			break
+			continue
 		}
 		it := items[idx]
-		y := row + 1
-		style := th.Text
-		if idx == m.cursor {
-			style = th.TreeCursor
-			for x := 1; x < m.width-1; x++ {
-				s.SetContent(x, y, ' ', nil, style)
-			}
-		}
 		text := it.label
-		// Las acciones no tienen valor: se dibujan solo con la etiqueta.
-		if it.kind != ConfigAction {
-			if gap := m.width - 2 - displayWidth(text) - displayWidth(configValueText(it)); gap > 0 {
-				text += strings.Repeat(" ", gap)
-			}
-			text += configValueText(it)
+		if gap := m.width - 2 - displayWidth(text) - displayWidth(configValueText(it)); gap > 0 {
+			text += strings.Repeat(" ", gap)
 		}
+		text += configValueText(it)
 		writeString(s, 1, y, text, style, m.width-2)
 	}
 }

@@ -322,8 +322,8 @@ func TestConfigMenuExtensionsAction(t *testing.T) {
 		t.Fatalf("configItems() tiene %d filas, se esperaba 5 (4 ajustes + Extensions)", got)
 	}
 	last := items[len(items)-1]
-	if last.label != "Extensions" || last.kind != ConfigAction {
-		t.Fatalf("la última fila = {label:%q, kind:%v}, se esperaba {Extensions, ConfigAction}", last.label, last.kind)
+	if last.label != "Extensiones" || last.kind != ConfigAction {
+		t.Fatalf("la última fila = {label:%q, kind:%v}, se esperaba {Extensiones, ConfigAction}", last.label, last.kind)
 	}
 
 	// Mover el cursor a la fila Extensions (Down ×4).
@@ -334,25 +334,25 @@ func TestConfigMenuExtensionsAction(t *testing.T) {
 	// Enter con un onAction inyectado: (true, true) y la bandera marcada.
 	activated := false
 	m.SetOnAction(func(label string) bool {
-		if label == "Extensions" {
+		if label == "Extensiones" {
 			activated = true
 			return true
 		}
 		return false
 	})
 	if handled, changed := m.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone)); !handled || !changed {
-		t.Fatalf("Enter en Extensions devolvió (handled=%v, changed=%v), se esperaba (true, true)", handled, changed)
+		t.Fatalf("Enter en Extensiones devolvió (handled=%v, changed=%v), se esperaba (true, true)", handled, changed)
 	}
 	if !activated {
-		t.Fatal("Enter en Extensions debe disparar el onAction inyectado")
+		t.Fatal("Enter en Extensiones debe disparar el onAction inyectado")
 	}
 
 	// Left/Right sobre la acción no mutan nada: (true, false).
 	if handled, changed := m.HandleEvent(tcell.NewEventKey(tcell.KeyLeft, 0, tcell.ModNone)); !handled || changed {
-		t.Fatalf("Left en Extensions devolvió (handled=%v, changed=%v), se esperaba (true, false)", handled, changed)
+		t.Fatalf("Left en Extensiones devolvió (handled=%v, changed=%v), se esperaba (true, false)", handled, changed)
 	}
 	if handled, changed := m.HandleEvent(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone)); !handled || changed {
-		t.Fatalf("Right en Extensions devolvió (handled=%v, changed=%v), se esperaba (true, false)", handled, changed)
+		t.Fatalf("Right en Extensiones devolvió (handled=%v, changed=%v), se esperaba (true, false)", handled, changed)
 	}
 
 	// Enter sin onAction: (true, false) — no abrió nada.
@@ -367,9 +367,9 @@ func TestConfigMenuExtensionsAction(t *testing.T) {
 	}
 }
 
-// TestConfigMenuDrawsActionRowWithoutValue: la fila de acción (Extensions) se
-// dibuja solo con su etiqueta, sin valor a la derecha (las actions no tienen
-// get/set).
+// TestConfigMenuDrawsActionRowWithoutValue: la fila de acción (Extensiones) se
+// dibuja con su etiqueta y el valor de acción "abrir" a la derecha (las
+// actions no tienen get/set, pero anuncian su verbo).
 func TestConfigMenuDrawsActionRowWithoutValue(t *testing.T) {
 	resetConfigDefaults(t)
 	m := NewConfigMenu()
@@ -377,14 +377,13 @@ func TestConfigMenuDrawsActionRowWithoutValue(t *testing.T) {
 	s := newTestScreen(t, 30, 7)
 	drawConfigMenu(m, s)
 
-	// La fila Extensions es la última interior (fila 5): solo la etiqueta,
-	// sin valor alineado a la derecha.
+	// La fila Extensiones es la última interior (fila 5): etiqueta + "abrir".
 	line := screenLines(s)[5]
-	if !strings.Contains(line, "Extensions") {
-		t.Fatalf("fila Extensions = %q, debe contener la etiqueta %q", line, "Extensions")
+	if !strings.Contains(line, "Extensiones") {
+		t.Fatalf("fila Extensiones = %q, debe contener la etiqueta %q", line, "Extensiones")
 	}
-	if got := strings.Trim(line, "│ "); got != "Extensions" {
-		t.Fatalf("fila Extensions = %q, debe tener solo la etiqueta (sin valor), got %q", line, got)
+	if !strings.Contains(line, "abrir") {
+		t.Fatalf("fila Extensiones = %q, debe anunciar el valor de acción %q", line, "abrir")
 	}
 }
 
@@ -428,5 +427,183 @@ func TestConfigMenuThemeCustomClearsTheID(t *testing.T) {
 	}
 	if got := ActiveThemeID(); got != "dracula" {
 		t.Fatalf("Enter debe dejar el tema intacto: ActiveThemeID() = %q, se esperaba \"dracula\"", got)
+	}
+}
+
+// TestConfigMenuActionRowTriggers: la última fila (Extensiones) no muta un valor:
+// Left/Right no hacen nada y Enter DISPARA la acción. Como HandleEvent solo
+// devuelve (handled, changed), la acción queda en un campo interno y el
+// controlador la lee con Activated(), que la devuelve y la limpia (se dispara
+// una vez por pulsación).
+func TestConfigMenuActionRowTriggers(t *testing.T) {
+	resetConfigDefaults(t)
+	m := NewConfigMenu()
+	m.Resize(34, ConfigMenuHeight())
+
+	// Bajar hasta la fila de acción (la última).
+	items := configItems()
+	for range len(items) - 1 {
+		if handled, changed := m.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone)); !handled || changed {
+			t.Fatalf("Down devolvió (handled=%v, changed=%v), se esperaba (true, false)", handled, changed)
+		}
+	}
+
+	// Left/Right en la fila de acción: la ventana las consume pero no mutan
+	// nada, así que no hay acción pendiente.
+	if handled, changed := m.HandleEvent(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone)); !handled || changed {
+		t.Fatalf("Right en la fila de acción devolvió (handled=%v, changed=%v), se esperaba (true, false)", handled, changed)
+	}
+	if got := m.Activated(); got != "" {
+		t.Fatalf("Activated() = %q antes de Enter, se esperaba \"\"", got)
+	}
+
+	// Enter dispara la acción y devuelve (true, false): la ventana NO se cierra
+	// (cayó en el controlador), solo queda la acción pendiente.
+	if handled, changed := m.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone)); !handled || changed {
+		t.Fatalf("Enter en la fila de acción devolvió (handled=%v, changed=%v), se esperaba (true, false)", handled, changed)
+	}
+	if got := m.Activated(); got != "extensions" {
+		t.Fatalf("Activated() = %q tras Enter, se esperaba \"extensions\"", got)
+	}
+	// La acción se limpia al leerla: un Enter no arrastra la apertura.
+	if got := m.Activated(); got != "" {
+		t.Fatalf("Activated() = %q en la segunda lectura, se esperaba \"\" (se limpia)", got)
+	}
+
+	// En las filas de valor, Enter NO dispara ninguna acción.
+	m.HandleEvent(tcell.NewEventKey(tcell.KeyHome, 0, tcell.ModNone))
+	m.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	if got := m.Activated(); got != "" {
+		t.Fatalf("Enter en una fila de valor dispara %q, no debería disparar nada", got)
+	}
+}
+
+// TestConfigMenuHasTheExtensionsRow: la ventana expone la fila Extensiones al
+// final (con su altura contada) y la dibuja con la etiqueta y el valor de la
+// acción.
+func TestConfigMenuHasTheExtensionsRow(t *testing.T) {
+	resetConfigDefaults(t)
+	items := configItems()
+	last := items[len(items)-1]
+	if last.kind != ConfigAction {
+		t.Fatalf("la última fila es de tipo %v, se esperaba ConfigAction", last.kind)
+	}
+	if last.label != "Extensiones" {
+		t.Fatalf("la última fila es %q, se esperaba \"Extensiones\"", last.label)
+	}
+	if got := ConfigMenuHeight(); got != len(items)+2 {
+		t.Fatalf("ConfigMenuHeight() = %d, se esperaba %d (marco + filas)", got, len(items)+2)
+	}
+
+	m := NewConfigMenu()
+	m.Resize(34, ConfigMenuHeight())
+	s := newTestScreen(t, 34, ConfigMenuHeight())
+	drawConfigMenu(m, s)
+	// La fila se dibuja en su línea: la última del interior.
+	if line := screenLines(s)[ConfigMenuHeight()-2]; !strings.Contains(line, "Extensiones") {
+		t.Fatalf("la última fila = %q, debe contener la etiqueta %q", line, "Extensiones")
+	}
+}
+
+// TestConfigMenuExposesItsGeometry: la ventana expone los topes de geometría
+// que el controlador usa para dimensionarla: la base de ancho (34, el ancho
+// actual), el ancho máximo (40, el tope del crecimiento por contenido) y el
+// alto máximo (10, 8 filas visibles + marco). ConfigMenuContentWidth es el
+// ancho de la fila más ancha + el marco: con las filas actuales es 19 (la
+// fila "Extensiones"/"abrir" mide 11+1+5 = 17, + 2 de marco), menor a la
+// base, así que la ventana arranca en 34 y solo crece si una fila futura lo
+// exige.
+func TestConfigMenuExposesItsGeometry(t *testing.T) {
+	resetConfigDefaults(t)
+
+	if got := ConfigMenuBaseWidth; got != 34 {
+		t.Fatalf("ConfigMenuBaseWidth = %d, se esperaba 34 (el ancho actual)", got)
+	}
+	if got := ConfigMenuMaxWidth; got != 40 {
+		t.Fatalf("ConfigMenuMaxWidth = %d, se esperaba 40", got)
+	}
+	if got := ConfigMenuMaxHeight; got != 10 {
+		t.Fatalf("ConfigMenuMaxHeight = %d, se esperaba 10 (8 filas visibles + marco)", got)
+	}
+
+	// La fila más ancha hoy es "Extensiones" + "abrir" (11+1+5 = 17):
+	// 17 + 2 de marco = 19.
+	if got := ConfigMenuContentWidth(); got != 19 {
+		t.Fatalf("ConfigMenuContentWidth() = %d, se esperaba 19 (fila más ancha + marco)", got)
+	}
+	// Con las filas actuales el contenido no llega a la base: la ventana
+	// arranca en 34, como hoy.
+	if ConfigMenuContentWidth() >= ConfigMenuBaseWidth {
+		t.Fatalf("el contenido (%d) no puede superar la base (%d) con las filas actuales: la ventana no crecería nunca",
+			ConfigMenuContentWidth(), ConfigMenuBaseWidth)
+	}
+}
+
+// TestConfigMenuScrollsWithinTheHeight: con más filas que el alto visible, el
+// scroll interno reencuadra top para que la fila del cursor quede visible
+// (End con alto 4 deja top en 3, Home lo vuelve a 0). Con menos filas que el
+// alto máximo no hay scroll: top queda en 0 aunque el cursor llegue al final.
+func TestConfigMenuScrollsWithinTheHeight(t *testing.T) {
+	resetConfigDefaults(t)
+
+	// Alto 4 = 2 filas visibles, con 5 filas: el scroll entra.
+	m := NewConfigMenu()
+	m.Resize(34, 4)
+	if got := m.Top(); got != 0 {
+		t.Fatalf("top inicial = %d, se esperaba 0", got)
+	}
+	// End: el cursor salta a la última fila y top la deja visible.
+	m.HandleEvent(tcell.NewEventKey(tcell.KeyEnd, 0, tcell.ModNone))
+	if got := m.Top(); got != 3 {
+		t.Fatalf("top tras End = %d, se esperaba 3 (la última fila visible con 2 filas de alto)", got)
+	}
+	// Home: vuelve al principio.
+	m.HandleEvent(tcell.NewEventKey(tcell.KeyHome, 0, tcell.ModNone))
+	if got := m.Top(); got != 0 {
+		t.Fatalf("top tras Home = %d, se esperaba 0", got)
+	}
+	// Down seguido: el cursor llega al final y top lo sigue.
+	for range 4 {
+		m.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
+	}
+	if got := m.Top(); got != 3 {
+		t.Fatalf("top tras los Down = %d, se esperaba 3", got)
+	}
+
+	// Alto 10 (el máximo) con 5 filas: no hay scroll, top siempre en 0.
+	m.Resize(34, ConfigMenuMaxHeight)
+	m.HandleEvent(tcell.NewEventKey(tcell.KeyEnd, 0, tcell.ModNone))
+	if got := m.Top(); got != 0 {
+		t.Fatalf("top con alto máximo y 5 filas = %d, se esperaba 0 (no hay scroll)", got)
+	}
+}
+
+// TestConfigMenuDrawsScrolledRows: con el scroll corrido, el dibuja muestra
+// las filas visibles desde top (no desde la 0) y la del cursor con la barra
+// de selección en la última fila interior.
+func TestConfigMenuDrawsScrolledRows(t *testing.T) {
+	resetConfigDefaults(t)
+
+	m := NewConfigMenu()
+	m.Resize(34, 4) // 2 filas visibles
+	// Cursor a la última fila: top queda en 3, visibles las filas 3 y 4.
+	m.HandleEvent(tcell.NewEventKey(tcell.KeyEnd, 0, tcell.ModNone))
+
+	s := newTestScreen(t, 34, 4)
+	drawConfigMenu(m, s)
+
+	lines := screenLines(s)
+	// Primera fila interior: la fila 3 (Theme), no la 0 (Tab size).
+	if !strings.Contains(lines[1], "Theme") {
+		t.Fatalf("primera fila visible = %q, debe ser la fila 3 (Theme) con top=3", lines[1])
+	}
+	// Última fila interior: la fila 4 (Extensiones), con la barra de selección.
+	if !strings.Contains(lines[2], "Extensiones") {
+		t.Fatalf("última fila visible = %q, debe ser la fila 4 (Extensiones)", lines[2])
+	}
+	for x := 1; x < 33; x++ {
+		if bg := cellBg(s, x, 2); bg != tcell.PaletteColor(24) {
+			t.Fatalf("fondo de la fila del cursor en x=%d = %v, se esperaba %v (TreeCursor)", x, bg, tcell.PaletteColor(24))
+		}
 	}
 }

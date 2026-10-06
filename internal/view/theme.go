@@ -22,6 +22,9 @@ type Theme struct {
 	TreeCursor   tcell.Style // fila activa del árbol: la barra de selección
 	Status       tcell.Style // barra de estado
 	Message      tcell.Style // mensaje transitorio de la barra
+	ToastSuccess tcell.Style // notificación de éxito (toast superior derecho)
+	ToastError   tcell.Style // notificación de error (toast superior derecho)
+	Section      tcell.Style // secciones de extensiones en la barra de estado
 	Modified     tcell.Style // marca [+] de documento sucio
 	Comment      tcell.Style // comentarios (sintaxis)
 	Keyword      tcell.Style // palabras clave (sintaxis)
@@ -89,6 +92,9 @@ func DarkTheme() Theme {
 		TreeCursor:   on(tcell.PaletteColor(15), tcell.PaletteColor(24)),
 		Status:       on(tcell.PaletteColor(15), tcell.PaletteColor(24)),
 		Message:      on(tcell.PaletteColor(220), tcell.PaletteColor(24)),
+		ToastSuccess: on(tcell.PaletteColor(42), tcell.PaletteColor(24)),
+		ToastError:   on(tcell.PaletteColor(208), tcell.PaletteColor(24)),
+		Section:      on(tcell.PaletteColor(244), tcell.PaletteColor(24)),
 		Modified:     fg(tcell.PaletteColor(208)),
 		Comment:      fg(tcell.PaletteColor(244)),
 		Keyword:      fg(tcell.PaletteColor(213)),
@@ -120,6 +126,9 @@ func LightTheme() Theme {
 		TreeCursor:   on(tcell.PaletteColor(15), tcell.PaletteColor(21)),
 		Status:       on(tcell.PaletteColor(15), tcell.PaletteColor(24)),
 		Message:      on(tcell.PaletteColor(220), tcell.PaletteColor(24)),
+		ToastSuccess: on(tcell.NewHexColor(0x098658), tcell.PaletteColor(24)),
+		ToastError:   on(tcell.NewHexColor(0xA31515), tcell.PaletteColor(24)),
+		Section:      on(tcell.NewHexColor(0x808080), tcell.PaletteColor(24)),
 		Modified:     fg(tcell.NewHexColor(0xA31515)),
 		Comment:      fg(tcell.NewHexColor(0x008000)),
 		Keyword:      fg(tcell.NewHexColor(0x0000FF)),
@@ -149,6 +158,9 @@ func LightHighContrastTheme() Theme {
 		TreeCursor:   on(tcell.PaletteColor(0), tcell.PaletteColor(226)),
 		Status:       on(tcell.PaletteColor(255), tcell.PaletteColor(0)),
 		Message:      on(tcell.PaletteColor(0), tcell.PaletteColor(226)),
+		ToastSuccess: on(tcell.NewHexColor(0x098658), tcell.PaletteColor(226)),
+		ToastError:   on(tcell.PaletteColor(1), tcell.PaletteColor(226)),
+		Section:      on(tcell.NewHexColor(0x808080), tcell.PaletteColor(226)),
 		Modified:     fg(tcell.PaletteColor(1)),
 		Comment:      fg(tcell.NewHexColor(0x808080)),
 		Keyword:      fg(tcell.NewHexColor(0x0000CC)),
@@ -178,6 +190,9 @@ func DarkHighContrastTheme() Theme {
 		TreeCursor:   on(tcell.PaletteColor(0), tcell.PaletteColor(226)),
 		Status:       on(tcell.PaletteColor(226), tcell.PaletteColor(0)),
 		Message:      on(tcell.PaletteColor(226), tcell.PaletteColor(0)),
+		ToastSuccess: on(tcell.NewHexColor(0x00FF00), tcell.PaletteColor(0)),
+		ToastError:   on(tcell.PaletteColor(9), tcell.PaletteColor(0)),
+		Section:      on(tcell.NewHexColor(0xCCCCCC), tcell.PaletteColor(0)),
 		Modified:     fg(tcell.PaletteColor(9)),
 		Comment:      fg(tcell.NewHexColor(0xCCCCCC)),
 		Keyword:      fg(tcell.NewHexColor(0xFFFF00)),
@@ -206,6 +221,9 @@ func TokyoNightTheme() Theme {
 		TreeCursor:   on(tcell.PaletteColor(15), tcell.PaletteColor(24)),
 		Status:       on(tcell.PaletteColor(15), tcell.PaletteColor(24)),
 		Message:      on(tcell.PaletteColor(215), tcell.PaletteColor(24)),
+		ToastSuccess: on(tcell.NewHexColor(0x9ECE6A), tcell.PaletteColor(24)),
+		ToastError:   on(tcell.NewHexColor(0xF7768E), tcell.PaletteColor(24)),
+		Section:      on(tcell.NewHexColor(0x565F89), tcell.PaletteColor(24)),
 		Modified:     fg(tcell.NewHexColor(0xF7768E)),
 		Comment:      fg(tcell.NewHexColor(0x565F89)),
 		Keyword:      fg(tcell.NewHexColor(0xBB9AF7)),
@@ -235,6 +253,9 @@ func DraculaTheme() Theme {
 		TreeCursor:   on(tcell.PaletteColor(15), tcell.NewHexColor(0x44475A)),
 		Status:       on(tcell.PaletteColor(15), tcell.NewHexColor(0x44475A)),
 		Message:      on(tcell.PaletteColor(228), tcell.NewHexColor(0x44475A)),
+		ToastSuccess: on(tcell.NewHexColor(0x50FA7B), tcell.NewHexColor(0x44475A)),
+		ToastError:   on(tcell.NewHexColor(0xFF5555), tcell.NewHexColor(0x44475A)),
+		Section:      on(tcell.NewHexColor(0x6272A4), tcell.NewHexColor(0x44475A)),
 		Modified:     fg(tcell.NewHexColor(0xFF5555)),
 		Comment:      fg(tcell.NewHexColor(0x6272A4)),
 		Keyword:      fg(tcell.NewHexColor(0xFF79C6)),
@@ -348,6 +369,9 @@ func LoadTheme(data []byte) Theme {
 	}
 	fg(&t.Status, "status")
 	fg(&t.Message, "message")
+	fg(&t.ToastSuccess, "toastSuccess")
+	fg(&t.ToastError, "toastError")
+	fg(&t.Section, "section")
 	fg(&t.Modified, "modified")
 	fg(&t.Comment, "comment")
 	fg(&t.Keyword, "keyword")

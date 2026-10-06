@@ -21,6 +21,12 @@ type Manager struct {
 	keymap   *Keymap
 	states   []*extState
 
+	// registered son los ids de comando que registró AddExtensions, en orden.
+	// El registro es la tabla ÚNICA de built-ins y extensiones, así que solo
+	// estos ids son los que Reload puede desregistrar sin llevarse por delante
+	// los tcode.* del controlador.
+	registered []string
+
 	// editor es el puente hacia el editor (ScriptAPI): lo inyecta el
 	// controlador con SetEditor al arrancar. Sin editor, los comandos con
 	// script fallan con un error claro en lugar de tocar un nil.
@@ -70,6 +76,9 @@ func (m *Manager) Registry() *Registry { return m.registry }
 // stubs en el registro (ejecutarlos activa la extensión si declara
 // onCommand:<id> y avisa que falta el backend de scripting), y sus
 // keybindings se congelan en el keymap. Los duplicados conservan el primero.
+//
+// No es idempotente (appendea estados y el registro rechaza el re-registro):
+// para volver a cargar un conjunto nuevo de extensiones está Reload.
 func (m *Manager) AddExtensions(exts []Extension) {
 	var bindings []Keybinding
 	for i := range exts {
@@ -78,25 +87,65 @@ func (m *Manager) AddExtensions(exts []Extension) {
 		mid := e.ext.Manifest.ID
 		for _, c := range e.ext.Manifest.Contributes.Commands {
 			cmd := c // copia local: el closure no captura la variable del rango
+			var handler func() error
 			if cmd.Script != "" {
 				// Con scripting, el comando delega en la función Lua del
 				// script de la extensión (el host se cachea por script).
-				m.registry.Register(cmd.ID, func() error {
+				handler = func() error {
 					m.activateIfDeclared(mid, ActivateCommand+cmd.ID)
 					return m.runScriptCommand(e.ext, cmd)
-				})
-				continue
+				}
+			} else {
+				// El stub activa la extensión si ella lo declara, luego informa la
+				// ausencia de backend: es la verdad observable de este milestone.
+				handler = func() error {
+					m.activateIfDeclared(mid, ActivateCommand+cmd.ID)
+					return fmt.Errorf("%s: comando declarado sin implementación (roadmap: backend de scripting)", cmd.ID)
+				}
 			}
-			// El stub activa la extensión si ella lo declara, luego informa la
-			// ausencia de backend: es la verdad observable de este milestone.
-			m.registry.Register(cmd.ID, func() error {
-				m.activateIfDeclared(mid, ActivateCommand+cmd.ID)
-				return fmt.Errorf("%s: comando declarado sin implementación (roadmap: backend de scripting)", cmd.ID)
-			})
+			// Un registro rechazado (id duplicado) no se recuerda: el handler
+			// que ganó es el de otra extensión y recargarla no debe desregistrar
+			// ese comando ajeno.
+			if err := m.registry.Register(cmd.ID, handler); err == nil {
+				m.registered = append(m.registered, cmd.ID)
+			}
 		}
 		bindings = append(bindings, e.ext.Manifest.Contributes.Keybindings...)
 	}
 	m.keymap = buildKeymap(bindings)
+}
+
+// Reload reemplaza el conjunto de extensiones registradas por exts: es la
+// recarga en caliente que hace falta cuando una extensión se instala, se
+// actualiza o se borra con la sesión ya viva.
+//
+// Es seguro con los built-ins porque el registro es la tabla única de
+// tcode.* y extensiones: solo desregistra los ids que las extensiones
+// anteriores registraron (registered), nunca los del controlador. También
+// descarta los hosts de Lua cacheados —una extensión actualizada tiene código
+// NUEVO, y el host cacheado ejecutaría el viejo— y reinicia los estados de
+// activación y el keymap, que se reconstruyen desde cero con las extensiones
+// nuevas.
+//
+// Recargar es idempotente: llamarlo con el mismo conjunto deja el registro en
+// el mismo estado.
+func (m *Manager) Reload(exts []Extension) {
+	for _, id := range m.registered {
+		m.registry.Unregister(id)
+	}
+	m.registered = nil
+	m.states = nil
+	m.keymap = buildKeymap(nil)
+	// Un host de Lua cacheado corresponde al código anterior de la extensión:
+	// se tira entero para que el próximo comando lea el archivo nuevo.
+	m.scriptHosts = make(map[string]*ScriptHost)
+	m.AddExtensions(exts)
+}
+
+// RegisteredCommands devuelve los ids de comando que las extensiones tienen
+// registrados ahora mismo (para tests y estado).
+func (m *Manager) RegisteredCommands() []string {
+	return append([]string(nil), m.registered...)
 }
 
 // Resolve clasifica un evento de teclado contra los keybindings declarados por

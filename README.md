@@ -9,7 +9,7 @@ resaltado de sintaxis, temas y configuración desde una ventana flotante.
 | Área | Qué incluye |
 | --- | --- |
 | Edición | Undo/redo, auto-indent, salto de palabra visual, guardado con detección de cambios externos y recarga segura, `Ctrl+S` con confirmación de pisado |
-| Explorador de archivos | Árbol lateral con lazy loading (los directorios se leen al expandir), reveal del archivo activo, creación de archivos y carpetas (`Ctrl+N` / `Ctrl+Shift+N`), archivos ocultos fuera del árbol |
+| Explorador de archivos | Árbol lateral con lazy loading (los directorios se leen al expandir), reveal del archivo activo, creación de archivos y carpetas (`Ctrl+N` / `Ctrl+Shift+N`) y borrado del nodo del cursor (`Delete`, con confirmación), archivos ocultos fuera del árbol |
 | Selección | Por teclado (`Shift`+flechas/Home/End, `Ctrl+A`) y por mouse (arrastrar, `Shift`+clic extiende); `Ctrl+C`/`Ctrl+X`/`Ctrl+V` con el portapapeles del sistema |
 | Pestañas | Fila de pestañas, menú (`Ctrl+T`), cambio rápido desde teclado, reabrir y deduplicar rutas |
 | Apariencia | 6 paletas (Light, Dark, Light/Dark HC, Tokyo Night, Dracula) con fondo propio, resaltado por rol para Go, Python, JS/TS, C-like y JSON, tema del usuario por JSON |
@@ -19,8 +19,23 @@ resaltado de sintaxis, temas y configuración desde una ventana flotante.
 
 ## Instalación
 
-La vía recomendada (binarios precompilados en releases) está **próximamente
-disponible**. Hoy:
+### Homebrew (macOS / Linux)
+
+La vía recomendada para macOS y Linux con Homebrew:
+
+```bash
+brew tap leav-dev/tcode
+brew install tcode
+```
+
+Para actualizar:
+
+```bash
+brew update
+brew upgrade tcode
+```
+
+### Desde fuente
 
 ```bash
 # Requisito: Go 1.25+ (lo declara go.mod)
@@ -58,6 +73,24 @@ es que el comando depende de que el repo siga en su lugar; si lo movés, volvé 
 correr el `ln -sfn`. Si preferís una versión congelada e independiente del repo,
 copiá el binario en vez de enlazarlo (`cp dist/tcode-linux-amd64
 ~/.local/bin/tcode`), a costa de repetir la copia en cada recompilación.
+
+### Para desarrollo: que `tcode` compile solo si hace falta
+
+Ojo con una trampa: ese enlace apunta a un **artefacto compilado**, así que
+cambiar un `.go` **no** cambia el binario hasta que corras `go build`. Es la
+causa más común de "mi cambio no aparece". Para no acordarte, el repo trae
+`scripts/tcode-dev.sh`: un wrapper que reconstruye si alguna fuente es más nueva
+que el binario y después lo ejecuta.
+
+```bash
+ln -sfn "$PWD/scripts/tcode-dev.sh" ~/.local/bin/tcode
+```
+
+El entry del PATH pasa a ser un enlace al **script**, no al binario. El script
+resuelve el repo desde su propia ubicación (siguiendo symlinks) y conserva tu
+directorio de trabajo, así `tcode` sin argumentos abre la carpeta donde estás
+parado. Sin cambios en las fuentes solo corre un `find` (milisegundos); con
+fuentes nuevas compila antes de abrir y avisa por stderr.
 
 En otros SO vale la misma idea: `~/.local/bin` es la convención XDG, y en macOS
 lo habitual es `/usr/local/bin`.
@@ -151,38 +184,67 @@ Los binarios de otro SO **no** se pueden ejecutar ni testear en el anfitrión:
 | Abrir archivo | `tcode main.go` · abrir dir: `tcode ./proyecto` |
 | Guardar / Guardar como | `Ctrl+S` / `Ctrl+Shift+S` |
 | Crear archivo / carpeta | `Ctrl+N` / `Ctrl+Shift+N` (en la carpeta del cursor, o en la raíz) |
+| Borrar archivo / carpeta | `Delete` o `Backspace` sobre el nodo del cursor, con confirmación (`s` = sí, `N` por omisión); una carpeta se borra con todo su contenido, sin papelera |
 | Mostrar el explorador | `Ctrl+B` |
 | Cerrar el editor | Doble `Esc` rápido (la única salida; `Ctrl+C` no cierra) |
 | Cambiar pestaña | `Ctrl+PageDown` / `Ctrl+PageUp` · `Ctrl+K` (siguiente) / `Ctrl+L` (anterior) |
 | Menú de pestañas | `Ctrl+T` |
 | Configuración | `Ctrl+P` |
+| Gestionar extensiones | `Ctrl+P` → fila **Extensiones**: ventana flotante con pestañas (instaladas, actualizables, disponibles, proveedores). `Left`/`Right` cambia de pestaña, `Enter` instala / actualiza / borra la fila del cursor —con confirmación— y desde la pestaña de proveedores se agrega una fuente |
 | Salto de palabra | `Ctrl+Shift+W` |
 | Deshacer / rehacer | `Ctrl+Z` / `Ctrl+Y` o `Ctrl+Shift+Z` |
 | Instalar una extensión por id | `tcode --install-extension tcode.vimlite` |
 | Agregar una fuente de extensiones | `tcode --add-provider <url-git\|carpeta>` (luego `tcode --approve-provider <nombre>`) |
 | Ver / borrar extensiones | `tcode --list-extensions` · `tcode --remove-extension <proveedor:id\|id>` |
 
-Las extensiones instaladas se **actualizan solas al arrancar**: al abrir el
-editor, `tcode` vuelve a leer cada proveedor del que salió una extensión
-instalada y, si esa extensión declara una versión distinta de la instalada,
-la reemplaza por la nueva antes de abrir la UI (no hay que reinstalar ni
-volver a aprobar el proveedor). Solo se revisan las que cambiaron de versión,
-así que no baja código que no haga falta, y las actualizaciones se anuncian
-por stdout:
+Al arrancar, `tcode` revisa las extensiones **en segundo plano**: en cuanto el
+editor abre, una goroutine lee el catálogo de cada proveedor (comparte la versión
+de cada extensión instalada con la que declara su proveedor, y compara el
+catálogo con lo que tenés instalado). El arranque **no espera** esa lectura, así
+que se puede escribir mientras corre.
+
+Cuando llega, si hay actualizaciones o novedades, la barra de estado lo avisa
+—sin prompt, sin bloquear, sin aplicar nada por su cuenta—:
 
 ```
-Actualizada: tcode-extention/tcode.errordetector (2.0.0 → 2.1.0)
+2 actualizaciones, 1 novedad — Ctrl+P → Extensiones
 ```
 
-Dos cosas para saber: la comparación es por **versión**, así que si el autor
-de la extensión publica un cambio sin subir el campo `version` del manifest,
-el editor no lo detecta (reinstalar a mano con `--install-extension` lo trae);
-y un proveedor caído o inalcanzable no impide arrancar —se avisa por stderr y
-el editor abre igual— ni impide revisar los demás proveedores.
 | Seleccionar | `Shift`+flechas / `Ctrl+A` todo · arrastrar con el mouse · `Shift`+clic extiende |
 | Copiar / cortar / pegar | `Ctrl+C` / `Ctrl+X` / `Ctrl+V` (portapapeles del sistema) |
 
-Directorio como argumento arranca con el árbol visible y enfocado; sin
+De ahí se gestiona todo: la ventana de extensiones abre **instantánea** con los
+datos ya cacheados (si la lectura todavía no terminó, muestra `cargando…` y se
+rellena sola), y `Enter` sobre la fila instala, actualiza o borra con su
+confirmación. La ventana no vuelve a leer los proveedores: tras una acción solo
+relee la lista local de instaladas y vuelve a derivar las dos listas del mismo
+catálogo, así que instalar o actualizar es inmediato. La extensión instalada o
+actualizada entra en la sesión en el acto (sus comandos y keybindings quedan
+registrados al instante, con el código nuevo).
+
+**Actualizaciones.** Aplicarlas es la acción de la fila en la pestaña
+*actualizables*: `tcode` vuelve a leer el proveedor del que salió la extensión y
+reemplaza la instalación por la versión nueva. Solo se revisan las que cambiaron
+de versión, así que no baja código que no haga falta, y no hay que reinstalar ni
+volver a aprobar el proveedor.
+
+Dos cosas para saber: la comparación es por **versión**, así que si el autor de
+la extensión publica un cambio sin subir el campo `version` del manifest, el
+editor no lo detecta (reinstalar a mano con `--install-extension` lo trae); y
+un proveedor caído o inalcanzable no impide arrancar —se avisa en la barra y el
+editor abre igual— ni impide revisar los demás proveedores.
+
+**Novedades.** Las extensiones que un proveedor ofrece y no tenés instaladas
+aparecen en la pestaña *disponibles*. Instalar una es continuar la confianza que
+ya se le dio a esa fuente, así que no vuelve a preguntar; las de un proveedor
+**sin aprobar** no se ofrecen ni se ocultan: la fila lo dice al lado y hay que
+aprobarla primero por terminal.
+
+```
+tcode --approve-provider mios
+```
+
+Directorio como argumento arranca con el árbol visible y enfocado; sinDirectorio como argumento arranca con el árbol visible y enfocado; sin
 argumento, sobre el directorio actual.
 
 ## Configuración

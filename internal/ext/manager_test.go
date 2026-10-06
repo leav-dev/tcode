@@ -306,15 +306,17 @@ func TestManagerRunsDeclaredCommandWithScript(t *testing.T) {
 // script que se invoca a sí mismo vía tcode.command.
 type forwardAPI struct{ m *Manager }
 
-func (a *forwardAPI) RunCommand(id string) error               { return a.m.RunCommand(id) }
-func (a *forwardAPI) ActiveBuffer() (string, string, bool)     { return "", "", false }
-func (a *forwardAPI) InsertAtCursor(text string) error         { return nil }
-func (a *forwardAPI) StatusMessage(msg string)                 {}
-func (a *forwardAPI) LineCount() (int, bool)                   { return 0, false }
-func (a *forwardAPI) Line(n int) (string, bool)                { return "", false }
-func (a *forwardAPI) SetDiagnostics(source string, d []view.Diagnostic) error { return nil }
-func (a *forwardAPI) DirFiles() ([]HostFile, error)              { return nil, nil }
-func (a *forwardAPI) GitStatus() (GitInfo, error)               { return GitInfo{}, nil }
+func (a *forwardAPI) RunCommand(id string) error                                   { return a.m.RunCommand(id) }
+func (a *forwardAPI) ActiveBuffer() (string, string, bool)                         { return "", "", false }
+func (a *forwardAPI) InsertAtCursor(text string) error                             { return nil }
+func (a *forwardAPI) StatusMessage(msg string)                                     {}
+func (a *forwardAPI) Notify(msg, kind string) error                              { return nil }
+func (a *forwardAPI) SetSection(id, text string) error                            { return nil }
+func (a *forwardAPI) LineCount() (int, bool)                                       { return 0, false }
+func (a *forwardAPI) Line(n int) (string, bool)                                    { return "", false }
+func (a *forwardAPI) SetDiagnostics(source string, d []view.Diagnostic) error      { return nil }
+func (a *forwardAPI) DirFiles() ([]HostFile, error)                                { return nil, nil }
+func (a *forwardAPI) GitStatus() (GitInfo, error)                                  { return GitInfo{}, nil }
 func (a *forwardAPI) GetFileDiff(path string, staged bool) ([]FileDiffLine, error) { return nil, nil }
 
 // TestManagerScriptReentryGuard: un script que invoca tcode.command sobre su
@@ -370,4 +372,127 @@ func TestManagerDeclaredCommandWithoutScriptKeepsStub(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "sin implementación") {
 		t.Fatalf("RunCommand = %v, esperaba el stub sin implementación", err)
 	}
+}
+
+// --- Reload: recarga en caliente del conjunto de extensiones ---
+
+// TestManagerReloadReplacesRegisteredCommands: Reload deja el registro con el
+// conjunto NUEVO: el comando que solo tenía la extensión anterior desaparece y
+// el de la nueva queda registrado. Sin desregistrar, el registro rechazaría el
+// re-registro del id repetido y la extensión actualizada nunca entraría.
+func TestManagerReloadReplacesRegisteredCommands(t *testing.T) {
+	m := NewManager()
+	addTestExtensions(t, m, onCmdExt)
+	if !m.Registry().Has("ext.oncmd.saludar") {
+		t.Fatal("el comando declarado no quedó registrado")
+	}
+
+	nueva := `{
+		"id": "ext.nueva",
+		"name": "Nueva",
+		"version": "1.0.0",
+		"activation": ["*"],
+		"contributes": {"commands": [{"id": "ext.nueva.correr"}]}
+	}`
+	var exts []Extension
+	mf, err := Load([]byte(nueva))
+	if err != nil {
+		t.Fatalf("Load del fixture falló: %v", err)
+	}
+	exts = append(exts, Extension{Manifest: mf, Dir: "fixture"})
+	m.Reload(exts)
+
+	if m.Registry().Has("ext.oncmd.saludar") {
+		t.Error("el comando de la extensión desregistrada sigue en el registro")
+	}
+	if !m.Registry().Has("ext.nueva.correr") {
+		t.Error("el comando de la extensión nueva no quedó registrado")
+	}
+	if got := m.RegisteredCommands(); len(got) != 1 || got[0] != "ext.nueva.correr" {
+		t.Errorf("RegisteredCommands = %v, esperaba solo el comando nuevo", got)
+	}
+}
+
+// TestManagerReloadKeepsBuiltins: el registro es la tabla ÚNICA de built-ins y
+// extensiones, así que recargar no puede llevarse por delante los tcode.* que
+// registró el controlador.
+func TestManagerReloadKeepsBuiltins(t *testing.T) {
+	m := NewManager()
+	if err := m.Registry().Register("tcode.save", func() error { return nil }); err != nil {
+		t.Fatalf("Register del built-in falló: %v", err)
+	}
+	addTestExtensions(t, m, onCmdExt)
+
+	m.Reload([]Extension{{Manifest: mustLoadExt(t, onCmdExt), Dir: "fixture"}})
+
+	if !m.Registry().Has("tcode.save") {
+		t.Error("recargar las extensiones no puede desregistrar un built-in")
+	}
+	if !m.Registry().Has("ext.oncmd.saludar") {
+		t.Error("el comando de la extensión recargada no quedó registrado")
+	}
+}
+
+// TestManagerReloadRebuildsKeymapAndStates: el keymap y los estados de
+// activación se reconstruyen desde cero —por eso los bindings de la extensión
+// anterior no.atacan más y las extensiones vuelven a estar inactivas, listas
+// para que el arranque las active otra vez.
+func TestManagerReloadRebuildsKeymapAndStates(t *testing.T) {
+	m := NewManager()
+	addTestExtensions(t, m, onCmdExt)
+	m.ActivateEvent(ActivateStartup)
+	if got := m.Resolve(tcell.NewEventKey(tcell.KeyRune, 's', tcell.ModCtrl|tcell.ModAlt)); got != "ext.oncmd.saludar" {
+		t.Fatalf("Resolve antes de recargar = %q, esperaba el comando declarado", got)
+	}
+
+	m.Reload(nil)
+
+	if got := m.Resolve(tcell.NewEventKey(tcell.KeyRune, 's', tcell.ModCtrl|tcell.ModAlt)); got != "" {
+		t.Errorf("Resolve tras recargar = %q, esperaba keymap vacío", got)
+	}
+	if n := m.ActiveCount(); n != 0 {
+		t.Errorf("ActiveCount tras recargar = %d, esperaba 0", n)
+	}
+}
+
+// TestManagerReloadDiscardsCachedLuaHost: una extensión actualizada trae código
+// NUEVO, así que recargar tiene que tirar el host de Lua cacheado: con el host
+// viejo, el comando seguiría ejecutando la versión anterior del script.
+func TestManagerReloadDiscardsCachedLuaHost(t *testing.T) {
+	exts := writeScriptExt(t, scriptExt, `function hola() tcode.message("viejo") end`)
+	api := &fakeAPI{}
+	m := NewManager()
+	m.SetEditor(api)
+	m.AddExtensions(exts)
+	if err := m.RunCommand("ext.script.hola"); err != nil {
+		t.Fatalf("RunCommand falló: %v", err)
+	}
+	if len(api.msgs) != 1 || api.msgs[0] != "viejo" {
+		t.Fatalf("mensajes = %v, esperaba [viejo]", api.msgs)
+	}
+
+	// El autor publica el script nuevo y la extensión se recarga.
+	lua := filepath.Join(exts[0].Dir, "main.lua")
+	if err := os.WriteFile(lua, []byte(`function hola() tcode.message("nuevo") end`), 0o644); err != nil {
+		t.Fatalf("escribiendo el script nuevo: %v", err)
+	}
+	m.Reload(exts)
+
+	api.msgs = nil
+	if err := m.RunCommand("ext.script.hola"); err != nil {
+		t.Fatalf("RunCommand tras recargar falló: %v", err)
+	}
+	if len(api.msgs) != 1 || api.msgs[0] != "nuevo" {
+		t.Errorf("mensajes = %v, esperaba [nuevo]: el host cacheado ejecutó el script viejo", api.msgs)
+	}
+}
+
+// mustLoadExt carga un manifest de prueba y falla el test si no valida.
+func mustLoadExt(t *testing.T, src string) *Manifest {
+	t.Helper()
+	mf, err := Load([]byte(src))
+	if err != nil {
+		t.Fatalf("Load del fixture falló: %v", err)
+	}
+	return mf
 }

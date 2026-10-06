@@ -57,6 +57,20 @@ type App struct {
 	statusBar *view.StatusBar
 	tabBar    *view.TabBar
 
+	// toast es la notificación transitoria de la esquina superior derecha
+	// (confirmaciones y errores de guardado, y tcode.notify de extensiones):
+	// vive sobre pestañas y editor y se borra sola a los segundos.
+	toast *view.Toast
+	// toastSeq es el número del toast vigente: el timer de un toast viejo
+	// trae un seq menor y el manejador lo ignora.
+	toastSeq int
+
+	// sections guarda las secciones de la barra de estado por buffer: cada
+	// extensión escribe la suya (tcode.statusBar.setSection) sin pisar a las
+	// demás. La clave es el puntero del buffer: al cerrarlo, sus secciones se
+	// borran; al cambiar de buffer, syncStatus empuja las del activo.
+	sections map[*model.PieceTable]map[string]string
+
 	// editorSurf es la superficie recortada con la que se componen los dos
 	// panes del redibujo: el explorador y el editor activo. Se reusa entre
 	// redibujos: el controlador la reencuadra con SetRegion (primero para el
@@ -122,19 +136,47 @@ type App struct {
 	configMenu   *view.ConfigMenu
 	configActive bool
 
-	// extPanel es el panel de extensiones del catálogo (abierto desde la
-	// fila Extensions de la ventana de configuración) y extPanelActive dice
-	// si está abierto. Como la ventana de configuración, mientras está activo
-	// posee el teclado y el mouse: las teclas que el panel no maneja
-	// (Escape incluido) lo cierran y devuelven a la ventana de configuración.
+	// extManager es la ventana flotante de gestión de extensiones (la fila
+	// "Extensiones" de la de configuración) y extActive dice si está abierta.
+	// Como las demás overlays posee el teclado mientras está activa: Enter
+	// devuelve la INTENCIÓN de la fila del cursor y el controlador la ejecuta
+	// con su confirmación (openPrompt) y sus datos.
+	extManager *view.ExtManager
+	extActive  bool
+
+	// Los datos de la ventana se derivan del snapshot (extSnapshot): userRoot
+	// es la raíz de extensiones del usuario sobre la que corren las acciones, y
+	// las cuatro listas son las que llenan las pestañas. La vista no lee el
+	// disco: recibe filas (view.ExtItem) ya resueltas.
+	extUserRoot  string
+	extInstalled []ext.Info
+	extUpdates   []ext.UpdateResult
+	extAvailable []ext.AvailableExt
+	extProviders []ext.Provider
+
+	// extSnapshot es la lectura de los proveedores CACHEADA por la goroutine de
+	// arranque: nil hasta que llega. Es lo que hace que la ventana abra
+	// instantánea (con lo que hay) y que las acciones no vuelvan a pagar el
+	// partial clone: tras instalar, actualizar o borrar solo cambia lo
+	// instalado, así que el snapshot se repinta sin releer el proveedor.
+	extSnapshot *ext.Snapshot
+	// extPrefetchSeq numera las lecturas en vuelo. Cada prefetch entrega su
+	// número con el snapshot y el manejador descarta las que llegaron después
+	// de una más nueva: agregar un proveedor dispara una lectura nueva, y una
+	// vieja que llegue tarde no puede pisar el dato fresco.
+	extPrefetchSeq int
+
+	// extPanel es el panel de extensiones del catálogo (legado de
+	// feat/extension-catalog) y extPanelActive dice si está abierto. La fila
+	// de configuración hoy abre el ExtManager (camino testeado); el panel se
+	// conserva para unificar la UX en un follow-up.
 	extPanel       *view.ExtensionsPanel
 	extPanelActive bool
 
 	// catalog es el último catálogo consultado (lo que el panel muestra) y
 	// catalogCh es el canal por el que la goroutine de consulta deposita el
-	// resultado: el controlador lo drena al llegar un EventInterrupt y
-	// redibuja. Con buffer 1, una consulta que llega con el canal lleno pisa
-	// la anterior (la más reciente gana).
+	// resultado: se drena en el case EventInterrupt fusionado. Con buffer 1,
+	// una consulta que llega con el canal lleno pisa la anterior.
 	catalog   []ext.CatalogEntry
 	catalogCh chan catalogResult
 
@@ -208,12 +250,15 @@ func NewAppWithScreen(s tcell.Screen, path string) (*App, error) {
 		ws:         ws,
 		editors:    make(map[*model.PieceTable]*view.EditorView),
 		forceSave:  make(map[*model.PieceTable]bool),
+		sections:   make(map[*model.PieceTable]map[string]string),
 		statusBar:  view.NewStatusBar(),
 		tabBar:     view.NewTabBar(),
+		toast:      view.NewToast(),
 		explorer:   view.NewFileBrowser(),
 		menu:       view.NewTabMenu(),
 		configMenu: view.NewConfigMenu(),
 		extPanel:   view.NewExtensionsPanel(),
+		extManager: view.NewExtManager(),
 		ext:        ext.NewManager(),
 
 		catalogCh: make(chan catalogResult, 1),
@@ -279,6 +324,12 @@ func NewAppWithScreen(s tcell.Screen, path string) (*App, error) {
 	// Las extensiones de disco se cargan ANTES de los built-ins: sus comandos
 	// declarados no pueden piser a tcode.*.
 	app.extensionRoots = defaultExtensionRoots(app.ws.Root())
+	// La revisión de extensiones va EN SEGUNDO PLANO: leer el catálogo de los
+	// proveedores es un partial clone contra GitHub (~3,8 s) y nada de eso puede
+	// retrasar el arranque. La goroutine entrega el snapshot por el bucle de
+	// eventos y el aviso aparece en la barra cuando llega; hasta entonces el
+	// editor ya está escribiendo.
+	app.prefetchExtensions()
 	app.loadExtensions()
 	// El manager habla con el editor a través del App: los comandos con script
 	// corren Lua con la API tcode.* cableada a App (ScriptAPI).
@@ -366,6 +417,10 @@ func (a *App) registerBuiltins() {
 		a.promptCreateEntry(true)
 		return nil
 	})
+	register("tcode.deleteFile", func() error {
+		a.promptDeleteEntry()
+		return nil
+	})
 	register("tcode.undo", func() error {
 		buf, err := a.requireBuffer()
 		if err != nil {
@@ -441,10 +496,12 @@ func (a *App) applyTheme() {
 	a.theme = a.themeFor()
 	a.statusBar.SetTheme(a.theme)
 	a.tabBar.SetTheme(a.theme)
+	a.toast.SetTheme(a.theme)
 	a.explorer.SetTheme(a.theme)
 	a.menu.SetTheme(a.theme)
 	a.configMenu.SetTheme(a.theme)
 	a.extPanel.SetTheme(a.theme)
+	a.extManager.SetTheme(a.theme)
 	for _, ed := range a.editors {
 		ed.SetTheme(a.theme)
 	}
@@ -551,9 +608,169 @@ func defaultExtensionRoots(root string) []string {
 	return roots
 }
 
-// loadExtensions descubre las extensiones de cada root y las agrega al
-// manager. Cada extensión rota se avisa en la barra de estado una vez; el
-// arranque nunca falla por una extensión quebrada.
+// extensionUserSources es la resolución de los proveedores registrados y la
+// raíz de extensiones del USUARIO (~/.tcode/extensions): el alcance del chequeo
+// de arranque, el mismo que cubría updateExtensionsAtStartup en main.go. Es una
+// variable para que los tests apunten a un temporal, sin tocar el HOME real.
+var extensionUserSources = func() ([]ext.Provider, string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, "", err
+	}
+	providers, err := ext.AllProviders(ext.ProvidersFilePath(home))
+	if err != nil {
+		return nil, "", err
+	}
+	return providers, filepath.Join(home, ".tcode", "extensions"), nil
+}
+
+// startupExtFetch es el lector de los proveedores en el chequeo de arranque:
+// nil usa el lector real (git). Variable por la misma razón que
+// extensionUserSources: los tests corren sin git ni red. La ventana de
+// extensiones lo reutiliza: listar proveedores e instalar usan el mismo lector.
+var startupExtFetch ext.FetchFunc
+
+// providersConfigPath resuelve el archivo de proveedores del usuario
+// (~/.tcode/providers.json): lo usa la ventana de extensiones para AGREGAR una
+// fuente. Es variable por la misma razón que extensionUserSources —los tests la
+// apuntan a un temporal para no tocar el HOME real—.
+var providersConfigPath = func() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return ext.ProvidersFilePath(home), nil
+}
+
+// Los providers y la raíz del usuario son disco local (barato): solo el
+// catálogo de cada proveedor es la parte cara. Por eso prefetchExtensions
+// resuelve las fuentes acá, en el arranque, y manda a la goroutine SOLO la
+// lectura remota.
+
+// extSnapshotEvent es el sobre con el que la goroutine del prefetch entrega el
+// snapshot al bucle de eventos. Viaja como tcell.EventInterrupt porque
+// screen.PostEvent es la única puerta thread-safe hacia el loop: ninguna
+// goroutine toca la UI, solo publica el dato y el manejador lo aplica en el
+// hilo de los eventos.
+type extSnapshotEvent struct {
+	// Seq es el número de la lectura que lo produjo: el manejador descarta lo
+	// que llegó después de una lectura más nueva (ver App.extPrefetchSeq).
+	Seq      int
+	Snapshot ext.Snapshot
+	// Err es el último error tolerado de la lectura (proveedor caído, lista con
+	// problemas). No es fatal: el editor sigue con lo que ya está instalado.
+	Err error
+}
+
+// toastEvent es el sobre con el que el timer de un toast avisa al bucle de
+// eventos que la notificación expiró. Viaja como tcell.EventInterrupt, igual
+// que extSnapshotEvent: screen.PostEvent es la única puerta thread-safe hacia
+// el loop. Seq es el número del toast que lo produjo: el manejador solo limpia
+// si coincide con el toast vigente —el timer de un toast viejo no puede borrar
+// al nuevo—.
+type toastEvent struct {
+	Seq int
+}
+
+// prefetchExtensions dispara la lectura de los proveedores en segundo plano y
+// devuelve de inmediato: el arranque sigue sin esperar. Lo que llega después se
+// atiende en handleExtSnapshot, que cachea el snapshot y avisa en la barra de
+// estado ("N actualizaciones, M novedades — Ctrl+P → Extensiones").
+//
+// Volver a llamarla (al agregar un proveedor, cuya lectura todavía no existe)
+// numera la lectura y descarta cualquier entrega anterior: el dato viejo no
+// puede pisar al nuevo.
+func (a *App) prefetchExtensions() {
+	providers, userRoot, err := extensionUserSources()
+	if err != nil {
+		a.statusBar.SetMessage("Aviso de extensiones: " + err.Error())
+		return
+	}
+	a.extUserRoot, a.extProviders = userRoot, providers
+
+	a.extPrefetchSeq++
+	seq := a.extPrefetchSeq
+	// El lector se captura ACÁ, en el hilo de los eventos: la goroutine no
+	// vuelve a leer la variable global (ni ninguna otra mutable), así que su
+	// única lectura compartida es el puntero de la pantalla.
+	fetcher := startupExtFetch
+	go func() {
+		snap, errs := ext.LoadAll(providers, userRoot, fetcher)
+		a.screen.PostEvent(tcell.NewEventInterrupt(extSnapshotEvent{
+			Seq:      seq,
+			Snapshot: snap,
+			Err:      lastError(errs),
+		}))
+	}()
+}
+
+// lastError devuelve el último error de la lista, o nil si no hay: los errores
+// de la lectura de extensiones son TOLERANTES (un proveedor caído no impide ver
+// el resto), así que la barra muestra uno —el último, que es el que explica el
+// problema más reciente— en vez de una lista.
+func lastError(errs []error) error {
+	if len(errs) == 0 {
+		return nil
+	}
+	return errs[len(errs)-1]
+}
+
+// handleExtSnapshot cachea el snapshot que trajo la goroutine y avisa en la
+// barra. Con la ventana de extensiones abierta, la repinta con el dato nuevo:
+// abrirla antes de que llegue muestra "cargando…", no una espera.
+func (a *App) handleExtSnapshot(ev extSnapshotEvent) {
+	if ev.Seq < a.extPrefetchSeq {
+		return // llegó una lectura vieja: el dato fresco ya está en caché
+	}
+	snap := ev.Snapshot
+	a.extSnapshot = &snap
+	// Derivar es local y barato: aunque la ventana esté cerrada, las listas
+	// quedan al día para el aviso y para cuando abra.
+	a.applyExtSnapshot()
+	if ev.Err != nil {
+		a.statusBar.SetMessage("Aviso de extensiones: " + ev.Err.Error())
+		return
+	}
+	n, m := len(a.extUpdates), len(a.extAvailable)
+	if n == 0 && m == 0 {
+		return // nada que ofrecer: el estado de la barra sigue siendo el de la sesión
+	}
+	a.statusBar.SetMessage(extPendingNotice(n, m))
+}
+
+// extPendingNotice arma el aviso de la barra con lo que hay para mirar, sin
+// plurales raras ni preguntas: la gestión va por la ventana (Ctrl+P →
+// Extensiones), no por un prompt de arranque.
+func extPendingNotice(updates, available int) string {
+	parts := make([]string, 0, 2)
+	if updates > 0 {
+		parts = append(parts, plural(updates, "actualización", "actualizaciones"))
+	}
+	if available > 0 {
+		parts = append(parts, plural(available, "novedad", "novedades"))
+	}
+	return strings.Join(parts, ", ") + " — Ctrl+P → Extensiones"
+}
+
+// plural cuenta un sustantivo en español: 1 va en singular, el resto en
+// plural.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, one)
+	}
+	return fmt.Sprintf("%d %s", n, many)
+}
+
+// loadExtensions descubre las extensiones de cada root y RECARGA el conjunto
+// registrado en el manager. Cada extensión rota se avisa en la barra de estado
+// una vez; el arranque nunca falla por una extensión quebrada.
+//
+// Es re-llamable: Manager.Reload desregistra solo los comandos que las
+// extensiones anteriores dejaron (los built-ins tcode.* quedan intactos) y
+// descarta los hosts de Lua cacheados, así que una extensión instalada,
+// actualizada o borrada entra en la sesión vigente sin esperar al próximo
+// arranque. Las extensiones que declaran onStartup vuelven a activarse después
+// de cada recarga (reloadExtensions).
 func (a *App) loadExtensions() {
 	var exts []ext.Extension
 	for _, root := range a.extensionRoots {
@@ -563,7 +780,16 @@ func (a *App) loadExtensions() {
 			a.statusBar.SetMessage("Extensión ignorada: " + e.Error())
 		}
 	}
-	a.ext.AddExtensions(exts)
+	a.ext.Reload(exts)
+}
+
+// reloadExtensions recarga las extensiones y vuelve a disparar la activación
+// de arranque, que es lo que hace el constructor: tras instalar, actualizar o
+// borrar, la extensión nueva (o el código nuevo de la actualizada) tiene que
+// quedar activa en esta sesión, no en la próxima.
+func (a *App) reloadExtensions() {
+	a.loadExtensions()
+	a.ext.ActivateEvent(ext.ActivateStartup)
 }
 
 // reloadActive recarga el buffer activo desde disco con la confirmación no
@@ -719,6 +945,46 @@ func (a *App) InsertAtCursor(text string) error {
 // StatusMessage muestra msg en la barra de estado (ScriptAPI).
 func (a *App) StatusMessage(msg string) { a.statusBar.SetMessage(msg) }
 
+// Notify muestra una notificación del toast desde una extensión (ScriptAPI):
+// mismo camino que las confirmaciones de guardado —mismo timer, mismo dibujo—.
+// kind es "success" (default) o "error"; un kind desconocido es un error que
+// la extensión ve.
+func (a *App) Notify(msg string, kind string) error {
+	switch kind {
+	case "", "success":
+		a.showToast(msg, view.ToastSuccess)
+	case "error":
+		a.showToast(msg, view.ToastError)
+	default:
+		return fmt.Errorf("tcode.notify: kind %q desconocido (\"success\" | \"error\")", kind)
+	}
+	return nil
+}
+
+// SetSection escribe la sección de una extensión en la barra de estado
+// (ScriptAPI): cada extensión tiene su propia sección, identificada, y no pisa
+// a las demás. Texto vacío remueve la sección; id vacío o sin buffer activo
+// son errores legibles.
+func (a *App) SetSection(id string, text string) error {
+	if id == "" {
+		return errors.New("tcode.statusBar.setSection: el id no puede estar vacío")
+	}
+	buf := a.activeBuffer()
+	if buf == nil {
+		return errors.New("sin buffer activo")
+	}
+	if a.sections[buf] == nil {
+		a.sections[buf] = map[string]string{}
+	}
+	if text == "" {
+		delete(a.sections[buf], id)
+	} else {
+		a.sections[buf][id] = text
+	}
+	a.statusBar.SetSections(a.sections[buf])
+	return nil
+}
+
 // LineCount devuelve la cantidad de líneas del buffer activo (ScriptAPI);
 // sin buffer activo, ok=false, como ActiveBuffer.
 func (a *App) LineCount() (int, bool) {
@@ -818,9 +1084,13 @@ func (a *App) syncStatus() {
 	buf := a.activeBuffer()
 	if buf == nil {
 		a.statusBar.SetFile("", false)
+		a.statusBar.SetSections(nil)
 		return
 	}
 	a.statusBar.SetFile(buf.Path(), buf.Modified())
+	// Las secciones son del buffer activo: al cambiar de pestaña la barra
+	// muestra las del buffer nuevo, sin datos stale.
+	a.statusBar.SetSections(a.sections[buf])
 }
 
 // Los diagnósticos se muestran inline, a la derecha de cada línea anotada
@@ -931,15 +1201,6 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 	// buffer 1, la consulta más reciente gana), deposita el resultado en el
 	// panel y redibuja. Con el panel cerrado el resultado se guarda igual: la
 	// próxima apertura lo muestra.
-	case *tcell.EventInterrupt:
-		select {
-		case res := <-a.catalogCh:
-			a.setCatalog(res)
-			a.redraw()
-		default:
-		}
-		return false
-
 	case *tcell.EventKey:
 		if a.pasteActive {
 			// Dentro de un paste bracketed el contenido llega como teclas: se
@@ -1007,15 +1268,37 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 			return false
 		}
 
+		// La ventana de extensiones abierta posee el teclado, como las demás
+		// overlays. El pedido va ANTES (arriba) porque la confirmación de una
+		// acción —instalar, actualizar, borrar— se superpone a la ventana: el
+		// prompt tiene el teclado mientras está escribiendo. La intención de la
+		// fila la ejecuta el controlador; (false, _) —Escape, Ctrl+C y
+		// CUALQUIER otra tecla ajena— cierra la ventana descartando.
+		if a.extActive {
+			handled, intent := a.extManager.HandleEvent(ev)
+			if !handled {
+				a.extActive = false // cualquier tecla ajena —Escape incluido— cierra y descarta
+			} else {
+				a.handleExtIntent(intent)
+			}
+			a.redraw()
+			return false
+		}
+
 		// La ventana de configuración abierta posee el teclado: (true, changed)
 		// es una tecla suya (y changed dice si una fila se mutó, para persistir
 		// y reencuadrar), y (false, false) —Escape, Ctrl+C y CUALQUIER otra
 		// tecla ajena— la cierra descartando, sin dejar que la tecla caiga al
-		// documento ni a los atajos.
+		// documento ni a los atajos. Una fila de acción (Extensiones) no muta
+		// nada: dispara su acción, que se lee con Activated() y abre la
+		// ventana de extensiones cerrando esta.
 		if a.configActive {
 			handled, changed := a.configMenu.HandleEvent(ev)
 			if !handled {
 				a.configActive = false // cualquier tecla ajena —Escape incluido— cierra y descarta
+			} else if a.configMenu.Activated() != "" {
+				a.configActive = false
+				a.openExtManager()
 			} else if changed {
 				a.configChanged()
 			}
@@ -1043,7 +1326,8 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		// ningún buffer abierto —el arranque sobre un directorio no abre
 		// buffers y el foco ya está en el panel—. ActionMove solo redibuja;
 		// ActionActivate abre el archivo del nodo; ActionExpand pide los hijos
-		// del dir del cursor (SetChildren es la única E/S de expansión). Lo no
+		// del dir del cursor (SetChildren es la única E/S de expansión) y
+		// ActionDelete pide confirmación para borrar el nodo del cursor. Lo no
 		// consumido cae al flujo normal: atajos, documento y salida.
 		if a.explorerVisible && a.explorerFocused {
 			action, handled := a.explorer.HandleEvent(ev)
@@ -1063,6 +1347,8 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 					a.activateExplorerEntry()
 				case view.ActionExpand:
 					a.explorerExpand()
+				case view.ActionDelete:
+					a.promptDeleteEntry()
 				}
 				a.redraw()
 				return false
@@ -1286,6 +1572,33 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 			a.redraw()
 		}
 
+	case *tcell.EventInterrupt:
+		// Drena el canal del catálogo (la consulta más reciente gana) y las
+		// entregas de goroutines (prefetch de extensiones, toast): ningún
+		// payload se toca fuera del hilo de eventos.
+		select {
+		case res := <-a.catalogCh:
+			a.setCatalog(res)
+			a.redraw()
+		default:
+		}
+		// Entrega de una goroutine (la del prefetch de extensiones): el dato
+		// viaja como el payload del interrupt y se aplica acá, en el hilo de los
+		// eventos. Ninguna goroutine toca la UI. Un interrupt de otro origen se
+		// ignora: no es de la aplicación.
+		if p, ok := ev.Data().(extSnapshotEvent); ok {
+			a.handleExtSnapshot(p)
+			a.redraw()
+		}
+
+		if p, ok := ev.Data().(toastEvent); ok {
+			// Expiración del toast: solo limpia si el seq es el del toast vigente.
+			if p.Seq == a.toastSeq {
+				a.toast.Clear()
+				a.redraw()
+			}
+		}
+
 	case *tcell.EventMouse:
 		// Con el menú abierto el mouse es del menú como el teclado, con la
 		// ventana de configuración abierta es de la ventana, y con un pedido
@@ -1293,7 +1606,7 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		// no traduce nada ni redibuja— y el clic no puede cambiar de pestaña,
 		// seleccionar un archivo ni raspar el documento por debajo de lo que el
 		// usuario está escribiendo.
-		if a.menuActive || a.promptActive || a.configActive || a.extPanelActive {
+		if a.menuActive || a.promptActive || a.configActive || a.extPanelActive || a.extActive {
 			return false
 		}
 		a.checkExternalReloads()
@@ -1601,15 +1914,15 @@ func (a *App) saveAs(target *model.PieceTable, path string) {
 	}
 
 	if err := target.SaveAs(path); err != nil {
-		a.statusBar.SetMessage("Error al guardar como: " + err.Error())
+		a.showToast("Error al guardar como: "+err.Error(), view.ToastError)
 	} else {
 		a.confirmQuit = false
 		a.clearForceSave()
 		if a.dedupSaveAsConsolidates(other) {
 			// La ruta ya estaba abierta en otra pestaña: se consolidó en una sola.
-			a.statusBar.SetMessage("Guardado en " + filepath.Base(path) + " — ruta ya abierta: una sola pestaña")
+			a.showToast("Guardado en "+filepath.Base(path)+" — ruta ya abierta: una sola pestaña", view.ToastSuccess)
 		} else {
-			a.statusBar.SetMessage("Guardado en " + filepath.Base(path))
+			a.showToast("Guardado en "+filepath.Base(path), view.ToastSuccess)
 		}
 		a.emitEvent(ext.EventDidSaveBuffer)
 	}
@@ -1618,7 +1931,22 @@ func (a *App) saveAs(target *model.PieceTable, path string) {
 	a.redraw()
 }
 
-// save escribe el buffer activo y refleja el resultado en la barra de estado.
+// showToast muestra una notificación en la esquina superior derecha y arma
+// el timer que la borra sola: el toast vive view.ToastDuration y después el
+// evento toastEvent (con el seq de ESTE toast) vuelve por PostEvent al bucle,
+// que limpia y redibuja. Mostrar otro toast antes de que expire el anterior
+// renueva el seq: el timer viejo ya no encuentra el suyo y no borra al nuevo.
+func (a *App) showToast(msg string, kind view.ToastKind) {
+	a.toastSeq++
+	seq := a.toastSeq
+	a.toast.Show(msg, kind)
+	a.redraw()
+	time.AfterFunc(view.ToastDuration, func() {
+		a.screen.PostEvent(tcell.NewEventInterrupt(toastEvent{Seq: seq}))
+	})
+}
+
+// save escribe el buffer activo y refleja el resultado en un toast.
 //
 // Si el archivo cambió en disco se avisa en lugar de pisarlo; un segundo Ctrl+S
 // seguido fuerza la escritura. La decisión de perder esos cambios queda así en
@@ -1636,14 +1964,14 @@ func (a *App) save() {
 	switch {
 	case errors.Is(err, model.ErrFileChangedExternally):
 		a.saveAsFor(buf)
-		a.statusBar.SetMessage("El archivo cambió en disco: Ctrl+S de nuevo pisa esos cambios")
+		a.showToast("El archivo cambió en disco: Ctrl+S de nuevo pisa esos cambios", view.ToastError)
 
 	case err != nil:
-		a.statusBar.SetMessage("Error al guardar: " + err.Error())
+		a.showToast("Error al guardar: "+err.Error(), view.ToastError)
 
 	default:
 		a.confirmQuit = false
-		a.statusBar.SetMessage("Guardado")
+		a.showToast("Guardado", view.ToastSuccess)
 		a.emitEvent(ext.EventDidSaveBuffer)
 	}
 
@@ -1733,7 +2061,20 @@ func (a *App) redraw() {
 		a.extPanel.Draw(a.editorSurf)
 	}
 
+	// La ventana de extensiones flota sobre el editor como la de configuración,
+	// encima de ella si alguna vez coincidieran: se compone DESPUÉS con la
+	// misma superficie recortada a su región (extRegion). El prompt de
+	// confirmación no se dibuja acá —vive en la barra de estado—.
+	if a.extActive {
+		x, y, w, h := a.extRegion()
+		a.editorSurf.SetRegion(x, y, w, h)
+		a.extManager.Draw(a.editorSurf)
+	}
+
 	a.statusBar.Draw(a.screen, height-statusHeight, width)
+	// El toast es el overlay último: se compone después de pestañas, editor y
+	// barra, con su fondo propio sobre lo que haya debajo.
+	a.toast.Draw(a.screen, width)
 	a.screen.Show()
 }
 
@@ -1868,6 +2209,136 @@ func (a *App) explorerExpand() {
 	a.explorer.SetChildren(entries)
 }
 
+// promptDeleteEntry pide confirmación para borrar el nodo bajo el cursor del
+// explorador —la rama ActionDelete y el command tcode.deleteFile—. El pedido
+// es el mismo de siempre (openPrompt), con el rótulo "¿Borrar <nombre>? [s/N]"
+// y la respuesta por omisión es NO: Enter sin escribir nada cancela, solo una
+// "s" confirma. La ruta se captura acá, antes de que se responda: el prompt no
+// depende del estado del árbol mientras se escribe.
+//
+// Sin nodo bajo el cursor (árbol vacío) no hay nada que borrar: no-op silencioso.
+func (a *App) promptDeleteEntry() {
+	path := a.explorer.CursorPath()
+	if path == "" {
+		return
+	}
+	name := filepath.Base(path)
+	a.openPrompt("¿Borrar "+name+"? [s/N] ", "", func(answer string) error {
+		if !isYesAnswer(answer) {
+			a.statusBar.SetMessage("Cancelado")
+			return nil
+		}
+		return a.deletePath(path)
+	})
+}
+
+// isYesAnswer interpreta la respuesta del pedido de borrado: solo "s" (o "S")
+// confirma —el rótulo anuncia [s/N], con N por omisión—. Cualquier otra cosa,
+// incluido el Enter vacío, cancela.
+func isYesAnswer(answer string) bool {
+	s := strings.TrimSpace(answer)
+	return s == "s" || s == "S"
+}
+
+// deletePath borra la ruta de forma PERMANENTE (os.RemoveAll: una carpeta se va
+// con todo su contenido, no hay papelera) y deja la composición consistente:
+//
+//  1. borra en disco; si falla, el árbol y los buffers quedan como estaban;
+//  2. cierra con CloseForce los buffers que apuntan a esa ruta o a algo dentro
+//     de ella —un buffer sobre un archivo que ya no existe no debe quedar vivo:
+//     guardarlo lo recrearía—;
+//  3. saca el nodo del árbol con RemoveNode, para que desaparezca sin re-leer
+//     el directorio.
+//
+// Es la acción pública detrás del prompt (command tcode.deleteFile): no depende
+// del teclado, solo de que la ruta exista.
+func (a *App) deletePath(path string) error {
+	if path == "" {
+		return errors.New("no hay nada que borrar")
+	}
+	// Las claves se calculan ANTES de borrar: después la ruta ya no existe y
+	// resolver symlinks falla.
+	keys := pathKeys(path)
+	if err := os.RemoveAll(path); err != nil {
+		return err
+	}
+	a.closeBuffersUnder(keys)
+	a.explorer.RemoveNode(path)
+	a.tabBar.EnsureActive(a.ws, a.tabBarWidth())
+	if a.ws.Len() == 0 {
+		a.explorerVisible = true
+		a.explorerFocused = true
+	}
+	a.syncStatus()
+	a.statusBar.SetMessage("Borrado: " + filepath.Base(path))
+	return nil
+}
+
+// pathKeys devuelve las formas normalizadas de una ruta para compararla contra
+// las de los buffers —que llegan absolutas, limpias y con symlinks resueltos
+// desde Workspace.Open—: la limpia y, si el sistema la puede resolver, la con
+// symlinks. Comparar contra las dos cubre los dos casos sin depender de dónde
+// se armó cada ruta.
+func pathKeys(path string) []string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		abs = path
+	}
+	keys := []string{filepath.Clean(abs)}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		keys = append(keys, resolved)
+	}
+	return keys
+}
+
+// closeBuffersUnder cierra con CloseForce toda pestaña cuya ruta es una de keys
+// o está dentro de una de ellas. Se recorre de atrás hacia adelante porque cada
+// cierre corre la lista hacia la izquierda, y el cierre es forzado a propósito:
+// el humano ya confirmó borrar el archivo, así que sus cambios sin guardar no
+// sobreviven al borrado —guardar recrearía el archivo que acaba de desaparecer—.
+func (a *App) closeBuffersUnder(keys []string) {
+	for i := a.ws.Len() - 1; i >= 0; i-- {
+		buf := a.ws.BufferAt(i)
+		if buf == nil || !matchesAnyPath(keys, buf.Path()) {
+			continue
+		}
+		if err := a.ws.CloseForce(i); err != nil {
+			continue
+		}
+		delete(a.editors, buf)
+		delete(a.forceSave, buf)
+		delete(a.sections, buf)
+		a.emitEvent(ext.EventDidCloseBuffer)
+	}
+}
+
+// matchesAnyPath dice si la ruta de un buffer es alguna de las claves o está
+// dentro de ella. El prefijo a secas no alcanza: con dir "/a", "/ab" no es
+// descendiente —el carácter tras el prefijo tiene que ser un separador—.
+func matchesAnyPath(keys []string, path string) bool {
+	if path == "" {
+		return false
+	}
+	for _, key := range keys {
+		if path == key || isPathUnder(key, path) {
+			return true
+		}
+	}
+	return false
+}
+
+// isPathUnder dice si child está estrictamente dentro de dir.
+func isPathUnder(dir, child string) bool {
+	if !strings.HasPrefix(child, dir) || len(child) <= len(dir) {
+		return false
+	}
+	switch child[len(dir)] {
+	case '/', '\\':
+		return true
+	}
+	return false
+}
+
 // isCreateFileKey reconoce Ctrl+N sin Shift: nuevo archivo. Ctrl+N llega como
 // código KeyCtrl* cuando no hay modificadores, como el resto de los Ctrl.
 func isCreateFileKey(ev *tcell.EventKey) bool {
@@ -1995,12 +2466,14 @@ func (a *App) switchTab(move func() *model.PieceTable) {
 }
 
 // configRegion devuelve la región de la ventana flotante de configuración:
-// 34x(ConfigMenuHeight) centrada en el área del editor (columna según el
-// panel, fila tras la de pestañas), recortada si la terminal es chica (nunca
-// más ancha que el editor ni más alta que su área). El alto lo decide la
-// ventana (marco + todas sus filas), no un número fijo: cada fila nueva la
-// agranda sola. Comparte la geometría entre toggleConfig (que solo usa el
-// tamaño para Resize) y redraw (que reencuadra la superficie con la posición).
+// centrada en el área del editor (columna según el panel, fila tras la de
+// pestañas), recortada si la terminal es chica (nunca más ancha que el editor
+// ni más alta que su área). El alto crece con las filas hasta el tope
+// (ConfigMenuMaxHeight: 8 filas visibles + marco); con más filas, el scroll
+// interno de la ventana navega. El ancho crece con el contenido (la fila más
+// ancha) desde la base actual (34) hasta el tope (ConfigMenuMaxWidth: 40).
+// Comparte la geometría entre toggleConfig (que solo usa el tamaño para
+// Resize) y redraw (que reencuadra la superficie con la posición).
 func (a *App) configRegion() (x, y, w, h int) {
 	return a.centeredRegion(view.ConfigMenuHeight())
 }
@@ -2018,11 +2491,14 @@ func (a *App) extPanelRegion() (x, y, w, h int) {
 func (a *App) centeredRegion(panelH int) (x, y, w, h int) {
 	width, height := a.screen.Size()
 	editorW := width - a.explorerColumn()
-	w = 34
+	// Ancho: el contenido (la fila más ancha) puede ensanchar la ventana desde
+	// la base hasta el tope, sin pasar del editor.
+	w = min(max(view.ConfigMenuContentWidth(), view.ConfigMenuBaseWidth), view.ConfigMenuMaxWidth)
 	if w > editorW {
 		w = editorW
 	}
-	h = panelH
+	// Alto: el pedido por panelH, topado por el máximo y el área del editor.
+	h = min(panelH, view.ConfigMenuMaxHeight)
 	if h > editorHeight(height) {
 		h = editorHeight(height)
 	}
@@ -2177,6 +2653,391 @@ func (a *App) configChanged() {
 	a.tabBar.EnsureActive(a.ws, a.tabBarWidth())
 }
 
+// extManagerWidth es el ancho con el que se dimensiona la ventana de
+// extensiones: es más ancha que la de configuración porque las filas llevan
+// referencia, versión y salto de versión. La región (extRegion) la recorta al
+// ancho real del editor si la terminal es chica.
+const extManagerWidth = 64
+
+// extRegion devuelve la región de la ventana de extensiones: 64x(ExtManagerHeight)
+// centrada en el área del editor (columna según el panel, fila tras la de
+// pestañas), recortada si la terminal es chica. Comparte la geometría entre
+// openExtManager (que solo usa el tamaño para el Resize) y redraw (que reencuadra
+// la superficie con la posición), como configRegion con la de configuración.
+func (a *App) extRegion() (x, y, w, h int) {
+	width, height := a.screen.Size()
+	editorW := width - a.explorerColumn()
+	winW := min(extManagerWidth, editorW)
+	winH := min(view.ExtManagerHeight(), editorHeight(height))
+	return a.explorerColumn() + (editorW-winW)/2, tabBarHeight + (editorHeight(height)-winH)/2, winW, winH
+}
+
+// openExtManager abre la ventana de extensiones: la dimensiona a la región del
+// editor (extRegion) y la llena con el SNAPSHOT cacheado —instaladas,
+// actualizables, disponibles y proveedores—, sin tocar la red: leer los
+// proveedores es una E/S con git que ya se pagó en segundo plano al arrancar.
+// Si esa lectura todavía no llegó, la ventana abre igual mostrando "cargando…"
+// y se rellena sola cuando el evento se atiende. Sin espacio para el editor no
+// abre. El caller redibuja (la ventana de configuración que la abre, o quien la
+// invoque).
+func (a *App) openExtManager() {
+	width, _ := a.screen.Size()
+	if width-a.explorerColumn() <= 0 {
+		return
+	}
+	a.extActive = true
+	// La ventana nace en su estado inicial: la pestaña donde quedó la sesión
+	// anterior no debe decidir dónde empieza la próxima.
+	a.extManager.Reset()
+	_, _, w, h := a.extRegion()
+	a.extManager.Resize(w, h)
+	a.loadExtManagerData()
+}
+
+// loadExtManagerData llena la ventana desde el snapshot cacheado. No relee los
+// proveedores: el catálogo no cambia por abrir la ventana. Sin snapshot todavía
+// (la goroutine de arranque no entregó) muestra "cargando…", que no es una
+// espera: el bucle de eventos sigue corriendo y la ventana se repinta sola.
+func (a *App) loadExtManagerData() {
+	if a.extSnapshot == nil {
+		a.buildExtLoadingItems()
+		return
+	}
+	a.applyExtSnapshot()
+}
+
+// applyExtSnapshot traduce el snapshot a las listas de la ventana: instaladas y
+// proveedores salen del snapshot; actualizaciones y novedades se DERIVAN de él
+// contra lo instalado, sin releer. Los errores son TOLERANTES igual que siempre
+// —un proveedor caído no impide ver el resto— y el último se avisa en la barra.
+func (a *App) applyExtSnapshot() {
+	snap := a.extSnapshot
+	a.extProviders, a.extInstalled = snap.Providers, snap.Installed
+	updates, errs := snap.Updates()
+	a.extUpdates = updates
+	a.extAvailable = snap.Available()
+	// Los errores de la derivación son los casos sin contra qué comparar (una
+	// instalación heredada sin proveedor, un proveedor que ya no ofrece la
+	// extensión instalada): tolerantes, se avisa el último.
+	if len(errs) > 0 {
+		a.statusBar.SetMessage("Aviso de extensiones: " + errs[len(errs)-1].Error())
+	}
+	a.buildExtItems()
+}
+
+// refreshExtData repinta la ventana DESPUÉS de una acción (instalar, actualizar,
+// borrar) y recarga las extensiones de la sesión. El proveedor NO se relee: el
+// catálogo no cambió, solo la lista local de instaladas, y eso se lee del disco
+// en un momento. Recargar lo que salió de esa misma raíz es lo que hace que la
+// extensión nueva —o el código nuevo de la actualizada— sea efecto ya, y no en
+// la próxima sesión.
+func (a *App) refreshExtData() {
+	if a.extSnapshot == nil {
+		a.buildExtLoadingItems()
+		return
+	}
+	infos, errs := ext.List(a.extUserRoot)
+	if len(errs) > 0 {
+		a.statusBar.SetMessage("Aviso de extensiones: " + errs[len(errs)-1].Error())
+	}
+	a.extSnapshot.Installed = infos
+	a.applyExtSnapshot()
+	a.reloadExtensions()
+}
+
+// buildExtLoadingItems es la ventana sin datos: una fila de "cargando…" en cada
+// pestaña. Es el estado honesto entre que se abre la ventana y que llega la
+// lectura en segundo plano —la ventana abre INSTANTÁNEA, no espera— y las
+// pestañas de proveedores ya muestran lo que hay en disco (providers.json es
+// local), que es lo único que se puede saber sin red.
+func (a *App) buildExtLoadingItems() {
+	loading := view.ExtItem{Kind: view.ExtItemInfo, Label: "cargando…"}
+	a.extManager.SetItems(view.ExtTabInstalled, []view.ExtItem{loading})
+	a.extManager.SetItems(view.ExtTabUpdatable, []view.ExtItem{loading})
+	a.extManager.SetItems(view.ExtTabAvailable, []view.ExtItem{loading})
+	a.buildExtProviderItems()
+}
+
+// buildExtItems traduce las listas cargadas a las filas de las cuatro pestañas.
+// Los datos de la derecha son los que hacen legible la lista sin abrir nada: la
+// versión de lo instalado, el salto "vieja → nueva" de lo actualizable y la
+// marca de "(sin aprobar)" tanto en las novedades como en los proveedores —el
+// modelo de confianza hecho visible en la fila—.
+func (a *App) buildExtItems() {
+	var installed, updatable, available []view.ExtItem
+
+	for _, i := range a.extInstalled {
+		label := i.Name
+		if label == "" {
+			label = i.ID
+		}
+		installed = append(installed, view.ExtItem{
+			Kind: view.ExtItemRemove, Label: label, Right: versionText(i.Version),
+			ID: i.ID, Provider: i.Provider, Ref: i.Ref(),
+		})
+	}
+	for _, u := range a.extUpdates {
+		right := u.OldVer + " → " + u.NewVer
+		if u.OldVer == "" {
+			right = "→ " + u.NewVer
+		}
+		updatable = append(updatable, view.ExtItem{
+			Kind: view.ExtItemUpdate, Label: u.Ref, Right: right, Ref: u.Ref,
+		})
+	}
+	for _, av := range a.extAvailable {
+		label := av.Name
+		if label == "" {
+			label = av.ID
+		}
+		right := versionText(av.Version)
+		if !av.Approved() {
+			right = strings.TrimSpace(right + " (sin aprobar)")
+		}
+		available = append(available, view.ExtItem{
+			Kind: view.ExtItemInstall, Label: label, Right: right,
+			ID: av.ID, Provider: av.Provider.Name, Ref: av.Ref(),
+		})
+	}
+	a.extManager.SetItems(view.ExtTabInstalled, installed)
+	a.extManager.SetItems(view.ExtTabUpdatable, updatable)
+	a.extManager.SetItems(view.ExtTabAvailable, available)
+	a.buildExtProviderItems()
+}
+
+// buildExtProviderItems arma la pestaña de proveedores desde lo que ya está en
+// el App: son disco local (~/.tcode/providers.json), así que se puede mostrar
+// incluso antes de que llegue la lectura en segundo plano.
+func (a *App) buildExtProviderItems() {
+	var providers []view.ExtItem
+	for _, p := range a.extProviders {
+		right := ""
+		if !p.Approved {
+			right = "(sin aprobar)"
+		}
+		providers = append(providers, view.ExtItem{Kind: view.ExtItemInfo, Label: p.Name, Right: right})
+	}
+	// Agregar proveedor es la ÚLTIMA fila de la pestaña, siempre presente: la
+	// ventana tiene que poder sumar una fuente sin salir a la terminal.
+	providers = append(providers, view.ExtItem{Kind: view.ExtItemAddProvider, Label: "+ Agregar proveedor"})
+	a.extManager.SetItems(view.ExtTabProviders, providers)
+}
+
+// versionText rotula una versión en las filas; una extensión sin versión en el
+// manifest no inventa un "v" suelto.
+func versionText(version string) string {
+	if version == "" {
+		return ""
+	}
+	return "v" + version
+}
+
+// handleExtIntent ejecuta la intención de la ventana: agregar proveedor o la
+// acción de la fila del cursor, con la confirmación que corresponda. La ventana
+// NO se cierra: la acción recarga los datos y la vista queda donde estaba. El
+// caller redibuja (o el pedido que se abre ya redibuja).
+func (a *App) handleExtIntent(intent view.ExtIntent) {
+	switch intent.Kind {
+	case view.ExtIntentAddProvider:
+		a.promptAddProvider()
+	case view.ExtIntentAction:
+		switch intent.Tab {
+		case view.ExtTabAvailable:
+			a.promptInstallExtension(intent.Item)
+		case view.ExtTabUpdatable:
+			a.promptUpdateExtension(intent.Item)
+		case view.ExtTabInstalled:
+			a.promptRemoveExtension(intent.Item)
+		}
+	}
+}
+
+// promptInstallExtension pide confirmación antes de instalar la novedad de la
+// fila. Un proveedor SIN aprobar no llega al pedido: instalar desde ahí es una
+// decisión de confianza que la ventana no toma —el aviso dice cómo hacerlo por la
+// CLI—, igual que el arranque no auto-instala novedades sin aprobar.
+//
+// La confirmación es el pedido Generalized (openPrompt) con el default NO, como
+// el borrado de archivos del explorador. El id se captura ACÁ: lo que alguien
+// escribe pertenece a la fila que estaba mirando.
+func (a *App) promptInstallExtension(item view.ExtItem) {
+	if !a.providerApproved(item.Provider) {
+		a.statusBar.SetMessage("El proveedor " + item.Provider + " no está aprobado: tcode --approve-provider " + item.Provider)
+		return
+	}
+	a.openPrompt("¿Instalar "+item.Ref+"? [s/N] ", "", func(answer string) error {
+		if !isYesAnswer(answer) {
+			a.statusBar.SetMessage("Cancelado")
+			return nil
+		}
+		return a.installExtension(item)
+	})
+}
+
+// installExtension instala la extensión por id con la MISMA ruta que la CLI
+// (ext.InstallByID, no una reinvención): resolución por orden de proveedores y
+// validación del manifest antes de tocar el destino. Los datos de la ventana se
+// repintan pase lo que pase —instalar agrega o quita filas— y el error, si lo
+// hay, lo muestra el pedido.
+//
+// La extensión recién instalada entra en la MISMA sesión: el catálogo no cambió
+// (no se relee el proveedor), así que solo se relee la lista local y las
+// extensiones de disco se recargan —con Manager.Reload, que también descarta el
+// host de Lua cacheado— para que sus comandos existan desde ya.
+func (a *App) installExtension(item view.ExtItem) error {
+	providers, userRoot, err := extensionUserSources()
+	if err != nil {
+		return err
+	}
+	res, err := ext.InstallByID(item.ID, providers, userRoot, startupExtFetch, nil)
+	a.refreshExtData()
+	if err != nil {
+		return err
+	}
+	a.statusBar.SetMessage("Instalada: " + res.Ref())
+	return nil
+}
+
+// promptUpdateExtension pide confirmación antes de actualizar. La aplicación
+// reusa ext.UpdateAll, que es el camino de la CLI: actualiza las extensiones
+// cuyas versiones difieren, que —con los datos recién cargados— son exactamente
+// las de la pestaña. Actualizar no vuelve a pedir confianza en el proveedor: la
+// extensión instalada salió de ahí, continuarla no es agregar una fuente.
+//
+// Actualizar baja el código NUEVO, así que además de repintar la ventana
+// recarga las extensiones de la sesión: un host de Lua cacheado ejecutaría el
+// script viejo.
+func (a *App) promptUpdateExtension(item view.ExtItem) {
+	a.openPrompt("¿Actualizar "+item.Ref+"? [s/N] ", "", func(answer string) error {
+		if !isYesAnswer(answer) {
+			a.statusBar.SetMessage("Cancelado")
+			return nil
+		}
+		providers, userRoot, err := extensionUserSources()
+		if err != nil {
+			return err
+		}
+		applied, errs := ext.UpdateAll(providers, userRoot, startupExtFetch)
+		a.refreshExtData()
+		msg := plural(len(applied), "actualización aplicada", "actualizaciones aplicadas")
+		if len(applied) == 0 {
+			msg = item.Ref + " ya estaba al día"
+		}
+		if len(errs) > 0 {
+			msg += " — con errores: " + errs[len(errs)-1].Error()
+		}
+		a.statusBar.SetMessage(msg)
+		return nil
+	})
+}
+
+// promptRemoveExtension pide confirmación antes de borrar la extensión
+// instalada de la fila. El borrado usa el camino de la CLI: RemoveNamespaced para
+// lo namespaced (proveedor + id, que es como se instaló) y Remove para la
+// instalación plana heredada, que no tiene proveedor.
+func (a *App) promptRemoveExtension(item view.ExtItem) {
+	a.openPrompt("¿Eliminar "+item.Ref+"? [s/N] ", "", func(answer string) error {
+		if !isYesAnswer(answer) {
+			a.statusBar.SetMessage("Cancelado")
+			return nil
+		}
+		var err error
+		if item.Provider != "" {
+			err = ext.RemoveNamespaced(a.extUserRoot, item.Provider, item.ID)
+		} else {
+			err = ext.Remove(a.extUserRoot, item.ID)
+		}
+		a.refreshExtData()
+		if err != nil {
+			return err
+		}
+		a.statusBar.SetMessage("Eliminada: " + item.Ref)
+		return nil
+	})
+}
+
+// providerApproved dice si el proveedor de la fila es de confianza. Con el
+// nombre vacío no hay de dónde instalar: la instalación plana heredada no se
+// reinstala desde un proveedor, así que la fila no ofrece instalar.
+func (a *App) providerApproved(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, p := range a.extProviders {
+		if p.Name == name {
+			return p.Approved
+		}
+	}
+	return false
+}
+
+// promptAddProvider abre el pedido de texto para agregar una fuente (URL de git
+// o ruta de carpeta), con el mismo openPrompt que el resto de los pedidos.
+func (a *App) promptAddProvider() {
+	a.openPrompt("Agregar proveedor (URL o carpeta): ", "", func(source string) error {
+		return a.addProviderSource(source)
+	})
+}
+
+// addProviderSource registra la fuente escrita en el pedido. Es el mismo camino
+// que --add-provider de la CLI, con sus mismas reglas: tiene que ser una URL o
+// una carpeta existente (si no, es un error de tipeo y se dice), el nombre se
+// deriva de la fuente y no puede duplicar uno ya registrado (el nombre es la
+// identidad del namespacing), y se guarda SIN aprobar: agregar una fuente no es
+// confiar en ella. La validación de la forma del proveedor es la misma de la CLI
+// (ValidateProviderSource, solo manifests), así que agregar no valida una ilusión
+// que después no se sostiene.
+func (a *App) addProviderSource(source string) error {
+	source = strings.TrimSpace(source)
+	if source == "" {
+		return errors.New("la fuente del proveedor no puede estar vacía")
+	}
+	if !ext.IsLocalSource(source) && !ext.IsRemoteSource(source) {
+		return fmt.Errorf("%q no es una URL de git ni una carpeta existente", source)
+	}
+	path, err := providersConfigPath()
+	if err != nil {
+		return err
+	}
+	name, err := ext.DeriveName(source)
+	if err != nil {
+		return err
+	}
+	canonical, err := ext.CanonicalSource(source)
+	if err != nil {
+		return err
+	}
+	p := ext.Provider{Name: name, Source: canonical, Approved: false}
+
+	stored, err := ext.LoadProviders(path)
+	if err != nil {
+		return err
+	}
+	for _, s := range stored {
+		if s.Name == name {
+			return fmt.Errorf("ya está registrado el proveedor %q", name)
+		}
+	}
+	if p.Name == ext.DefaultProvider().Name {
+		return fmt.Errorf("%q ya es el proveedor por defecto", name)
+	}
+	if _, err := ext.ValidateProviderSource(p, startupExtFetch); err != nil {
+		return err
+	}
+	if err := ext.SaveProviders(path, append(stored, p)); err != nil {
+		return err
+	}
+	// La ventana se recarga para que el proveedor nuevo aparezca en su lista,
+	// marcado como sin aprobar. Como su catálogo todavía no está leído (y leerlo
+	// es la parte cara), lo que se hace es disparar UNA lectura de fondo nueva:
+	// hasta que llegue, la ventana muestra "cargando…".
+	a.extSnapshot = nil
+	a.prefetchExtensions()
+	a.loadExtManagerData()
+	a.statusBar.SetMessage("Proveedor agregado (sin aprobar): " + name)
+	return nil
+}
+
 // toggleMenu abre o cierra el menú de pestañas. Abrir lo dimensiona a la
 // región del editor (ancho según el panel, alto = el de las pestañas listadas,
 // nunca más que el editor) y coloca el cursor sobre la activa; cerrar solo
@@ -2313,11 +3174,12 @@ func (a *App) closeTab() {
 		return
 	}
 
-	// El buffer cerró: su vista y su permiso de pisar dejan de existir. La
-	// entrada vieja del mapa apuntaría a un PieceTable ya desmapeado, y el
-	// permiso autorizó a un archivo que ya no está abierto.
+	// El buffer cerró: su vista, su permiso de pisar y sus secciones dejan de
+	// existir. La entrada vieja del mapa apuntaría a un PieceTable ya
+	// desmapeado, y el permiso autorizó a un archivo que ya no está abierto.
 	delete(a.editors, buf)
 	delete(a.forceSave, buf)
+	delete(a.sections, buf)
 	a.emitEvent(ext.EventDidCloseBuffer)
 	a.confirmClose = false
 	a.statusBar.ClearMessage()

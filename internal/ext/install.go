@@ -226,17 +226,27 @@ type UpdateResult struct {
 	NewVer string
 }
 
-// UpdateAll revisa TODAS las extensiones instaladas en userRoot y actualiza las
-// cuyo proveedor ofrece una versión distinta. La copia instalada no tiene .git
-// (copyTree lo excluye), así que no hay clon local al que hacele fetch: la
-// detección es releer el proveedor —liviano, solo manifests— y comparar
-// versiones. Es la limitación de este diseño: si el autor no sube la versión,
-// el cambio no se detecta.
+// pendingUpdate es una actualización DETECTADA y todavía no aplicada: la
+// extensión instalada (Info) y lo que el proveedor ofrece hoy en su lugar
+// (Ext), más el proveedor que hay que volver a leer para bajar los archivos.
+// Es el resultado intermedio que comparten CheckUpdates (que solo mira) y
+// UpdateAll (que aplica).
+type pendingUpdate struct {
+	Provider Provider
+	Info     Info
+	Ext      ProviderExt
+}
+
+// detectUpdates revisa TODAS las extensiones instaladas en userRoot y devuelve
+// las que su proveedor ofrece en OTRA versión, SIN tocar el disco. La copia
+// instalada no tiene .git (copyTree lo excluye), así que no hay clon local al
+// que hacele fetch: la detección es releer el proveedor —liviano, solo
+// manifests— y comparar versiones. Es la limitación de este diseño: si el autor
+// no sube la versión, el cambio no se detecta.
 //
-// Actualizar NO vuelve a pedir confianza: la extensión instalada salió de ese
-// proveedor, así que actualizar es continuar la instalación, no agregar una
-// fuente nueva. Lo que sí se valida es el manifest nuevo (installSubdir), que
-// aborta SIN tocar el destino si es inválido.
+// Separar la detección de la aplicación es lo que permite preguntar al usuario
+// antes de cambiar nada en su máquina: el prompt de arranque necesita saber qué
+// hay para armar la pregunta, y solo después de un sí bajan los archivos.
 //
 // Es tolerante: un proveedor caído, una extensión que el proveedor ya no ofrece
 // o una instalación heredada sin proveedor se reportan como error y NO cortan
@@ -244,7 +254,7 @@ type UpdateResult struct {
 // se devuelven para que quien llama los muestre.
 //
 // fetcher nil usa el lector real (necesita git en el PATH).
-func UpdateAll(providers []Provider, userRoot string, fetcher FetchFunc) ([]UpdateResult, []error) {
+func detectUpdates(providers []Provider, userRoot string, fetcher FetchFunc) ([]pendingUpdate, []error) {
 	if fetcher == nil {
 		fetcher = fetch
 	}
@@ -253,7 +263,7 @@ func UpdateAll(providers []Provider, userRoot string, fetcher FetchFunc) ([]Upda
 	// Las instaladas se agrupan por proveedor para leer cada fuente UNA vez, y
 	// el orden de resolución manda: si dos proveedores ofrecen la misma
 	// extensión, actualiza el primero, igual que al instalar.
-	pending := map[string][]Info{}
+	pendingByProvider := map[string][]Info{}
 	var errs []error
 	errs = append(errs, listErrs...)
 	for _, info := range infos {
@@ -264,13 +274,13 @@ func UpdateAll(providers []Provider, userRoot string, fetcher FetchFunc) ([]Upda
 			errs = append(errs, fmt.Errorf("la extensión %q no tiene proveedor: no se puede actualizar", info.ID))
 			continue
 		}
-		pending[info.Provider] = append(pending[info.Provider], info)
+		pendingByProvider[info.Provider] = append(pendingByProvider[info.Provider], info)
 	}
 
 	seen := map[string]bool{}
-	var updates []UpdateResult
+	var pending []pendingUpdate
 	for _, p := range providers {
-		inst := pending[p.Name]
+		inst := pendingByProvider[p.Name]
 		if len(inst) == 0 {
 			continue
 		}
@@ -294,28 +304,193 @@ func UpdateAll(providers []Provider, userRoot string, fetcher FetchFunc) ([]Upda
 			if ext.Version == info.Version {
 				continue
 			}
-			if err := withProviderRoot(p, fetcher, ext.Subdir, func(root string) error {
-				return installSubdir(root, ext.Subdir, p.Name, userRoot)
-			}); err != nil {
-				errs = append(errs, fmt.Errorf("actualizando %s: %w", info.Ref(), err))
-				continue
-			}
-			updates = append(updates, UpdateResult{Ref: info.Ref(), OldVer: info.Version, NewVer: ext.Version})
+			pending = append(pending, pendingUpdate{Provider: p, Info: info, Ext: ext})
 		}
 	}
 
 	// Instaladas cuyo proveedor no está en la lista vigente: sin fuente contra
 	// la cual comparar. Se recorren en orden alfabético para que el reporte sea
 	// estable entre corridas.
-	for _, name := range sortedKeys(pending) {
+	for _, name := range sortedKeys(pendingByProvider) {
 		if seen[name] {
 			continue
 		}
-		for _, info := range pending[name] {
+		for _, info := range pendingByProvider[name] {
 			errs = append(errs, fmt.Errorf("la extensión %s viene del proveedor %q, que ya no está registrado", info.Ref(), name))
 		}
 	}
+	return pending, errs
+}
+
+// CheckUpdates detecta las actualizaciones disponibles SIN aplicarlas: relee
+// los proveedores y compara versiones, pero no baja los archivos de la extensión
+// ni toca la instalación. Es la contraparte previa de UpdateAll, y existe para
+// poder MOSTRARLE al usuario lo que se va a aplicar antes de hacerlo.
+//
+// Devuelve los mismos UpdateResult que UpdateAll —referencia y salto de
+// versión— con los mismos errores tolerantes: un proveedor caído o una extensión
+// que el proveedor ya no ofrece se reportan y no cortan la revisión de las
+// demás.
+//
+// fetcher nil usa el lector real (necesita git en el PATH).
+func CheckUpdates(providers []Provider, userRoot string, fetcher FetchFunc) ([]UpdateResult, []error) {
+	pending, errs := detectUpdates(providers, userRoot, fetcher)
+	var updates []UpdateResult
+	for _, p := range pending {
+		updates = append(updates, UpdateResult{Ref: p.Info.Ref(), OldVer: p.Info.Version, NewVer: p.Ext.Version})
+	}
 	return updates, errs
+}
+
+// UpdateAll revisa TODAS las extensiones instaladas en userRoot y actualiza las
+// cuyo proveedor ofrece una versión distinta. Es detectUpdates seguido de la
+// aplicación: se detecta lo mismo que CheckUpdates —comparando versiones, porque
+// la copia instalada no tiene .git al que hacele fetch— y se baja los archivos
+// de cada extensión que quedó con una versión distinta.
+//
+// Actualizar NO vuelve a pedir confianza: la extensión instalada salió de ese
+// proveedor, así que actualizar es continuar la instalación, no agregar una
+// fuente nueva. Lo que sí se valida es el manifest nuevo (installSubdir), que
+// aborta SIN tocar el destino si es inválido.
+//
+// Solo entra en updates lo que se aplicó de verdad: una extensión cuya descarga
+// falla se reporta como error y no se anuncia como actualizada.
+//
+// fetcher nil usa el lector real (necesita git en el PATH).
+func UpdateAll(providers []Provider, userRoot string, fetcher FetchFunc) ([]UpdateResult, []error) {
+	if fetcher == nil {
+		fetcher = fetch
+	}
+
+	pending, errs := detectUpdates(providers, userRoot, fetcher)
+	var updates []UpdateResult
+	for _, p := range pending {
+		if err := withProviderRoot(p.Provider, fetcher, p.Ext.Subdir, func(root string) error {
+			return installSubdir(root, p.Ext.Subdir, p.Provider.Name, userRoot)
+		}); err != nil {
+			errs = append(errs, fmt.Errorf("actualizando %s: %w", p.Info.Ref(), err))
+			continue
+		}
+		updates = append(updates, UpdateResult{Ref: p.Info.Ref(), OldVer: p.Info.Version, NewVer: p.Ext.Version})
+	}
+	return updates, errs
+}
+
+// AvailableExt es una extensión que un proveedor ofrece y que NO está
+// instalada: la novedad que el arranque detecta. Provider va entero (no solo
+// el nombre) porque instalar necesita su Source para leer los archivos y su
+// Approved para decidir si la novedad se auto-instala o solo se reporta.
+type AvailableExt struct {
+	Provider Provider
+	ID       string
+	Name     string
+	Version  string
+	Subdir   string
+}
+
+// Ref es la referencia legible "proveedor/id" de la novedad.
+func (a AvailableExt) Ref() string { return a.Provider.Name + "/" + a.ID }
+
+// Approved dice si la novedad viene de un proveedor en el que el usuario ya
+// confió. Solo estas se auto-instalan.
+func (a AvailableExt) Approved() bool { return a.Provider.Approved }
+
+// AvailableExtensions devuelve las extensiones que los proveedores ofrecen y
+// que todavía no están instaladas en userRoot: la diferencia entre el catálogo
+// de cada proveedor (lectura liviana, solo manifests) y lo instalado (List).
+// Es la contraparte de UpdateAll, que solo recorre lo instalado y por eso nunca
+// ve una extensión que el proveedor acaba de agregar.
+//
+// El diff es por proveedor: una extensión instalada desde otro proveedor NO
+// tapa la novedad del que la ofrece, porque son instalaciones distintas
+// (namespaced). Ante el mismo id en dos proveedores gana el primero, la misma
+// regla de resolución que InstallByID: instalar el id después resolvería al
+// primero, así que ofrecer el segundo como novedad sería prometer algo que no
+// es lo que se instalaría.
+//
+// Es tolerante como UpdateAll: un nombre de proveedor inválido o un repo caído
+// se acumulan en los errores y NO cortan el resto. Llamar después de UpdateAll
+// hace que el diff corra contra el conjunto ya refrescado.
+//
+// fetcher nil usa el lector real (necesita git en el PATH).
+func AvailableExtensions(providers []Provider, userRoot string, fetcher FetchFunc) ([]AvailableExt, []error) {
+	if fetcher == nil {
+		fetcher = fetch
+	}
+
+	infos, listErrs := List(userRoot)
+	var errs []error
+	errs = append(errs, listErrs...)
+	// Info.Ref() da "proveedor/id" para lo namespaced y el id suelto para las
+	// instalaciones planas heredadas, que así no tapan nada por proveedor.
+	installed := make(map[string]bool, len(infos))
+	for _, info := range infos {
+		installed[info.Ref()] = true
+	}
+
+	seen := map[string]bool{}
+	var available []AvailableExt
+	for _, p := range providers {
+		if !providerNameRe.MatchString(p.Name) {
+			errs = append(errs, fmt.Errorf("proveedor con nombre inválido %q: se ignora", p.Name))
+			continue
+		}
+		exts, err := ListExtensions(p, fetcher)
+		if err != nil {
+			// Proveedor caído: no impide revisar los siguientes.
+			errs = append(errs, fmt.Errorf("revisando el proveedor %q: %w", p.Name, err))
+			continue
+		}
+		for _, ext := range exts {
+			ref := p.Name + "/" + ext.ID
+			if seen[ext.ID] || installed[ref] {
+				continue
+			}
+			seen[ext.ID] = true
+			available = append(available, AvailableExt{
+				Provider: p,
+				ID:       ext.ID,
+				Name:     ext.Name,
+				Version:  ext.Version,
+				Subdir:   ext.Subdir,
+			})
+		}
+	}
+	return available, errs
+}
+
+// InstallAvailable auto-instala las novedades de los proveedores APROBADOS,
+// reutilizando el camino de instalación por subcarpeta (validar el manifest y
+// copiar el árbol a userRoot/<proveedor>/<id>). Las de un proveedor sin aprobar
+// se saltan en silencio: instalarlas sin confianza repetiría por la puerta de
+// atrás la confirmación que InstallByID pide; quien llama las reporta para que
+// el usuario las apruebe o las ignore.
+//
+// Una novedad que falla se acumula en errs y no impide instalar las demás:
+// instalar una extensión no puede ser la razón de que no se instale otra.
+//
+// fetcher nil usa el lector real (necesita git en el PATH).
+func InstallAvailable(available []AvailableExt, userRoot string, fetcher FetchFunc) ([]InstallResult, []error) {
+	if fetcher == nil {
+		fetcher = fetch
+	}
+
+	var installed []InstallResult
+	var errs []error
+	for _, a := range available {
+		if !a.Approved() {
+			continue
+		}
+		p := a.Provider
+		if err := withProviderRoot(p, fetcher, a.Subdir, func(root string) error {
+			return installSubdir(root, a.Subdir, p.Name, userRoot)
+		}); err != nil {
+			errs = append(errs, fmt.Errorf("instalando %s: %w", a.Ref(), err))
+			continue
+		}
+		installed = append(installed, InstallResult{Provider: p.Name, ID: a.ID})
+	}
+	return installed, errs
 }
 
 // findProviderExt busca el id entre las extensiones que ofrece un proveedor.

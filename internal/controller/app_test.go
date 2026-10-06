@@ -1,7 +1,10 @@
 package controller
 
 import (
+	"encoding/json"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -9,19 +12,25 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
+	"tcode/internal/ext"
 	"tcode/internal/model"
 	"tcode/internal/view"
 )
 
 // TestMain aísla la suite del entorno REAL del usuario: ni ~/.tcode/config.json
 // ni ~/.tcode/theme.json entran a los tests (son las dos rutas que el arranque
-// lee) y las variables globales de view arrancan en sus defaults. Los tests
-// que necesitan un config o tema propio los remapean explícitamente (ver
-// app_config_test.go y theme_test.go) — ese remapeo corre después de TestMain,
+// lee) y la lectura de extensiones del arranque queda apuntando a un root
+// inexistente —sin proveedores, sin red, sin HOME real—; las variables globales
+// de view arrancan en sus defaults. Los tests que necesitan un config, tema o
+// proveedor propio los remapean explícitamente (ver app_config_test.go,
+// theme_test.go y pinStartupSources) — ese remapeo corre después de TestMain,
 // con precedencia sobre los pines que quedan acá.
 func TestMain(m *testing.M) {
 	themeFilePath = func() string { return filepath.Join(os.TempDir(), "tcode-test-no-theme.json") }
 	configFilePath = func() string { return filepath.Join(os.TempDir(), "tcode-test-no-config.json") }
+	extensionUserSources = func() ([]ext.Provider, string, error) {
+		return nil, filepath.Join(os.TempDir(), "tcode-test-no-extensions"), nil
+	}
 	view.SetIndentSize(4)
 	view.SetWordWrapEnabled(true)
 	view.SetExplorerWidth(24)
@@ -3187,5 +3196,869 @@ func TestBracketedPasteInsertsTheBlockAsOneStep(t *testing.T) {
 	press(app, tcell.KeyCtrlZ)
 	if got := string(app.ws.Active().GetContent()); got != "fin" {
 		t.Fatalf("contenido tras un undo = %q, se esperaba el documento original", got)
+	}
+}
+
+// --- prompt de actualizaciones y novedades al arrancar ---
+
+// extFetchFake emula el sparse checkout de git sobre un "monorepo" en disco:
+// "*/extension.json" deja solo los manifests del proveedor y el nombre de una
+// subcarpeta deja esa extensión entera. Es el mismo fake que usa el paquete
+// ext, replicado acá porque los tests del controller no alcanzan las variables
+// internas de ese paquete.
+func extFetchFake(src string) ext.FetchFunc {
+	return func(_ string, dest, pattern string) error {
+		return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			rel, err := filepath.Rel(src, p)
+			if err != nil {
+				return err
+			}
+			if rel == "." {
+				return os.MkdirAll(dest, 0o755)
+			}
+			rel = filepath.ToSlash(rel)
+			if d.IsDir() || !d.Type().IsRegular() {
+				return nil
+			}
+			if strings.Contains(pattern, "/") {
+				matched, err := path.Match(pattern, rel)
+				if err != nil {
+					return err
+				}
+				if !matched {
+					return nil
+				}
+			} else if rel != pattern && !strings.HasPrefix(rel, pattern+"/") {
+				return nil
+			}
+			data, err := os.ReadFile(p)
+			if err != nil {
+				return err
+			}
+			to := filepath.Join(dest, filepath.FromSlash(rel))
+			if err := os.MkdirAll(filepath.Dir(to), 0o755); err != nil {
+				return err
+			}
+			return os.WriteFile(to, data, 0o644)
+		})
+	}
+}
+
+// startupProviderFixture crea un "proveedor" en disco: una subcarpeta por
+// extensión con su extension.json.
+func startupProviderFixture(t *testing.T, exts map[string][3]string) string {
+	t.Helper()
+	root := t.TempDir()
+	for dir, spec := range exts {
+		full := filepath.Join(root, dir)
+		if err := os.MkdirAll(full, 0o755); err != nil {
+			t.Fatalf("MkdirAll %s: %v", dir, err)
+		}
+		writeStartupManifest(t, full, spec[0], spec[1], spec[2])
+	}
+	return root
+}
+
+// writeStartupManifest escribe el extension.json de una extensión del
+// "proveedor": id, nombre y versión dados.
+func writeStartupManifest(t *testing.T, dir, id, name, version string) {
+	t.Helper()
+	data, err := json.Marshal(ext.Manifest{ID: id, Name: name, Version: version})
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "extension.json"), data, 0o644); err != nil {
+		t.Fatalf("WriteFile extension.json: %v", err)
+	}
+}
+
+// pinStartupSources apunta la LECTURA DE FONDO del arranque a un proveedor en
+// disco y a una raíz de extensiones temporal, y devuelve nada: todo lo que usa
+// el prefetch y la ventana queda aislado del HOME real y de la red.
+func pinStartupSources(t *testing.T, p ext.Provider, userRoot string) {
+	t.Helper()
+	pinStartupFetch(t, p, userRoot, extFetchFake(p.Source))
+}
+
+// pinStartupFetch es pinStartupSources con un lector propio: es lo que permite
+// probar que el arranque NO espera a la lectura (un lector bloqueado).
+func pinStartupFetch(t *testing.T, p ext.Provider, userRoot string, fetch ext.FetchFunc) {
+	t.Helper()
+	oldSources, oldFetch := extensionUserSources, startupExtFetch
+	extensionUserSources = func() ([]ext.Provider, string, error) { return []ext.Provider{p}, userRoot, nil }
+	startupExtFetch = fetch
+	t.Cleanup(func() { extensionUserSources, startupExtFetch = oldSources, oldFetch })
+}
+
+// awaitExtSnapshot espera la entrega de la goroutine de arranque y la aplica
+// como lo haría el bucle de eventos (handleEvent). Sin el constructor ya
+// devuelto, el test no puede afirmar nada del bucle, así que el evento se
+// consume a mano.
+func awaitExtSnapshot(t *testing.T, app *App) {
+	t.Helper()
+	events := make(chan tcell.Event, 1)
+	go func() { events <- app.screen.PollEvent() }()
+	select {
+	case ev := <-events:
+		app.handleEvent(ev)
+	case <-time.After(10 * time.Second):
+		t.Fatal("la lectura de segundo plano no entregó el snapshot")
+	}
+	if app.extSnapshot == nil {
+		t.Fatal("el evento llegó pero el snapshot no quedó cacheado")
+	}
+}
+
+// prefetchSetup arma el escenario de la lectura en segundo plano: un proveedor
+// "remoto" con dos extensiones (una instalada en la versión vieja, que da la
+// actualización, y otra sin instalar, que es la novedad) y el editor arrancado
+// SIN esperar la entrega —que es lo que pasa en la vida real—.
+func prefetchSetup(t *testing.T) (*App, string) {
+	t.Helper()
+	src := startupProviderFixture(t, map[string][3]string{
+		"linter": {"tcode.linter", "Linter", "1.0.0"},
+		"tema":   {"tcode.tema", "Tema", "2.0.0"},
+	})
+	userRoot := t.TempDir()
+	p := ext.Provider{Name: "remoto", Source: src, Approved: true}
+	if _, err := ext.InstallByID("tcode.linter", []ext.Provider{p}, userRoot, extFetchFake(src), nil); err != nil {
+		t.Fatalf("InstallByID: %v", err)
+	}
+	// El autor publica una versión nueva del linter: eso es la actualización.
+	writeStartupManifest(t, filepath.Join(src, "linter"), "tcode.linter", "Linter", "1.1.0")
+	pinStartupSources(t, p, userRoot)
+
+	app, _ := newTestApp(t, "uno")
+	return app, userRoot
+}
+
+// TestStartupDoesNotWaitForTheProviderRead: la lectura de los proveedores es
+// un partial clone de segundos y el arranque NO la espera: con el lector
+// bloqueado a propósito, el constructor volvió igual y el editor sigue
+// respondiendo (decisión 1: la E/S cara va en segundo plano).
+func TestStartupDoesNotWaitForTheProviderRead(t *testing.T) {
+	src := startupProviderFixture(t, map[string][3]string{"tema": {"tcode.tema", "Tema", "2.0.0"}})
+	bloqueado := make(chan struct{})
+	t.Cleanup(func() { close(bloqueado) })
+	pinStartupFetch(t,
+		ext.Provider{Name: "remoto", Source: "https://example.com/remoto.git", Approved: true},
+		t.TempDir(),
+		func(url, dest, pattern string) error {
+			<-bloqueado
+			return extFetchFake(src)(url, dest, pattern)
+		},
+	)
+
+	app, _ := newTestApp(t, "uno") // si esperara la lectura, el test colgaría acá
+
+	if app.extSnapshot != nil {
+		t.Fatal("el snapshot no puede estar listo mientras la lectura sigue bloqueada")
+	}
+	// El editor responde mientras la lectura corre.
+	typeRune(app, 'x')
+	if got := string(app.ws.Active().LineContent(0)); got != "xuno" {
+		t.Fatalf("contenido = %q, el editor no responden con la lectura en curso", got)
+	}
+}
+
+// TestPrefetchSnapshotIsCachedAndAnnounced: el evento que entrega la goroutine
+// lo atiende el bucle de eventos, que cachea el snapshot, deriva las dos listas
+// y avisa en la barra de estado cuántas actualizaciones y novedades hay y por
+// dónde se gestionan (decisión 2: aviso en la barra, sin prompt).
+func TestPrefetchSnapshotIsCachedAndAnnounced(t *testing.T) {
+	app, _ := prefetchSetup(t)
+
+	awaitExtSnapshot(t, app)
+
+	if len(app.extUpdates) != 1 || app.extUpdates[0].Ref != "remoto/tcode.linter" {
+		t.Fatalf("actualizaciones = %+v, esperaba la del linter", app.extUpdates)
+	}
+	if len(app.extAvailable) != 1 || app.extAvailable[0].ID != "tcode.tema" {
+		t.Fatalf("novedades = %+v, esperaba la del tema", app.extAvailable)
+	}
+	msg := app.statusBar.Message()
+	if !strings.Contains(msg, "1 actualización") || !strings.Contains(msg, "1 novedad") ||
+		!strings.Contains(msg, "Ctrl+P") {
+		t.Errorf("mensaje = %q, esperaba el aviso con los conteos y dónde gestionarlos", msg)
+	}
+	// Detectar NO toca el disco: la versión instalada sigue siendo la vieja.
+	userRoot := app.extUserRoot
+	if got := readFile(t, filepath.Join(userRoot, "remoto", "tcode.linter", "extension.json")); !strings.Contains(got, "1.0.0") {
+		t.Errorf("la lectura de fondo aplicó algo: el manifest dice %s", got)
+	}
+}
+
+// TestExtPendingNoticeCountsAndPlurals: el aviso dice cuántos cambios hay
+// (plural correcto, incluido el singular) y siempre por dónde se gestionan.
+func TestExtPendingNoticeCountsAndPlurals(t *testing.T) {
+	cases := []struct {
+		updates, available int
+		want               string
+	}{
+		{1, 0, "1 actualización — Ctrl+P → Extensiones"},
+		{0, 1, "1 novedad — Ctrl+P → Extensiones"},
+		{2, 3, "2 actualizaciones, 3 novedades — Ctrl+P → Extensiones"},
+	}
+	for _, c := range cases {
+		if got := extPendingNotice(c.updates, c.available); got != c.want {
+			t.Errorf("extPendingNotice(%d, %d) = %q, esperaba %q", c.updates, c.available, got, c.want)
+		}
+	}
+}
+
+// TestExtManagerOpensWithLoadingState: abierta antes de que llegue la lectura,
+// la ventana NO espera: muestra "cargando…" (decisión 3) y conserva la pestaña
+// de proveedores, que es disco local y ya se puede mostrar.
+func TestExtManagerOpensWithLoadingState(t *testing.T) {
+	app, _ := prefetchSetup(t)
+	if app.extSnapshot != nil {
+		t.Fatal("el test necesita el snapshot sin llegar")
+	}
+
+	items := extTabItems(t, app, view.ExtTabInstalled)
+
+	if len(items) != 1 || items[0].Label != "cargando…" {
+		t.Fatalf("las instaladas = %+v, se esperaba la fila de cargando", items)
+	}
+	if got := app.extManager.Items(view.ExtTabProviders); len(got) == 0 {
+		t.Error("la pestaña de proveedores no puede depender de la red: se lee de disco")
+	}
+}
+
+// TestExtWindowFillsItselfWhenTheSnapshotArrives: la ventana abierta mientras
+// carga se repinta sola cuando llega el evento, sin que el usuario tenga que
+// cerrarla y abrirla de nuevo.
+func TestExtWindowFillsItselfWhenTheSnapshotArrives(t *testing.T) {
+	app, _ := prefetchSetup(t)
+	app.openExtManager()
+
+	awaitExtSnapshot(t, app)
+
+	items := app.extManager.Items(view.ExtTabInstalled)
+	if len(items) != 1 || items[0].Ref != "remoto/tcode.linter" {
+		t.Fatalf("las instaladas = %+v, se esperaba el linter del fixture", items)
+	}
+}
+
+// TestExtManagerIgnoresStaleSnapshot: una lectura vieja que llega después de
+// una más nueva se descarta: el número de secuencia impide que el datoDelayed
+// pise el fresco.
+func TestExtManagerIgnoresStaleSnapshot(t *testing.T) {
+	app, _ := prefetchSetup(t)
+	app.handleExtSnapshot(extSnapshotEvent{
+		Seq:      app.extPrefetchSeq,
+		Snapshot: ext.Snapshot{Providers: []ext.Provider{{Name: "nuevo", Approved: true}}},
+	})
+	app.handleExtSnapshot(extSnapshotEvent{
+		Seq:      app.extPrefetchSeq - 1,
+		Snapshot: ext.Snapshot{Providers: []ext.Provider{{Name: "viejo", Approved: true}}},
+	})
+
+	if len(app.extSnapshot.Providers) != 1 || app.extSnapshot.Providers[0].Name != "nuevo" {
+		t.Fatalf("el snapshot cacheado = %+v, una entrega vieja lo pisó", app.extSnapshot.Providers)
+	}
+}
+
+// --- borrar archivo o carpeta desde el explorador ---
+
+// newDeleteApp arranca una sesión sobre un directorio temporal con archivos ya
+// escritos, para que el explorador tenga nodos desde el arranque (el primer
+// nivel se lee siempre) y el cursor caiga en el primero.
+func newDeleteApp(t *testing.T, files map[string]string) (*App, string) {
+	t.Helper()
+
+	dir := t.TempDir()
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatalf("no se pudo crear %s: %v", name, err)
+		}
+	}
+	s := tcell.NewSimulationScreen("UTF-8")
+	if err := s.Init(); err != nil {
+		t.Fatalf("no se pudo inicializar la pantalla simulada: %v", err)
+	}
+	s.SetSize(40, 10)
+
+	app, err := NewAppWithScreen(s, dir)
+	if err != nil {
+		t.Fatalf("NewAppWithScreen falló: %v", err)
+	}
+	t.Cleanup(func() {
+		app.ws.CloseAll()
+		s.Fini()
+	})
+	if !app.explorerVisible || !app.explorerFocused {
+		t.Fatal("una sesión sobre un directorio arranca con el explorador visible y enfocado")
+	}
+	return app, dir
+}
+
+// TestDeleteKeyConfirmsAndRemovesTheFile: Delete sobre el nodo del cursor abre
+// el pedido sí/no con el nombre del archivo, y al confirmar con "s" el archivo
+// desaparece de disco y del árbol, con un mensaje en la barra.
+func TestDeleteKeyConfirmsAndRemovesTheFile(t *testing.T) {
+	app, dir := newDeleteApp(t, map[string]string{"a.txt": "uno", "b.txt": "dos"})
+	path := filepath.Join(dir, "a.txt")
+
+	press(app, tcell.KeyDelete)
+	if !app.promptActive {
+		t.Fatal("Delete debe abrir el pedido de confirmación")
+	}
+	label := app.statusBar.Label()
+	if !strings.Contains(label, "¿Borrar a.txt?") || !strings.Contains(label, "[s/N]") {
+		t.Fatalf("rótulo = %q, se esperaba \"¿Borrar a.txt? [s/N]\"", label)
+	}
+
+	typeString(app, "s")
+	press(app, tcell.KeyEnter)
+
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("el archivo sigue en disco (err=%v), se esperaba borrado permanente", err)
+	}
+	if got := app.explorer.CursorPath(); got == path {
+		t.Fatalf("CursorPath() = %q, el nodo borrado no puede seguir en el árbol", got)
+	}
+	if !strings.Contains(app.statusBar.Message(), "Borrado: a.txt") {
+		t.Fatalf("mensaje = %q, se esperaba el aviso de borrado", app.statusBar.Message())
+	}
+	// El hermano que no estaba bajo el cursor sobrevive.
+	if _, err := os.Stat(filepath.Join(dir, "b.txt")); err != nil {
+		t.Fatalf("b.txt no debía tocarse: %v", err)
+	}
+}
+
+// TestDeleteDefaultsToNo: el pedido es [s/N] —Enter sin escribir nada NO borra—,
+// y tampoco lo borra una respuesta que no sea "s". El archivo y su nodo quedan.
+func TestDeleteDefaultsToNo(t *testing.T) {
+	for _, answer := range []string{"", "n", "no", "x"} {
+		app, dir := newDeleteApp(t, map[string]string{"a.txt": "uno"})
+		path := filepath.Join(dir, "a.txt")
+
+		press(app, tcell.KeyDelete)
+		typeString(app, answer)
+		press(app, tcell.KeyEnter)
+
+		if app.promptActive {
+			t.Fatalf("respuesta %q: el pedido debió cerrarse al confirmar", answer)
+		}
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("respuesta %q: el archivo no debía borrarse: %v", answer, err)
+		}
+		if got := app.explorer.CursorPath(); got != path {
+			t.Fatalf("respuesta %q: CursorPath() = %q, el nodo debía seguir", answer, got)
+		}
+		if !strings.Contains(app.statusBar.Message(), "Cancelado") {
+			t.Fatalf("respuesta %q: mensaje = %q, se esperaba el aviso de cancelación", answer, app.statusBar.Message())
+		}
+	}
+}
+
+// TestDeleteFolderRemovesItRecursively: borrar un directorio se lleva todo su
+// contenido, y el nodo desaparece del árbol junto con sus descendientes
+// expandidos.
+func TestDeleteFolderRemovesItRecursively(t *testing.T) {
+	app, dir := newDeleteApp(t, map[string]string{"notas.txt": "notas"})
+	sub := filepath.Join(dir, "docs")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatalf("no se pudo crear la carpeta: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "dentro.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("no se pudo crear el archivo interno: %v", err)
+	}
+	// El árbol arrancó sin la carpeta (se creó después): se recarga el primer
+	// nivel por la misma puerta que usa el arranque.
+	entries, err := readEntries(dir)
+	if err != nil {
+		t.Fatalf("no se pudo leer la raíz: %v", err)
+	}
+	app.explorer.SetRootEntries(entries)
+	// El cursor cae en docs (los directorios se listan primero) y se expande.
+	if got := app.explorer.CursorPath(); got != sub {
+		t.Fatalf("CursorPath() = %q, se esperaba la carpeta", got)
+	}
+	app.explorerExpand()
+
+	press(app, tcell.KeyDelete)
+	typeString(app, "s")
+	press(app, tcell.KeyEnter)
+
+	if _, err := os.Stat(sub); !os.IsNotExist(err) {
+		t.Fatalf("la carpeta sigue en disco (err=%v), se esperaba el borrado recursivo", err)
+	}
+	if got := app.explorer.CursorPath(); got == sub {
+		t.Fatal("el nodo del directorio borrado no puede seguir en el árbol")
+	}
+	if !strings.Contains(app.statusBar.Message(), "Borrado: docs") {
+		t.Fatalf("mensaje = %q, se esperaba el aviso de borrado", app.statusBar.Message())
+	}
+}
+
+// TestDeleteClosesTheOpenBufferOfTheDeletedPath: un buffer abierto sobre el
+// archivo borrado (o sobre uno dentro de la carpeta borrada) se cierra con
+// CloseForce —sin él, guardar recrearía el archivo que acaba de desaparecer—
+// y las pestañas que no estaban bajo la ruta sobreviven.
+func TestDeleteClosesTheOpenBufferOfTheDeletedPath(t *testing.T) {
+	app, dir := newDeleteApp(t, map[string]string{"a.txt": "uno", "b.txt": "dos"})
+
+	if _, err := app.ws.Open(filepath.Join(dir, "a.txt")); err != nil {
+		t.Fatalf("no se pudo abrir a.txt: %v", err)
+	}
+	if _, err := app.ws.Open(filepath.Join(dir, "b.txt")); err != nil {
+		t.Fatalf("no se pudo abrir b.txt: %v", err)
+	}
+	if app.ws.Len() != 2 {
+		t.Fatalf("Len() = %d, se esperaban 2 buffers", app.ws.Len())
+	}
+	if got := app.explorer.CursorPath(); got != filepath.Join(dir, "a.txt") {
+		t.Fatalf("CursorPath() = %q, se esperaba a.txt", got)
+	}
+
+	press(app, tcell.KeyDelete)
+	typeString(app, "s")
+	press(app, tcell.KeyEnter)
+
+	if app.ws.Len() != 1 {
+		t.Fatalf("Len() = %d, se esperaba 1: el buffer del archivo borrado se cierra", app.ws.Len())
+	}
+	if got := app.ws.Active().Path(); got != filepath.Join(dir, "b.txt") {
+		t.Fatalf("buffer activo = %q, se esperaba b.txt", got)
+	}
+}
+
+// TestDeletePathClosesBuffersUnderTheDeletedFolder: borrar una carpeta cierra
+// los buffers de los archivos que estaban DENTRO de ella, no solo uno con la
+// ruta exacta.
+func TestDeletePathClosesBuffersUnderTheDeletedFolder(t *testing.T) {
+	app, dir := newDeleteApp(t, map[string]string{"a.txt": "uno"})
+	sub := filepath.Join(dir, "docs")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatalf("no se pudo crear la carpeta: %v", err)
+	}
+	inside := filepath.Join(sub, "dentro.txt")
+	if err := os.WriteFile(inside, []byte("x"), 0o644); err != nil {
+		t.Fatalf("no se pudo crear el archivo interno: %v", err)
+	}
+	if _, err := app.ws.Open(inside); err != nil {
+		t.Fatalf("no se pudo abrir el archivo interno: %v", err)
+	}
+	if _, err := app.ws.Open(filepath.Join(dir, "a.txt")); err != nil {
+		t.Fatalf("no se pudo abrir a.txt: %v", err)
+	}
+
+	if err := app.deletePath(sub); err != nil {
+		t.Fatalf("deletePath falló: %v", err)
+	}
+	if _, err := os.Stat(sub); !os.IsNotExist(err) {
+		t.Fatalf("la carpeta sigue en disco (err=%v)", err)
+	}
+	if app.ws.Len() != 1 {
+		t.Fatalf("Len() = %d, se esperaba 1: el buffer interno se cerró", app.ws.Len())
+	}
+	if got := app.ws.Active().Path(); got != filepath.Join(dir, "a.txt") {
+		t.Fatalf("buffer activo = %q, se esperaba a.txt", got)
+	}
+}
+
+// TestDeletePathRefusesAnEmptyPath: la acción es pública (command
+// tcode.deleteFile), así que una ruta vacía no borra nada.
+func TestDeletePathRefusesAnEmptyPath(t *testing.T) {
+	app, dir := newDeleteApp(t, map[string]string{"a.txt": "uno"})
+	if err := app.deletePath(""); err == nil {
+		t.Fatal("una ruta vacía no se puede borrar")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "a.txt")); err != nil {
+		t.Fatalf("a.txt no debía tocarse: %v", err)
+	}
+}
+
+// TestDeleteFileCommandIsRegistered: el command tcode.deleteFile existe (por
+// simetría con tcode.createFile) y borra el nodo del cursor pasando por la
+// misma confirmación.
+func TestDeleteFileCommandIsRegistered(t *testing.T) {
+	app, dir := newDeleteApp(t, map[string]string{"a.txt": "uno"})
+	path := filepath.Join(dir, "a.txt")
+
+	if err := app.ext.Registry().Run("tcode.deleteFile"); err != nil {
+		t.Fatalf("tcode.deleteFile falló: %v", err)
+	}
+	if !app.promptActive {
+		t.Fatal("el command debe abrir la confirmación")
+	}
+	typeString(app, "s")
+	press(app, tcell.KeyEnter)
+
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("el archivo sigue en disco (err=%v), se esperaba borrado", err)
+	}
+}
+
+// pinExtSources apunta la resolución de extensiones (proveedores + raíz del
+// usuario) a un proveedor en disco y a una raíz temporal, y deja el lector
+// inyectado contra ese proveedor. El chequeo de ARRANQUE queda en el no-op de
+// TestMain, así que abrir el editor no abre el prompt de actualizaciones: lo que
+// se prueba acá es la ventana, no el arranque.
+func pinExtSources(t *testing.T, providers []ext.Provider, userRoot string) {
+	t.Helper()
+	oldSources, oldFetch := extensionUserSources, startupExtFetch
+	extensionUserSources = func() ([]ext.Provider, string, error) { return providers, userRoot, nil }
+	if len(providers) > 0 {
+		startupExtFetch = extFetchFake(providers[0].Source)
+	}
+	t.Cleanup(func() { extensionUserSources, startupExtFetch = oldSources, oldFetch })
+}
+
+// extWindowFixture arma el escenario común de la ventana de extensiones: un
+// proveedor en disco con dos extensiones —una instalada en la versión vieja
+// (que da la actualización) y otra sin instalar (la novedad)—, una raíz de
+// extensiones del usuario temporal y el editor arrancado sobre un archivo.
+func extWindowFixture(t *testing.T, approved bool) (*App, string, ext.Provider) {
+	t.Helper()
+	src := startupProviderFixture(t, map[string][3]string{
+		"linter": {"tcode.linter", "Linter", "1.0.0"},
+		"tema":   {"tcode.tema", "Tema", "2.0.0"},
+	})
+	userRoot := t.TempDir()
+	p := ext.Provider{Name: "remoto", Source: src, Approved: approved}
+	// El fixture instala con una confirmación que aprueba: lo que el test
+	// ejercita es cómo la VENTANA trata a un proveedor sin aprobar, no la
+	// guarda de instalación de InstallByID (que se cubre aparte). Sin esto, el
+	// caso approved=false no llegaría nunca a tener la extensión instalada.
+	approve := func(ext.Provider) bool { return true }
+	if _, err := ext.InstallByID("tcode.linter", []ext.Provider{p}, userRoot, extFetchFake(src), approve); err != nil {
+		t.Fatalf("InstallByID del linter: %v", err)
+	}
+	// El autor publica una versión nueva del linter: eso es la actualización.
+	writeStartupManifest(t, filepath.Join(src, "linter"), "tcode.linter", "Linter", "1.1.0")
+
+	pinExtSources(t, []ext.Provider{p}, userRoot)
+	app, _ := newTestApp(t, "uno")
+	// La ventana abre con lo que hay en caché; el prefetch del arranque todavía
+	// está en vuelo, así que se espera su entrega antes de abrirla (en la vida
+	// real la ventana abre al instante con lo que haya).
+	awaitExtSnapshot(t, app)
+	return app, userRoot, p
+}
+
+// extTabItems abre la ventana y devuelve las filas de la pestaña pedida.
+func extTabItems(t *testing.T, app *App, tab view.ExtTab) []view.ExtItem {
+	t.Helper()
+	app.openExtManager()
+	for range tab {
+		app.handleEvent(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone))
+	}
+	if got := app.extManager.Tab(); got != tab {
+		t.Fatalf("la ventana quedó en la pestaña %v, se esperaba %v", got, tab)
+	}
+	return app.extManager.Items(tab)
+}
+
+// answerPrompt escribe answer y confirma con Enter, como lo haría el teclado.
+func answerPrompt(app *App, answer string) {
+	for _, r := range answer {
+		app.handleEvent(tcell.NewEventKey(tcell.KeyRune, r, tcell.ModNone))
+	}
+	app.handleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+}
+
+// TestExtensionWindowOpensFromTheConfigRow: la fila Extensiones de la ventana
+// de configuración dispara la acción (Enter) y el controlador abre la ventana
+// de extensiones — cerrando la de configuración — con los datos ya cargados: la
+// pestaña de instaladas trae la extensión del fixture.
+func TestExtensionWindowOpensFromTheConfigRow(t *testing.T) {
+	resetConfigVars(t)
+	app, _, _ := extWindowFixture(t, true)
+
+	app.handleEvent(tcell.NewEventKey(tcell.KeyCtrlP, 0, tcell.ModNone))
+	if !app.configActive {
+		t.Fatal("Ctrl+P debe abrir la ventana de configuración")
+	}
+	// Bajar hasta la última fila (Extensiones): el alto de la ventana menos el
+	// marco son sus filas.
+	for range view.ConfigMenuHeight() - 3 {
+		app.handleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
+	}
+	if quit := app.handleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone)); quit {
+		t.Fatal("Enter en la fila de acción no debe cerrar el editor")
+	}
+
+	if app.configActive {
+		t.Fatal("abrir la ventana de extensiones debe cerrar la de configuración")
+	}
+	if !app.extActive {
+		t.Fatal("Enter en la fila Extensiones debe abrir la ventana de extensiones")
+	}
+	if got := app.extManager.Tab(); got != view.ExtTabInstalled {
+		t.Fatalf("la ventana abre en la pestaña %v, se esperaba la de instaladas", got)
+	}
+	items := app.extManager.Items(view.ExtTabInstalled)
+	if len(items) != 1 || items[0].Ref != "remoto/tcode.linter" {
+		t.Fatalf("las instaladas = %+v, se esperaba el linter del fixture", items)
+	}
+	if items[0].Kind != view.ExtItemRemove {
+		t.Fatalf("la fila instalada es de tipo %v, se esperaba ExtItemRemove", items[0].Kind)
+	}
+}
+
+// TestExtensionWindowTabsCarryTheirData: cada pestaña trae lo que le toca: la
+// actualización con su salto de versión, la novedad con la marca del
+// proveedor, y los proveedores con la de agregar al final.
+func TestExtensionWindowTabsCarryTheirData(t *testing.T) {
+	resetConfigVars(t)
+	app, _, _ := extWindowFixture(t, false)
+
+	updates := extTabItems(t, app, view.ExtTabUpdatable)
+	if len(updates) != 1 || updates[0].Right != "1.0.0 → 1.1.0" {
+		t.Fatalf("las actualizables = %+v, se esperaba el salto 1.0.0 → 1.1.0", updates)
+	}
+	if updates[0].Kind != view.ExtItemUpdate {
+		t.Fatalf("la fila actualizable es de tipo %v, se esperaba ExtItemUpdate", updates[0].Kind)
+	}
+
+	available := extTabItems(t, app, view.ExtTabAvailable)
+	if len(available) != 1 || available[0].ID != "tcode.tema" {
+		t.Fatalf("las disponibles = %+v, se esperaba la novedad tcode.tema", available)
+	}
+	if !strings.Contains(available[0].Right, "sin aprobar") {
+		t.Fatalf("la novedad de un proveedor sin aprobar no está marcada: %q", available[0].Right)
+	}
+
+	providers := extTabItems(t, app, view.ExtTabProviders)
+	if len(providers) != 2 {
+		t.Fatalf("la pestaña de proveedores tiene %d filas, se esperaban 2 (el proveedor y la de agregar)", len(providers))
+	}
+	if providers[0].Label != "remoto" || providers[0].Kind != view.ExtItemInfo {
+		t.Fatalf("la primera fila de proveedores = %+v, se esperaba el proveedor informativo", providers[0])
+	}
+	last := providers[len(providers)-1]
+	if last.Kind != view.ExtItemAddProvider {
+		t.Fatalf("la última fila de proveedores es de tipo %v, se esperaba ExtItemAddProvider", last.Kind)
+	}
+}
+
+// TestExtensionWindowInstallsAfterConfirmation: Enter sobre una novedad abre el
+// pedido de confirmación; solo con un "s" explícito se instala. La ventana sigue
+// abierta con los datos recargados y la extensión nueva queda en disco.
+func TestExtensionWindowInstallsAfterConfirmation(t *testing.T) {
+	resetConfigVars(t)
+	app, userRoot, _ := extWindowFixture(t, true)
+	extTabItems(t, app, view.ExtTabAvailable)
+
+	// Enter abre la confirmación: NO instala todavía.
+	app.handleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	if !app.promptActive {
+		t.Fatal("Enter sobre una novedad debe pedir confirmación")
+	}
+	if !strings.Contains(app.promptLabel, "Instalar") || !strings.Contains(app.promptLabel, "remoto/tcode.tema") {
+		t.Fatalf("el rótulo del pedido es %q, debe nombrar la extensión a instalar", app.promptLabel)
+	}
+	if !app.extActive {
+		t.Fatal("la ventana de extensiones sigue abierta detrás del pedido")
+	}
+	if _, err := os.Stat(filepath.Join(userRoot, "remoto", "tcode.tema")); !os.IsNotExist(err) {
+		t.Fatal("no se puede instalar antes de confirmar")
+	}
+
+	// El sí instala.
+	answerPrompt(app, "s")
+	if app.promptActive {
+		t.Fatal("el pedido debe cerrarse al confirmar")
+	}
+	if _, err := os.Stat(filepath.Join(userRoot, "remoto", "tcode.tema", "extension.json")); err != nil {
+		t.Fatalf("la extensión confirmada debe quedar instalada: %v", err)
+	}
+	if !strings.Contains(app.statusBar.Message(), "Instalada") {
+		t.Fatalf("el mensaje es %q, debe confirmar la instalación", app.statusBar.Message())
+	}
+	if !app.extActive {
+		t.Fatal("la ventana debe seguir abierta después de instalar")
+	}
+	// Los datos se recargan: la novedad desapareció y hay dos instaladas.
+	if got := app.extManager.Items(view.ExtTabAvailable); len(got) != 0 {
+		t.Fatalf("las disponibles = %+v, después de instalar no debe quedar la novedad", got)
+	}
+	installed := app.extManager.Items(view.ExtTabInstalled)
+	if len(installed) != 2 {
+		t.Fatalf("las instaladas = %d filas, se esperaban 2 tras instalar", len(installed))
+	}
+}
+
+// TestExtensionWindowCancelsInstallWithoutConfirmation: Enter vacío (el
+// default es NO) cancela: la extensión no se instala y el mensaje lo dice.
+func TestExtensionWindowCancelsInstallWithoutConfirmation(t *testing.T) {
+	resetConfigVars(t)
+	app, userRoot, _ := extWindowFixture(t, true)
+	extTabItems(t, app, view.ExtTabAvailable)
+
+	app.handleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	if !app.promptActive {
+		t.Fatal("Enter sobre una novedad debe pedir confirmación")
+	}
+	answerPrompt(app, "") // Enter a ciegas: NO
+	if _, err := os.Stat(filepath.Join(userRoot, "remoto", "tcode.tema")); !os.IsNotExist(err) {
+		t.Fatal("un Enter vacío no puede instalar (el default es NO)")
+	}
+	if !strings.Contains(app.statusBar.Message(), "Cancelado") {
+		t.Fatalf("el mensaje es %q, debe decir que se canceló", app.statusBar.Message())
+	}
+	if !app.extActive {
+		t.Fatal("cancelar debe dejar la ventana abierta")
+	}
+}
+
+// TestExtensionWindowRefusesUnapprovedProvider: instalar desde un proveedor sin
+// aprobar no se ofrece: Enter avisa cómo aprobarlo y NO abre ni el pedido ni la
+// instalación.
+func TestExtensionWindowRefusesUnapprovedProvider(t *testing.T) {
+	resetConfigVars(t)
+	app, userRoot, _ := extWindowFixture(t, false)
+	extTabItems(t, app, view.ExtTabAvailable)
+
+	app.handleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	if app.promptActive {
+		t.Fatal("una novedad sin aprobar no debe abrir el pedido de instalación")
+	}
+	if !strings.Contains(app.statusBar.Message(), "approve-provider") {
+		t.Fatalf("el mensaje es %q, debe explicar cómo aprobar el proveedor", app.statusBar.Message())
+	}
+	if _, err := os.Stat(filepath.Join(userRoot, "remoto", "tcode.tema")); !os.IsNotExist(err) {
+		t.Fatal("una novedad de un proveedor sin aprobar no puede quedar instalada")
+	}
+}
+
+// TestExtensionWindowUpdatesAfterConfirmation: Enter sobre una actualización
+// pide confirmación y el sí la aplica: la versión nueva queda en disco y la
+// pestaña de actualizables queda vacía tras la recarga.
+func TestExtensionWindowUpdatesAfterConfirmation(t *testing.T) {
+	resetConfigVars(t)
+	app, userRoot, _ := extWindowFixture(t, true)
+	extTabItems(t, app, view.ExtTabUpdatable)
+
+	app.handleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	if !app.promptActive || !strings.Contains(app.promptLabel, "Actualizar") {
+		t.Fatalf("Enter sobre una actualización debe pedir confirmación; rótulo %q, activo=%v", app.promptLabel, app.promptActive)
+	}
+	answerPrompt(app, "s")
+
+	data, err := os.ReadFile(filepath.Join(userRoot, "remoto", "tcode.linter", "extension.json"))
+	if err != nil {
+		t.Fatalf("no se pudo leer el manifest instalado: %v", err)
+	}
+	if !strings.Contains(string(data), "1.1.0") {
+		t.Fatalf("la extensión actualizada sigue con la versión vieja: %s", data)
+	}
+	if got := app.extManager.Items(view.ExtTabUpdatable); len(got) != 0 {
+		t.Fatalf("las actualizables = %+v, después de actualizar no debe quedar ninguna", got)
+	}
+}
+
+// TestExtensionWindowRemovesAfterConfirmation: Enter sobre una instalada pide
+// confirmación y el sí la borra del disco; sin confirmación no se borra nada.
+func TestExtensionWindowRemovesAfterConfirmation(t *testing.T) {
+	resetConfigVars(t)
+	app, userRoot, _ := extWindowFixture(t, true)
+	extTabItems(t, app, view.ExtTabInstalled)
+
+	app.handleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	if !app.promptActive || !strings.Contains(app.promptLabel, "Eliminar") {
+		t.Fatalf("Enter sobre una instalada debe pedir confirmación; rótulo %q, activo=%v", app.promptLabel, app.promptActive)
+	}
+	if _, err := os.Stat(filepath.Join(userRoot, "remoto", "tcode.linter")); err != nil {
+		t.Fatalf("no se puede borrar antes de confirmar: %v", err)
+	}
+	answerPrompt(app, "s")
+
+	if _, err := os.Stat(filepath.Join(userRoot, "remoto", "tcode.linter")); !os.IsNotExist(err) {
+		t.Fatal("la extensión confirmada debe quedar borrada del disco")
+	}
+	if got := app.extManager.Items(view.ExtTabInstalled); len(got) != 0 {
+		t.Fatalf("las instaladas = %+v, después de borrar no debe quedar ninguna", got)
+	}
+}
+
+// TestExtensionWindowAddsProviderFromThePrompt: la última fila de la pestaña de
+// proveedores abre el pedido de texto; la fuente escrita se registra SIN
+// aprobar y aparece en la lista con la ventana todavía abierta.
+func TestExtensionWindowAddsProviderFromThePrompt(t *testing.T) {
+	resetConfigVars(t)
+	app, userRoot, remoto := extWindowFixture(t, true)
+
+	// El archivo de proveedores del HOME del test, aislado como el config. El
+	// loader de la ventana se re-pinnea para LEER ESE ARCHIVO (más el proveedor
+	// del fixture): el camino real resuelve el mismo archivo que escribe
+	// addProviderSource, así que pinnear una lista fija haría que el agregado se
+	// guarde pero la lista no lo vea, y el test no probaría lo que dice probar.
+	dir := t.TempDir()
+	providersFile := filepath.Join(dir, "providers.json")
+	oldPath, oldSources := providersConfigPath, extensionUserSources
+	providersConfigPath = func() (string, error) { return providersFile, nil }
+	extensionUserSources = func() ([]ext.Provider, string, error) {
+		stored, err := ext.LoadProviders(providersFile)
+		if err != nil {
+			return nil, "", err
+		}
+		return append([]ext.Provider{remoto}, stored...), userRoot, nil
+	}
+	t.Cleanup(func() { providersConfigPath, extensionUserSources = oldPath, oldSources })
+
+	extTabItems(t, app, view.ExtTabProviders)
+	// Ir a la última fila (la de agregar) con End.
+	app.handleEvent(tcell.NewEventKey(tcell.KeyEnd, 0, tcell.ModNone))
+	app.handleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	if !app.promptActive || !strings.Contains(app.promptLabel, "Agregar proveedor") {
+		t.Fatalf("la fila de agregar debe abrir su pedido; rótulo %q, activo=%v", app.promptLabel, app.promptActive)
+	}
+
+	nuevo := startupProviderFixture(t, map[string][3]string{"otro": {"tcode.otro", "Otro", "1.0.0"}})
+	answerPrompt(app, nuevo)
+
+	stored, err := ext.LoadProviders(providersFile)
+	if err != nil {
+		t.Fatalf("no se pudo leer providers.json: %v", err)
+	}
+	if len(stored) != 1 || stored[0].Source != filepath.Clean(nuevo) {
+		t.Fatalf("los proveedores guardados = %+v, se esperaba la carpeta %q", stored, nuevo)
+	}
+	if stored[0].Name != filepath.Base(nuevo) {
+		t.Fatalf("el nombre guardado es %q, se esperaba el derivado %q", stored[0].Name, filepath.Base(nuevo))
+	}
+	if stored[0].Approved {
+		t.Fatal("un proveedor agregado queda SIN aprobar: agregar no es confiar")
+	}
+	if !app.extActive {
+		t.Fatal("agregar un proveedor deja la ventana abierta")
+	}
+	// Aparece en la lista, marcada como sin aprobar.
+	providers := app.extManager.Items(view.ExtTabProviders)
+	found := false
+	for _, p := range providers {
+		if p.Label == stored[0].Name {
+			found = true
+			if !strings.Contains(p.Right, "sin aprobar") {
+				t.Fatalf("el proveedor nuevo no está marcado como sin aprobar: %+v", p)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("el proveedor agregado no aparece en la lista: %+v", providers)
+	}
+}
+
+// TestExtensionWindowClosesOnForeignKeys: Escape y cualquier tecla ajena cierran
+// la ventana descartando, como las demás overlays, sin cerrar el editor.
+func TestExtensionWindowClosesOnForeignKeys(t *testing.T) {
+	resetConfigVars(t)
+	app, _, _ := extWindowFixture(t, true)
+	app.openExtManager()
+	if !app.extActive {
+		t.Fatal("openExtManager debe abrir la ventana")
+	}
+	if quit := app.handleEvent(tcell.NewEventKey(tcell.KeyEscape, 0, tcell.ModNone)); quit {
+		t.Fatal("Escape consumido por la ventana no debe cerrar el editor")
+	}
+	if app.extActive {
+		t.Fatal("Escape debe cerrar la ventana de extensiones")
 	}
 }

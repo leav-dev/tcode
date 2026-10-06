@@ -30,7 +30,11 @@ func main() {
 		os.Exit(code)
 	}
 
-	updateExtensionsAtStartup()
+	// El chequeo de actualizaciones y novedades NO vive acá: corre dentro del
+	// controller, en una goroutine que arranca con la app, y avisa por la barra de
+	// estado. Antes se imprimía por stdout, antes de abrir la TUI, así que era
+	// invisible; después pasó a bloquear el arranque mientras leía los proveedores
+	// (git, segundos), y ahora esa lectura corre en segundo plano.
 
 	path := ""
 	if len(os.Args) > 1 {
@@ -45,34 +49,6 @@ func main() {
 	if err := app.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "tcode: %v\n", err)
 		os.Exit(1)
-	}
-}
-
-// updateExtensionsAtStartup revisa las extensiones instaladas y actualiza las
-// que el proveedor ya no tiene en la versión instalada. Corre ANTES de abrir la
-// UI: así el editor arranca con la versión nueva ya en disco, sin recargar
-// extensiones a mitad del arranque.
-//
-// Nunca impide arrancar: si no se puede resolver el home, leer los
-// proveedores o volver a leer uno remoto, el problema se reporta por stderr y
-// el editor sigue con lo que ya está instalado.
-func updateExtensionsAtStartup() {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "tcode: aviso: no se pudo resolver el home del usuario para actualizar extensiones: %v\n", err)
-		return
-	}
-	providers, err := ext.AllProviders(ext.ProvidersFilePath(home))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "tcode: aviso: %v\n", err)
-		return
-	}
-	updates, errs := ext.UpdateAll(providers, filepath.Join(home, ".tcode", "extensions"), nil)
-	for _, u := range updates {
-		fmt.Printf("Actualizada: %s (%s → %s)\n", u.Ref, u.OldVer, u.NewVer)
-	}
-	for _, e := range errs {
-		fmt.Fprintf(os.Stderr, "tcode: aviso: %v\n", e)
 	}
 }
 
