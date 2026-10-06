@@ -12,7 +12,7 @@ resaltado de sintaxis, temas y configuración desde una ventana flotante.
 | Explorador de archivos | Árbol lateral con lazy loading (los directorios se leen al expandir), reveal del archivo activo, creación de archivos y carpetas (`Ctrl+N` / `Ctrl+Shift+N`, o los botones del pie del panel) y borrado del nodo del cursor (`Delete`, con confirmación), archivos ocultos fuera del árbol |
 | Selección | Por teclado (`Shift`+flechas/Home/End, `Ctrl+A`) y por mouse (arrastrar, `Shift`+clic extiende); `Ctrl+C`/`Ctrl+X`/`Ctrl+V` con el portapapeles del sistema |
 | Pestañas | Fila de pestañas, menú (`Ctrl+T`), cambio rápido desde teclado, reabrir y deduplicar rutas |
-| Apariencia | 6 paletas (Light, Dark, Light/Dark HC, Tokyo Night, Dracula) con fondo propio, resaltado por rol para Go, Python, JS/TS, C-like y JSON, tema del usuario por JSON |
+| Apariencia | 7 paletas (Light, Dark, Light/Dark HC, Tokyo Night, Dracula, Mocha) con fondo propio, resaltado por rol para Go, Python, JS/TS, C-like y JSON, tema del usuario por JSON |
 | Configuración | Ventana flotante (`Ctrl+P`): tamaño de tab, salto de palabra, ancho del panel, tema — cambios en vivo y persistidos en `~/.tcode/config.json` |
 | Extensiones | Manifiestos JSON declarativos (comandos, keybindings, hooks) con **backend de scripting Lua** (comandos con implementación propia), **sistema de proveedores**: se instalan por id desde un catálogo (el oficial o el que agregues) con `tcode --install-extension <id>` (`docs/extension-system.md`) |
 | Portabilidad | Go puro (`tcell`), sin dependencias nativas; instalador multi-SO en camino |

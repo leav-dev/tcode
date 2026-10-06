@@ -238,7 +238,7 @@ func TestThemeSelectionRole(t *testing.T) {
 // orden fijo (el del selector), cada id existe con un tema válido (CursorLineBg
 // real y barra de estado diferenciada del texto) y un id ajeno no existe.
 func TestThemeRegistryIsStableAndValid(t *testing.T) {
-	wantIDs := [...]string{"light", "dark", "light-hc", "dark-hc", "tokyo-night", "dracula"}
+	wantIDs := [...]string{"light", "dark", "light-hc", "dark-hc", "tokyo-night", "dracula", "mocha"}
 	ids := ThemeIDs()
 	if len(ids) != len(wantIDs) {
 		t.Fatalf("ThemeIDs() = %v, se esperaban %d ids", ids, len(wantIDs))
@@ -249,7 +249,7 @@ func TestThemeRegistryIsStableAndValid(t *testing.T) {
 		}
 	}
 
-	wantNames := [...]string{"Light", "Dark", "Light HC", "Dark HC", "Tokyo Night", "Dracula"}
+	wantNames := [...]string{"Light", "Dark", "Light HC", "Dark HC", "Tokyo Night", "Dracula", "Mocha"}
 	names := ThemeNames()
 	if len(names) != len(wantNames) {
 		t.Fatalf("ThemeNames() = %v, se esperaban %d nombres", names, len(wantNames))
@@ -277,10 +277,10 @@ func TestThemeRegistryIsStableAndValid(t *testing.T) {
 	}
 }
 
-// TestThemesAreDistinct: las seis paletas se distinguen entre sí —el selector
+// TestThemesAreDistinct: las siete paletas se distinguen entre sí —el selector
 // tiene que ofrecer opciones que se noten— y el fondo de la línea del cursor
 // fija las expectativas reales de cada paleta, con claras (Light, Light HC) y
-// oscuras (Dark, Tokyo Night, Dracula, Dark HC).
+// oscuras (Dark, Tokyo Night, Dracula, Dark HC, Mocha).
 func TestThemesAreDistinct(t *testing.T) {
 	dark := DarkTheme()
 	light := LightTheme()
@@ -288,12 +288,14 @@ func TestThemesAreDistinct(t *testing.T) {
 	darkhc := DarkHighContrastTheme()
 	tokyo := TokyoNightTheme()
 	dracula := DraculaTheme()
+	mocha := MochaTheme()
 
 	// Keyword: el rol con más peso visual diferencia las paletas por pares clave.
 	pairs := [][2]tcell.Color{
 		{fgOf(dark.Keyword), fgOf(light.Keyword)},
 		{fgOf(light.Keyword), fgOf(tokyo.Keyword)},
 		{fgOf(tokyo.Keyword), fgOf(dracula.Keyword)},
+		{fgOf(dracula.Keyword), fgOf(mocha.Keyword)},
 		{fgOf(dark.Keyword), fgOf(lasthc.Keyword)},
 		{fgOf(lasthc.Keyword), fgOf(darkhc.Keyword)},
 	}
@@ -315,6 +317,7 @@ func TestThemesAreDistinct(t *testing.T) {
 		{"dark-hc", darkhc.CursorLineBg, tcell.NewHexColor(0xFFFF00)},
 		{"tokyo-night", tokyo.CursorLineBg, tcell.NewHexColor(0x16161E)},
 		{"dracula", dracula.CursorLineBg, tcell.NewHexColor(0x44475A)},
+		{"mocha", mocha.CursorLineBg, tcell.NewHexColor(0x313244)},
 	}
 	for _, tc := range cases {
 		if tc.got != tc.want {

@@ -48,7 +48,7 @@ vez que cambiás un ajuste.
 | `IndentUnit` | Espacios de la unidad de indentación (Tab y auto-indent) | `4` | 1–8 |
 | `WordWrap` | Salto de palabra visual (también alternable con `Ctrl+Shift+W`) | `true` | on/off |
 | `ExplorerWidth` | Ancho máximo del panel lateral | `24` | 16–48 (paso 2) |
-| `Theme` | Paleta activa: `light`, `dark`, `light-hc`, `dark-hc`, `tokyo-night`, `dracula`; `""` / ausente = Custom (`theme.json`) | `""` | las 6 + Custom |
+| `Theme` | Paleta activa: `light`, `dark`, `light-hc`, `dark-hc`, `tokyo-night`, `dracula`, `mocha`; `""` / ausente = Custom (`theme.json`) | `""` | las 7 + Custom |
 | `DisabledExtensions` | Manifest id de las extensiones **desactivadas** (no se cargan: sin comandos, keybindings ni hooks). Se edita desde la ventana de extensiones (Ctrl+P → Extensiones → `Space`) | `[]` | — |
 
 El `Theme` es un id estable de las paletas integradas (ver `docs/editor-theme.md`);

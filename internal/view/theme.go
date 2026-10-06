@@ -287,6 +287,41 @@ func DraculaTheme() Theme {
 	}
 }
 
+// MochaTheme (id "mocha") es la paleta inspirada en Catppuccin Mocha y en
+// la Gentle Shell del usuario (prompt con path rosa, git lavanda y acentos
+// azules): documento sobre la base #1E1E2E, sintaxis pastel (mauve para
+// keywords, verde para strings, peach para números) y barra sobre surface.
+func MochaTheme() Theme {
+	return Theme{
+		Text:         on(tcell.NewHexColor(0xCDD6F4), tcell.NewHexColor(0x1E1E2E)),
+		CursorLineBg: tcell.NewHexColor(0x313244),
+		TabActive:    active(tcell.NewHexColor(0xCBA6F7)),
+		TabIdle:      on(tcell.NewHexColor(0xCDD6F4), tcell.NewHexColor(0x1E1E2E)),
+		TreeCursor:   on(tcell.PaletteColor(15), tcell.NewHexColor(0x45475A)),
+		Status:       on(tcell.PaletteColor(15), tcell.NewHexColor(0x313244)),
+		Message:      on(tcell.NewHexColor(0xF9E2AF), tcell.NewHexColor(0x313244)),
+		ToastSuccess: on(tcell.NewHexColor(0xA6E3A1), tcell.NewHexColor(0x313244)),
+		ToastError:   on(tcell.NewHexColor(0xF38BA8), tcell.NewHexColor(0x313244)),
+		ToastInfo:    on(tcell.NewHexColor(0x89B4FA), tcell.NewHexColor(0x313244)),
+		Section:      on(tcell.NewHexColor(0x7F849C), tcell.NewHexColor(0x313244)),
+		Button:       active(tcell.NewHexColor(0xCBA6F7)),
+		Modified:     fg(tcell.NewHexColor(0xF38BA8)),
+		Comment:      fg(tcell.NewHexColor(0x6C7086)),
+		Keyword:      fg(tcell.NewHexColor(0xCBA6F7)),
+		String:       fg(tcell.NewHexColor(0xA6E3A1)),
+		Number:       fg(tcell.NewHexColor(0xFAB387)),
+		Type:         fg(tcell.NewHexColor(0xF9E2AF)),
+		Function:     fg(tcell.NewHexColor(0x89B4FA)),
+		Variable:     fg(tcell.NewHexColor(0xB4BEFE)),
+		Punct:        fg(tcell.NewHexColor(0x9399B2)),
+		Selection:    active(tcell.NewHexColor(0x74C7EC)),
+		Gutter:       fg(tcell.NewHexColor(0x6C7086)),
+		DiagError:    fg(tcell.NewHexColor(0xF38BA8)),
+		DiagWarning:  fg(tcell.NewHexColor(0xF9E2AF)),
+		DiagInfo:     fg(tcell.NewHexColor(0x89DCEB)),
+	}
+}
+
 // namedTheme es una entrada del registry: el id y el nombre del selector más
 // la fábrica que construye la paleta. El orden del registry ES el orden del
 // selector; los getters construyen sus slices a partir de él.
@@ -306,6 +341,7 @@ var themeRegistry = []namedTheme{
 	{"dark-hc", "Dark HC", DarkHighContrastTheme},
 	{"tokyo-night", "Tokyo Night", TokyoNightTheme},
 	{"dracula", "Dracula", DraculaTheme},
+	{"mocha", "Mocha", MochaTheme},
 }
 
 // ThemeIDs devuelve los ids del registry en el orden del selector.

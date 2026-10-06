@@ -7,7 +7,7 @@ tocar código.
 ## Paletas integradas (selector de la ventana de configuración)
 
 Desde la ventana flotante de configuración (**`Ctrl+P`**, fila *Theme*) se
-cicla entre seis paletas; los cambios aplican **en vivo** (todas las vistas,
+cicla entre siete paletas; los cambios aplican **en vivo** (todas las vistas,
 los editores abiertos incluidos) y persisten en `~/.tcode/config.json`:
 
 | id | Nombre en el selector | Estilo |
@@ -18,6 +18,7 @@ los editores abiertos incluidos) y persisten en `~/.tcode/config.json`:
 | `dark-hc` | Dark HC | Oscuro de alto contraste |
 | `tokyo-night` | Tokyo Night | Paleta Tokyo Night |
 | `dracula` | Dracula | Paleta Dracula |
+| `mocha` | Mocha | Paleta Catppuccin Mocha (eco de la Gentle Shell) |
 
 La opción **Custom** aplica el `theme.json` del usuario (ver abajo); con el
 selector sin tocar, es el comportamiento original.

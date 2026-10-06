@@ -292,7 +292,7 @@ func TestConfigMenuThemeCyclesThroughPalettes(t *testing.T) {
 	}
 
 	// Right seguido recorre el resto del registry hasta "dracula"...
-	for _, id := range []string{"dark", "light-hc", "dark-hc", "tokyo-night", "dracula"} {
+	for _, id := range []string{"dark", "light-hc", "dark-hc", "tokyo-night", "dracula", "mocha"} {
 		m.HandleEvent(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone))
 		if got := ActiveThemeID(); got != id {
 			t.Fatalf("ActiveThemeID() = %q tras el ciclo, se esperaba %q", got, id)
@@ -399,34 +399,34 @@ func TestConfigMenuThemeCustomClearsTheID(t *testing.T) {
 	for range 3 {
 		m.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
 	}
-	// Desde "" (Custom, índice 6): Left → dracula (índice 5).
+	// Desde "" (Custom, índice 7): Left → mocha (índice 6).
 	if handled, changed := m.HandleEvent(tcell.NewEventKey(tcell.KeyLeft, 0, tcell.ModNone)); !handled || !changed {
 		t.Fatalf("Left en Theme devolvió (handled=%v, changed=%v), se esperaba (true, true)", handled, changed)
 	}
-	if got := ActiveThemeID(); got != "dracula" {
-		t.Fatalf("ActiveThemeID() = %q tras Left, se esperaba \"dracula\"", got)
+	if got := ActiveThemeID(); got != "mocha" {
+		t.Fatalf("ActiveThemeID() = %q tras Left, se esperaba \"mocha\"", got)
 	}
-	// Left de nuevo → tokyo-night.
+	// Left de nuevo → dracula.
 	if handled, changed := m.HandleEvent(tcell.NewEventKey(tcell.KeyLeft, 0, tcell.ModNone)); !handled || !changed {
 		t.Fatalf("el segundo Left devolvió (handled=%v, changed=%v), se esperaba (true, true)", handled, changed)
 	}
-	if got := ActiveThemeID(); got != "tokyo-night" {
-		t.Fatalf("ActiveThemeID() = %q tras el segundo Left, se esperaba \"tokyo-night\"", got)
+	if got := ActiveThemeID(); got != "dracula" {
+		t.Fatalf("ActiveThemeID() = %q tras el segundo Left, se esperaba \"dracula\"", got)
 	}
-	// Reversibilidad: Right devuelve a dracula.
+	// Reversibilidad: Right devuelve a mocha.
 	if handled, changed := m.HandleEvent(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone)); !handled || !changed {
 		t.Fatalf("Right tras los Left devolvió (handled=%v, changed=%v), se esperaba (true, true)", handled, changed)
 	}
-	if got := ActiveThemeID(); got != "dracula" {
-		t.Fatalf("ActiveThemeID() = %q tras Right, se esperaba \"dracula\"", got)
+	if got := ActiveThemeID(); got != "mocha" {
+		t.Fatalf("ActiveThemeID() = %q tras Right, se esperaba \"mocha\"", got)
 	}
 	// Enter sobre el enum no hace nada (delta 0), como en los enteros, pero la
 	// tecla sigue siendo de la ventana: (true, false) y el id no cambia.
 	if handled, changed := m.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone)); !handled || changed {
 		t.Fatalf("Enter en Theme devolvió (handled=%v, changed=%v), se esperaba (true, false)", handled, changed)
 	}
-	if got := ActiveThemeID(); got != "dracula" {
-		t.Fatalf("Enter debe dejar el tema intacto: ActiveThemeID() = %q, se esperaba \"dracula\"", got)
+	if got := ActiveThemeID(); got != "mocha" {
+		t.Fatalf("Enter debe dejar el tema intacto: ActiveThemeID() = %q, se esperaba \"mocha\"", got)
 	}
 }
 
