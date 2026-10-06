@@ -6,9 +6,14 @@ módulo como `tcode` a secas (sin path resolvible). El objetivo: `go install
 github.com/leav-dev/tcode@latest` como comando único.
 
 ## Tasks
-- [ ] Commitear el trabajo pendiente de la sesión en unidades (features ya testeadas) <!-- id: 0 -->
-- [ ] Renombrar módulo a `github.com/leav-dev/tcode` (go.mod + imports) + README <!-- id: 1 -->
-- [ ] Tag `v0.1.0`, push main + tag, verificación end-to-end en env limpio <!-- id: 2 -->
+- [x] Commitear el trabajo pendiente de la sesión en unidades (features ya testeadas) <!-- id: 0 -->
+- [x] Renombrar módulo a `github.com/leav-dev/tcode` (go.mod + imports) + README <!-- id: 1 -->
+- [x] Tag `v0.1.0`, push main + tag, verificación end-to-end en env limpio <!-- id: 2 -->
+
+## Evidence
+- Commits pusheados: `efeadf6` (features) + `6c11a4c` (rename); tag `v0.1.0`.
+- E2E: `GOBIN`+`HOME` temporales, `go install ...@latest` descargó v0.1.0,
+  compiló y `--list-extensions` dio exit 0.
 
 ## Evidence
 - 23 archivos `.go` importan `tcode/internal/...`; solo código + go.mod cambian.
