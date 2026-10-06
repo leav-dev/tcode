@@ -26,15 +26,18 @@ type catalogRaw struct {
 // catálogo: el árbol recursivo del repo (API de GitHub) y los manifests raw
 // por subdir. treeJSON es el JSON completo del árbol; raw mapea subdir (o ""
 // para la raíz) a su comportamiento.
-func catalogServer(t *testing.T, treeJSON string, raw map[string]catalogRaw) *httptest.Server {
+func catalogServer(t *testing.T, repo, treeJSON string, raw map[string]catalogRaw) *httptest.Server {
 	t.Helper()
+	// El repo se captura ACÁ, al crear el servidor: el handler corre en
+	// goroutines del servidor HTTP y no puede leer el global CatalogRepo,
+	// que el test restaura al terminar (data race bajo -race).
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/repos/") {
 			fmt.Fprint(w, treeJSON)
 			return
 		}
 		// raw: /{CatalogRepo}/HEAD/{subdir}/extension.json
-		rest := strings.TrimPrefix(r.URL.Path, "/"+CatalogRepo+"/HEAD/")
+		rest := strings.TrimPrefix(r.URL.Path, "/"+repo+"/HEAD/")
 		subdir := strings.TrimSuffix(rest, "/extension.json")
 		if subdir == rest {
 			subdir = "" // manifest en la raíz del repo
@@ -45,7 +48,14 @@ func catalogServer(t *testing.T, treeJSON string, raw map[string]catalogRaw) *ht
 			return
 		}
 		if behavior.delay > 0 {
-			time.Sleep(behavior.delay)
+			// Espera interrumpible: si el cliente corta (timeout), el
+			// handler vuelve sin dormir el delay entero —server.Close no
+			// queda bloqueado el delay completo al terminar el test.
+			select {
+			case <-time.After(behavior.delay):
+			case <-r.Context().Done():
+				return
+			}
 		}
 		if behavior.status != 0 {
 			http.Error(w, "error", behavior.status)
@@ -103,7 +113,7 @@ func TestFetchCatalogDerivesEntries(t *testing.T) {
 		{"path":"extension.json","type":"blob"}
 	]}`
 
-	server := catalogServer(t, treeJSON, map[string]catalogRaw{
+	server := catalogServer(t, "ejemplo/monorepo", treeJSON, map[string]catalogRaw{
 		"":               {body: `{"id":"tcode.raiz","name":"Raiz","version":"1.0.0"}`},
 		"vim-lite":       {body: `{"id":"tcode.vim-lite","name":"Vim Lite","version":"1.0.0"}`},
 		"emacs-lite":     {body: `{"id":"tcode.emacs-lite","name":"Emacs Lite","version":"0.2.1"}`},
@@ -146,13 +156,16 @@ func TestFetchCatalogToleratesTimeout(t *testing.T) {
 		{"path":"rapida/extension.json","type":"blob"},
 		{"path":"lenta/extension.json","type":"blob"}
 	]}`
-	server := catalogServer(t, treeJSON, map[string]catalogRaw{
+	server := catalogServer(t, "ejemplo/monorepo", treeJSON, map[string]catalogRaw{
 		"rapida": {body: `{"id":"tcode.rapida","name":"Rapida","version":"1.0.0"}`},
-		"lenta":  {delay: 500 * time.Millisecond, body: `{"id":"tcode.lenta","name":"Lenta","version":"1.0.0"}`},
+		"lenta":  {delay: 5 * time.Second, body: `{"id":"tcode.lenta","name":"Lenta","version":"1.0.0"}`},
 	})
 	defer overrideCatalog(server.URL, "ejemplo/monorepo")()
-	// Timeout corto: lenta (500ms de delay) debe caer; rapida, no.
-	catalogHTTP = &http.Client{Timeout: 100 * time.Millisecond}
+	// Timeout corto: lenta (5s de delay) debe caer; rapida, no. El margen es
+	// amplio a propósito: el CI corre con -race y un timeout de ms es flaky
+	// bajo carga (la espera real la capa el timeout del cliente, y el handler
+	// fake vuelve solo si el cliente corta).
+	catalogHTTP = &http.Client{Timeout: 500 * time.Millisecond}
 
 	entries, errs := FetchCatalog(context.Background(), t.TempDir())
 
