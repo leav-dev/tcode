@@ -32,6 +32,10 @@ type Theme struct {
 	Variable     tcell.Style // identificadores comunes (sintaxis)
 	Punct        tcell.Style // puntuación/otros (sintaxis)
 
+	// Selection es el rol del rango marcado con el mouse o con Shift: la marca
+	// visual del bloque seleccionado.
+	Selection tcell.Style // rango seleccionado (marca visual)
+
 	// Gutter lleva SOLO el frente de la columna de números de línea; el uso (el
 	// dibujo del editor) le pone el fondo del documento con docBg. Los Diag*
 	// llevan el color de severidad de los marcadores del gutter (y del
@@ -94,6 +98,7 @@ func DarkTheme() Theme {
 		Function:     fg(tcell.PaletteColor(187)),
 		Variable:     fg(tcell.PaletteColor(117)),
 		Punct:        fg(tcell.PaletteColor(250)),
+		Selection:    active(tcell.PaletteColor(180)),
 		Gutter:       fg(tcell.PaletteColor(246)),
 		DiagError:    fg(tcell.PaletteColor(208)),
 		DiagWarning:  fg(tcell.PaletteColor(220)),
@@ -124,6 +129,7 @@ func LightTheme() Theme {
 		Function:     fg(tcell.NewHexColor(0x795E26)),
 		Variable:     fg(tcell.NewHexColor(0x001080)),
 		Punct:        fg(tcell.NewHexColor(0x000000)),
+		Selection:    active(tcell.PaletteColor(21)),
 		Gutter:       fg(tcell.NewHexColor(0x808080)),
 		DiagError:    fg(tcell.NewHexColor(0xD6140F)),
 		DiagWarning:  fg(tcell.NewHexColor(0xB25D00)),
@@ -152,6 +158,7 @@ func LightHighContrastTheme() Theme {
 		Function:     fg(tcell.NewHexColor(0x804000)),
 		Variable:     fg(tcell.NewHexColor(0x000000)),
 		Punct:        fg(tcell.NewHexColor(0x000000)),
+		Selection:    active(tcell.PaletteColor(226)),
 		Gutter:       fg(tcell.NewHexColor(0x808080)),
 		DiagError:    fg(tcell.PaletteColor(1)),
 		DiagWarning:  fg(tcell.PaletteColor(11)),
@@ -180,6 +187,7 @@ func DarkHighContrastTheme() Theme {
 		Function:     fg(tcell.NewHexColor(0xFFFFFF)),
 		Variable:     fg(tcell.NewHexColor(0xFFFFFF)),
 		Punct:        fg(tcell.NewHexColor(0xFFFFFF)),
+		Selection:    active(tcell.PaletteColor(226)),
 		Gutter:       fg(tcell.PaletteColor(248)),
 		DiagError:    fg(tcell.PaletteColor(9)),
 		DiagWarning:  fg(tcell.PaletteColor(11)),
@@ -207,6 +215,7 @@ func TokyoNightTheme() Theme {
 		Function:     fg(tcell.NewHexColor(0x7AA2F7)),
 		Variable:     fg(tcell.NewHexColor(0xC0CAF5)),
 		Punct:        fg(tcell.NewHexColor(0x89DDFF)),
+		Selection:    active(tcell.PaletteColor(69)),
 		Gutter:       fg(tcell.NewHexColor(0x565F89)),
 		DiagError:    fg(tcell.NewHexColor(0xF7768E)),
 		DiagWarning:  fg(tcell.NewHexColor(0xE0AF68)),
@@ -235,6 +244,7 @@ func DraculaTheme() Theme {
 		Function:     fg(tcell.NewHexColor(0x50FA7B)),
 		Variable:     fg(tcell.NewHexColor(0xF8F8F2)),
 		Punct:        fg(tcell.NewHexColor(0xF8F8F2)),
+		Selection:    active(tcell.NewHexColor(0xBD93F9)),
 		Gutter:       fg(tcell.NewHexColor(0x6272A4)),
 		DiagError:    fg(tcell.NewHexColor(0xFF5555)),
 		DiagWarning:  fg(tcell.NewHexColor(0xF1FA8C)),
@@ -347,6 +357,7 @@ func LoadTheme(data []byte) Theme {
 	fg(&t.Function, "function")
 	fg(&t.Variable, "variable")
 	fg(&t.Punct, "punct")
+	fg(&t.Selection, "selection")
 	fg(&t.Gutter, "gutter")
 	fg(&t.DiagError, "diagError")
 	fg(&t.DiagWarning, "diagWarning")

@@ -10,6 +10,7 @@ resaltado de sintaxis, temas y configuración desde una ventana flotante.
 | --- | --- |
 | Edición | Undo/redo, auto-indent, salto de palabra visual, guardado con detección de cambios externos y recarga segura, `Ctrl+S` con confirmación de pisado |
 | Explorador de archivos | Árbol lateral con lazy loading (los directorios se leen al expandir), reveal del archivo activo, creación de archivos y carpetas (`Ctrl+N` / `Ctrl+Shift+N`), archivos ocultos fuera del árbol |
+| Selección | Por teclado (`Shift`+flechas/Home/End, `Ctrl+A`) y por mouse (arrastrar, `Shift`+clic extiende); `Ctrl+C`/`Ctrl+X`/`Ctrl+V` con el portapapeles del sistema |
 | Pestañas | Fila de pestañas, menú (`Ctrl+T`), cambio rápido desde teclado, reabrir y deduplicar rutas |
 | Apariencia | 6 paletas (Light, Dark, Light/Dark HC, Tokyo Night, Dracula) con fondo propio, resaltado por rol para Go, Python, JS/TS, C-like y JSON, tema del usuario por JSON |
 | Configuración | Ventana flotante (`Ctrl+P`): tamaño de tab, salto de palabra, ancho del panel, tema — cambios en vivo y persistidos en `~/.tcode/config.json` |
@@ -178,6 +179,8 @@ de la extensión publica un cambio sin subir el campo `version` del manifest,
 el editor no lo detecta (reinstalar a mano con `--install-extension` lo trae);
 y un proveedor caído o inalcanzable no impide arrancar —se avisa por stderr y
 el editor abre igual— ni impide revisar los demás proveedores.
+| Seleccionar | `Shift`+flechas / `Ctrl+A` todo · arrastrar con el mouse · `Shift`+clic extiende |
+| Copiar / cortar / pegar | `Ctrl+C` / `Ctrl+X` / `Ctrl+V` (portapapeles del sistema) |
 
 Directorio como argumento arranca con el árbol visible y enfocado; sin
 argumento, sobre el directorio actual.

@@ -2765,6 +2765,28 @@ func TestSaveAsPromptOwnsTheMouse(t *testing.T) {
 	}
 }
 
+// TestCtrlCCopiesSelectionInsteadOfQuitting: Ctrl+C con una selección activa
+// copia (mensaje "Copiado") y el editor NO sale; sin selección, Ctrl+C dejó
+// de ser una forma de salir: la única salida es la doble presión de Escape.
+func TestCtrlCCopiesSelectionInsteadOfQuitting(t *testing.T) {
+	app, _ := newTestApp(t, "uno\ndos")
+
+	// Seleccionar la primera palabra con Shift+derechas.
+	app.handleEvent(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModShift))
+	app.handleEvent(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModShift))
+	app.handleEvent(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModShift))
+
+	if quit := press(app, tcell.KeyCtrlC); quit {
+		t.Fatal("Ctrl+C con selección no debe cerrar el editor")
+	}
+	if msg := app.statusBar.Message(); msg != "Copiado" && !strings.Contains(msg, "Error al copiar") {
+		t.Errorf("mensaje = %q, esperaba el aviso del copiado", msg)
+	}
+	if app.ws.Active() == nil {
+		t.Fatal("el editor no debe haber salido")
+	}
+}
+
 // TestDiagMessageStaysOffStatusBar: el diagnóstico ya no vive en la barra de
 // estado (decisión de producto: se muestra inline, a la derecha de cada línea
 // anotada, para ver varias a la vez). Mover el cursor por una línea anotada
@@ -3132,5 +3154,38 @@ func TestCreateEntryValidatesTheNameWithoutTheKeyboard(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Fatalf("la raíz quedó con %d entradas, se esperaba ninguna", len(entries))
+	}
+}
+
+// TestBracketedPasteInsertsTheBlockAsOneStep: el paste del TERMINAL con modo
+// bracketed (Ctrl+V en Windows Terminal) llega como EventPaste de inicio, el
+// contenido como teclas y uno de cierre. Debe entrar como un bloque —un solo
+// paso de undo— y no carácter por carácter.
+func TestBracketedPasteInsertsTheBlockAsOneStep(t *testing.T) {
+	app, _ := newTestApp(t, "fin")
+
+	// Inicio del bloque.
+	app.handleEvent(tcell.NewEventPaste(true))
+	// Contenido: "hola", salto de línea, "mundo".
+	for _, r := range "hola" {
+		app.handleEvent(tcell.NewEventKey(tcell.KeyRune, r, tcell.ModNone))
+	}
+	app.handleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	for _, r := range "mundo" {
+		app.handleEvent(tcell.NewEventKey(tcell.KeyRune, r, tcell.ModNone))
+	}
+	// Cierre: recién acá el documento cambia.
+	if got := string(app.ws.Active().GetContent()); got != "fin" {
+		t.Fatalf("contenido antes del cierre = %q, el paste no debe insertar tecla por tecla", got)
+	}
+	app.handleEvent(tcell.NewEventPaste(false))
+
+	if got := string(app.ws.Active().GetContent()); got != "hola\nmundofin" {
+		t.Fatalf("contenido tras el paste = %q, se esperaba el bloque de una vez", got)
+	}
+	// Un solo Ctrl+Z saca el bloque entero.
+	press(app, tcell.KeyCtrlZ)
+	if got := string(app.ws.Active().GetContent()); got != "fin" {
+		t.Fatalf("contenido tras un undo = %q, se esperaba el documento original", got)
 	}
 }

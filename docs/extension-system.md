@@ -37,6 +37,20 @@ igual.
 > `<root>/<proveedor>/<id>/extension.json` (namespaced, raíz de usuario) — así
 > que una extensión instalada por proveedor se carga al abrir el editor.
 
+## Selección y clipboard
+
+El editor tiene selección de texto por teclado y por mouse, y las extensiones
+pueden interactuar con ella:
+
+- **Teclado:** `Shift` + flechas/Home/End extiende la selección desde el ancla;
+  `Ctrl+A` selecciona todo; cualquier movimiento sin `Shift` la limpia.
+- **Mouse:** arrastrar con el botón 1 selecciona (gutter-aware); `Shift`+clic
+  extiende desde el ancla; un clic simple limpia y posiciona.
+- **Clipboard:** `Ctrl+C` copia la selección (o sale si no hay), `Ctrl+X` corta,
+  `Ctrl+V` pega; el portapapeles es el del sistema.
+- **Escribir reemplaza la selección** (VSCode-like): insertar/borrar con texto
+  seleccionado lo reemplaza y limpia la selección.
+
 ## Backend de scripting (Lua)
 
 Desde el hito 1, un comando declarado puede delegar su implementación a una
