@@ -54,7 +54,7 @@ func TestTabBarDrawsLabelsAndModifiedMarker(t *testing.T) {
 	s := newTestScreen(t, 40, 1)
 	drawTabBar(tb, ws, s, 40)
 
-	want := "a.txt│b.txt [+]"
+	want := "[a.txt]│b.txt [+]"
 	if got := screenLines(s)[0]; got != want {
 		t.Fatalf("fila 0 = %q, se esperaba %q", got, want)
 	}
@@ -70,8 +70,8 @@ func TestTabBarUntitledBufferShowsSinNombre(t *testing.T) {
 	s := newTestScreen(t, 40, 1)
 	drawTabBar(tb, ws, s, 40)
 
-	if got := screenLines(s)[0]; got != "(sin nombre)" {
-		t.Fatalf("fila 0 = %q, se esperaba %q", got, "(sin nombre)")
+	if got := screenLines(s)[0]; got != "[(sin nombre)]" {
+		t.Fatalf("fila 0 = %q, se esperaba %q", got, "[(sin nombre)]")
 	}
 }
 
@@ -107,8 +107,8 @@ func TestTabBarScrollShowsArrowsAndKeepsActiveVisible(t *testing.T) {
 
 	tb := NewTabBar()
 	tb.EnsureActive(ws, 15)
-	if tb.start != 2 {
-		t.Fatalf("start = %d tras EnsureActive, se esperaba 2 (lo mínimo para ver la activa)", tb.start)
+	if tb.start != 3 {
+		t.Fatalf("start = %d tras EnsureActive, se esperaba 3 (lo mínimo para ver la activa con corchetes)", tb.start)
 	}
 
 	s := newTestScreen(t, 15, 1)
@@ -120,15 +120,15 @@ func TestTabBarScrollShowsArrowsAndKeepsActiveVisible(t *testing.T) {
 	if got := cellRuneAt(s, 14, 0); got != '>' {
 		t.Fatalf("(14,0) = %q, se esperaba '>' (la última sigue fuera a la derecha)", got)
 	}
-	// La activa está visible y resaltada: "t3.txt" arranca en la columna 8.
-	if got := cellRuneAt(s, 8, 0); got != 't' {
-		t.Fatalf("(8,0) = %q, se esperaba el inicio de la pestaña activa \"t3.txt\"", got)
+	// La activa está visible y resaltada: "[t3.txt]" arranca en la columna 1.
+	if got := cellRuneAt(s, 2, 0); got != 't' {
+		t.Fatalf("(2,0) = %q, se esperaba el inicio de la pestaña activa \"[t3.txt]\"", got)
 	}
-	if !cellReverse(s, 8, 0) {
+	if !cellReverse(s, 2, 0) {
 		t.Fatal("la pestaña activa visible debe ir en estilo invertido")
 	}
 
-	want := "<t2.txt│t3.txt>"
+	want := "<[t3.txt]│t4.…>"
 	if got := screenLines(s)[0]; got != want {
 		t.Fatalf("fila 0 = %q, se esperaba %q", got, want)
 	}
@@ -173,28 +173,28 @@ func TestEnsureActiveOnEmptyWorkspaceIsHarmless(t *testing.T) {
 // corta que ese prefijo— entra entera; Draw y EnsureActive tienen que acordar
 // en la frontera justa.
 func TestTabBarWideMiddleTabStillDrawsTheActive(t *testing.T) {
-	// "x.txt" (5) + sep (1) + intermedia (20) + sep (1) + "y.txt" (5) = 32.
+	// "x.txt" (5) + sep (1) + intermedia (20) + sep (1) + "[y.txt]" (7) = 34.
 	ws := newTabWorkspace(t, "x.txt", "nombre-muy-largo.txt", "y.txt")
 	ws.SetActive(2)
 
 	tb := NewTabBar()
-	tb.EnsureActive(ws, 33)
+	tb.EnsureActive(ws, 35)
 	if tb.start != 0 {
-		t.Fatalf("start = %d, se esperaba 0 (todo entra en 33 columnas)", tb.start)
+		t.Fatalf("start = %d, se esperaba 0 (todo entra en 35 columnas)", tb.start)
 	}
 
-	s := newTestScreen(t, 33, 1)
-	drawTabBar(tb, ws, s, 33)
+	s := newTestScreen(t, 35, 1)
+	drawTabBar(tb, ws, s, 35)
 
 	if got := cellRuneAt(s, 6, 0); got != 'n' {
 		t.Fatalf("(6,0) = %q, se esperaba el inicio de la pestaña intermedia", got)
 	}
-	// La activa "y.txt" arranca en la columna 27: está visible pese a la
+	// La activa "[y.txt]" arranca en la columna 27: está visible pese a la
 	// intermedia ancha, y no hay flechas (no sobra nada a los lados).
-	if got := cellRuneAt(s, 27, 0); got != 'y' {
-		t.Fatalf("(27,0) = %q, se esperaba el inicio de la pestaña activa", got)
+	if got := cellRuneAt(s, 28, 0); got != 'y' {
+		t.Fatalf("(28,0) = %q, se esperaba el inicio de la pestaña activa", got)
 	}
-	if got := screenLines(s)[0]; got != "x.txt│nombre-muy-largo.txt│y.txt" {
+	if got := screenLines(s)[0]; got != "x.txt│nombre-muy-largo.txt│[y.txt]" {
 		t.Fatalf("fila 0 = %q", got)
 	}
 }
@@ -216,16 +216,16 @@ func TestTabBarSlidesPastAWideMiddleTab(t *testing.T) {
 	s := newTestScreen(t, 30, 1)
 	drawTabBar(tb, ws, s, 30)
 
-	// "<" en 0, la intermedia en 1..20, "y.txt" activa en 22..26: la ventana
+	// "<" en 0, la intermedia en 1..20, "[y.txt]" activa en 22..28: la ventana
 	// cabe entera desde la 1, así que a la derecha no hay nada cortado (sin
 	// '>'); la cortada a la izquierda la marca el '<'.
 	if got := cellRuneAt(s, 0, 0); got != '<' {
 		t.Fatalf("(0,0) = %q, se esperaba '<' — x.txt quedó a la izquierda", got)
 	}
-	if got := cellRuneAt(s, 22, 0); got != 'y' {
-		t.Fatalf("(22,0) = %q, se esperaba el inicio de la pestaña activa visible", got)
+	if got := cellRuneAt(s, 23, 0); got != 'y' {
+		t.Fatalf("(23,0) = %q, se esperaba el inicio de la pestaña activa visible", got)
 	}
-	if !cellReverse(s, 22, 0) {
+	if !cellReverse(s, 23, 0) {
 		t.Fatal("la pestaña activa visible debe ir en estilo invertido")
 	}
 	if got := cellRuneAt(s, 29, 0); got != ' ' {
@@ -261,12 +261,12 @@ func TestTabBarClickOnATabReturnsItsIndex(t *testing.T) {
 	ws.SetActive(0)
 	tb := NewTabBar()
 
-	// A 40 columnas: "a.txt" en 0..4, separador en 5, "b.txt" en 6..10,
-	// separador en 11, "c.txt" en 12..16.
+	// A 40 columnas con la activa entre corchetes: "[a.txt]" en 0..6,
+	// separador en 7, "b.txt" en 8..12, separador en 13, "c.txt" en 14..18.
 	for _, tc := range []struct{ x, want int }{
-		{0, 0}, {4, 0}, {5, 0}, // el separador pertenece a la pestaña anterior
-		{6, 1}, {10, 1}, {11, 1},
-		{12, 2}, {16, 2},
+		{0, 0}, {6, 0}, {7, 0}, // el separador pertenece a la pestaña anterior
+		{8, 1}, {12, 1}, {13, 1},
+		{14, 2}, {18, 2},
 	} {
 		idx, handled := tb.HandleMouse(tc.x, 0, tcell.Button1, ws, 40)
 		if !handled || idx != tc.want {

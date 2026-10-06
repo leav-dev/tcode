@@ -1373,11 +1373,15 @@ func TestRedrawComposesTabsAboveTheEditor(t *testing.T) {
 
 	app.redraw()
 
-	// El primer carácter de la etiqueta de la pestaña ("doc.txt" → 'd') va en
-	// (0,0); el primer carácter del documento vive tras el gutter de 2
-	// columnas en (2,1), la primera fila del editor.
-	if got := cellRune(app, 0, 0); got != 'd' {
-		t.Fatalf("(0,0) = %q, se esperaba 'd' (inicio de la pestaña)", got)
+	// La pestaña activa va entre corchetes: '[' en (0,0) y el primer
+	// carácter de la etiqueta ("doc.txt" → 'd') en (1,0); el primer carácter
+	// del documento vive tras el gutter de 2 columnas en (2,1), la primera
+	// fila del editor.
+	if got := cellRune(app, 0, 0); got != '[' {
+		t.Fatalf("(0,0) = %q, se esperaba '[' (corchete de la pestaña activa)", got)
+	}
+	if got := cellRune(app, 1, 0); got != 'd' {
+		t.Fatalf("(1,0) = %q, se esperaba 'd' (inicio de la pestaña)", got)
 	}
 	if got := cellRune(app, 2, 1); got != 'u' {
 		t.Fatalf("(2,1) = %q, se esperaba 'u' (inicio del documento tras el gutter)", got)
@@ -1649,8 +1653,8 @@ func TestTabsDoNotOverlapTheTree(t *testing.T) {
 
 	// Panel oculto: la pestaña arranca en la columna 0 de la fila de pestañas.
 	app.redraw()
-	if got := cellRune(app, 0, 0); got != 'd' {
-		t.Fatalf("(0,0) = %q, se esperaba 'd' (pestaña en el borde izquierdo sin panel)", got)
+	if got := cellRune(app, 0, 0); got != '[' {
+		t.Fatalf("(0,0) = %q, se esperaba '[' (corchete en el borde izquierdo sin panel)", got)
 	}
 
 	// Panel visible (24 columnas): la columna 0 de la fila queda vacía —nada
@@ -1666,15 +1670,18 @@ func TestTabsDoNotOverlapTheTree(t *testing.T) {
 	if got := cellRune(app, 23, 0); got != ' ' {
 		t.Fatalf("(23,0) = %q, se esperaba vacío: la fila del árbol no tiene pestañas", got)
 	}
-	if got := cellRune(app, 24, 0); got != 'd' {
-		t.Fatalf("(24,0) = %q, se esperaba 'd': la pestaña arranca en la columna del editor", got)
+	if got := cellRune(app, 24, 0); got != '[' {
+		t.Fatalf("(24,0) = %q, se esperaba '[': la pestaña arranca en la columna del editor", got)
+	}
+	if got := cellRune(app, 25, 0); got != 'd' {
+		t.Fatalf("(25,0) = %q, se esperaba 'd': inicio de la etiqueta tras el corchete", got)
 	}
 
 	// Ocultar de nuevo: la pestaña vuelve a la columna 0.
 	press(app, tcell.KeyCtrlB)
 	app.redraw()
-	if got := cellRune(app, 0, 0); got != 'd' {
-		t.Fatalf("(0,0) = %q, se esperaba 'd' tras ocultar el panel", got)
+	if got := cellRune(app, 0, 0); got != '[' {
+		t.Fatalf("(0,0) = %q, se esperaba '[' tras ocultar el panel", got)
 	}
 }
 
@@ -2689,7 +2696,7 @@ func TestQuitRemovesTheSessionFileWhenNoTabs(t *testing.T) {
 
 // TestClickOnATabSwitchesToIt: el clic sobre la fila de pestañas activa la
 // pestaña clickeada, como en cualquier editor. A 80 columnas con el panel
-// oculto: "a.txt" en 0..4, separador en 5, "b.txt" en 6..10.
+// oculto: "[a.txt]" en 0..6, separador en 7, "b.txt" en 8..12.
 func TestClickOnATabSwitchesToIt(t *testing.T) {
 	app, _, _ := newTwoBufferApp(t, "uno", "dos")
 	resizeApp(app, 80, 8)
@@ -2698,7 +2705,7 @@ func TestClickOnATabSwitchesToIt(t *testing.T) {
 		t.Fatalf("ActiveIndex() inicial = %d, se esperaba 0", got)
 	}
 
-	app.handleEvent(tcell.NewEventMouse(7, 0, tcell.Button1, tcell.ModNone))
+	app.handleEvent(tcell.NewEventMouse(8, 0, tcell.Button1, tcell.ModNone))
 	if got := app.ws.ActiveIndex(); got != 1 {
 		t.Fatalf("ActiveIndex() = %d tras el clic en la segunda pestaña, se esperaba 1", got)
 	}
@@ -2721,8 +2728,8 @@ func TestClickOnATabWithThePanelVisible(t *testing.T) {
 	press(app, tcell.KeyCtrlB) // panel visible: la barra arranca en x=24
 	app.redraw()
 
-	// "b.txt" ocupa 24+6 .. 24+10.
-	app.handleEvent(tcell.NewEventMouse(24+7, 0, tcell.Button1, tcell.ModNone))
+	// "[a.txt]" ocupa 24..30, separador en 31, "b.txt" en 32..36.
+	app.handleEvent(tcell.NewEventMouse(24+9, 0, tcell.Button1, tcell.ModNone))
 	if got := app.ws.ActiveIndex(); got != 1 {
 		t.Fatalf("ActiveIndex() = %d, se esperaba 1 (clic traducido por la columna del panel)", got)
 	}

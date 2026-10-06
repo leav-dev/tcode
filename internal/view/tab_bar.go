@@ -42,16 +42,20 @@ func tabLabel(buf *model.PieceTable) string {
 	return name
 }
 
-// tabLabelWidth es el ancho en celdas de la etiqueta de la pestaña i. No se
-// llama tabWidth: ese nombre ya es la constante de columnas de una tabulación
-// del editor.
+// tabLabelWidth es el ancho en celdas de la etiqueta de la pestaña i. La
+// activa suma los corchetes que la marcan («[nombre]»), como en la ventana
+// de extensiones: el layout ya reserva ese ancho y el mouse no se entera.
 func tabLabelWidth(ws *model.Workspace, i int) int {
-	return displayWidth(tabLabel(ws.BufferAt(i)))
+	w := displayWidth(tabLabel(ws.BufferAt(i)))
+	if i == ws.ActiveIndex() {
+		w += 2
+	}
+	return w
 }
 
 // Draw pinta la fila 0 entera de su superficie: las pestañas de ws. La activa
-// va en estilo invertido y las demás con el estilo por defecto; entre pestañas
-// hay un separador de una columna. Si no entran todas, la ventana (`start`) se
+// va entre corchetes con el estilo invertido y las demás con el estilo por
+// defecto; entre pestañas hay un filete de una columna. Si no entran todas, la ventana (`start`) se
 // recorre y las flechas '<' y '>' marcan que hay más a cada lado. Una pestaña
 // que no entra entera se trunca mostrando su inicio —con '…' en la última
 // celda si hay lugar— y corta la fila.
@@ -158,6 +162,9 @@ func (tb *TabBar) Draw(sc Surface, ws *model.Workspace, width int) {
 		style := th.TabIdle
 		if s.index == active {
 			style = th.TabActive
+			if !s.truncated {
+				label = "[" + label + "]"
+			}
 		}
 		if s.truncated {
 			// Se muestra el inicio de la etiqueta y la elipsis en la última
