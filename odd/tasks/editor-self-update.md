@@ -18,11 +18,15 @@ plano al arrancar (aviso en barra, sin descargar nada solo) + subcomando
 - Tests sin red (httptest con base inyectable).
 
 ## Tasks
-- [ ] `internal/update/update.go`: versión, Compare, CheckLatest, DownloadAndInstall <!-- id: 0 -->
-- [ ] `main.go`: subcomando `update` <!-- id: 1 -->
-- [ ] `.github/workflows/release.yml`: ldflags con `-X main.version` <!-- id: 2 -->
-- [ ] `internal/controller/app.go`: prefetch del chequeo + aviso en barra <!-- id: 3 -->
-- [ ] Tests (sin red) + README <!-- id: 4 -->
+- [x] `internal/update/update.go`: versión, Compare, CheckLatest, DownloadAndInstall <!-- id: 0 -->
+- [x] `main.go`: subcomando `update` <!-- id: 1 -->
+- [x] `.github/workflows/release.yml`: ldflags con `-X main.version` <!-- id: 2 -->
+- [x] `internal/controller/app.go`: prefetch del chequeo + aviso en barra <!-- id: 3 -->
+- [x] Tests (sin red) + README <!-- id: 4 -->
+
+## Evidence
+- Commit `3e6cd5c` pusheado; `go vet` + `go test ./... -race` verdes.
+- La versión viaja en `internal/update.version` (ldflags del release).
 
 ## Evidence
 - Assets: `tcode-<os>-<arch>[.exe]` + checksums.txt en releases/latest/download.
