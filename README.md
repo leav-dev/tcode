@@ -27,7 +27,14 @@ La vía más corta (requiere Go 1.25+):
 go install github.com/leav-dev/tcode@latest
 ```
 
-El binario queda en `$(go env GOPATH)/bin` (en tu caso ya está en el PATH).
+El binario queda en `$(go env GOPATH)/bin`. Si ese directorio no está en tu
+PATH, agregalo a tu `~/.bashrc` o `~/.zshrc` según tu shell y recargala
+(`source ~/.bashrc` o terminal nueva):
+
+```bash
+export PATH="$(go env GOPATH)/bin:$PATH"
+```
+
 Para actualizar, se repite el mismo comando.
 
 > Nota: `@latest` lo resuelve el proxy de Go, que cachea la lista de versiones
