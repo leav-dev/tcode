@@ -124,6 +124,7 @@ tcode                # carpeta actual
 | Seleccionar | `Shift`+flechas, `Ctrl+Shift+Left/Right` por palabra, `Ctrl+A` todo, arrastrar con mouse, `Shift+clic` extiende |
 | Copiar / cortar / pegar | `Ctrl+C` / `Ctrl+X` / `Ctrl+V` |
 | Deshacer / rehacer | `Ctrl+Z` / `Ctrl+Y` |
+| Cerrar pares | `(` `[` `{` `"` `'` cierran solos; el cierre se salta, `Backspace` borra el par, `Enter` entre pares parte con indent |
 | Salto por palabra | `Ctrl+Left` / `Ctrl+Right` (con `Shift` extiende selección) |
 | Salto de línea visual (wrap) | `Ctrl+Shift+W` |
 | Ventana de extensiones | `Ctrl+P` → **Extensiones** (`←`/`→` cambia pestaña, `Enter` instala/actualiza/borra, `r` revalida) |
