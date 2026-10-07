@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
@@ -102,6 +103,113 @@ func TestGitStatus(t *testing.T) {
 	}
 	if info.DeletedLines != 1 {
 		t.Errorf("DeletedLines: esperaba 1, obtuvo %d", info.DeletedLines)
+	}
+}
+
+// TestGitStatusBranch verifica que GitStatus informe la rama actual, y el
+// SHA corto en detached HEAD.
+func TestGitStatusBranch(t *testing.T) {
+	repoDir := setupGitRepo(t)
+
+	newApp := func() *App {
+		t.Helper()
+		s := tcell.NewSimulationScreen("UTF-8")
+		if err := s.Init(); err != nil {
+			t.Fatalf("no se pudo inicializar pantalla: %v", err)
+		}
+		s.SetSize(80, 24)
+		t.Cleanup(s.Fini)
+		app, err := NewAppWithScreen(s, filepath.Join(repoDir, "test.txt"))
+		if err != nil {
+			t.Fatalf("NewAppWithScreen falló: %v", err)
+		}
+		t.Cleanup(app.ws.CloseAll)
+		return app
+	}
+	gitOut := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repoDir
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("git %v falló: %v", args, err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+
+	// Rama normal: debe coincidir con git branch --show-current.
+	want := gitOut("branch", "--show-current")
+	if want == "" {
+		t.Fatal("el repo de prueba quedó sin rama actual")
+	}
+	info, err := newApp().GitStatus()
+	if err != nil {
+		t.Fatalf("GitStatus falló: %v", err)
+	}
+	if info.Branch != want {
+		t.Errorf("Branch: esperaba %q, obtuvo %q", want, info.Branch)
+	}
+
+	// Detached HEAD: debe caer al SHA corto.
+	cmd := exec.Command("git", "checkout", "--detach", "HEAD")
+	cmd.Dir = repoDir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git checkout --detach falló: %v\n%s", err, out)
+	}
+	wantSHA := gitOut("rev-parse", "--short", "HEAD")
+	info, err = newApp().GitStatus()
+	if err != nil {
+		t.Fatalf("GitStatus en detached falló: %v", err)
+	}
+	if info.Branch != wantSHA {
+		t.Errorf("Branch en detached: esperaba %q, obtuvo %q", wantSHA, info.Branch)
+	}
+}
+
+// TestGitStatusCommit verifica que GitStatus informe el último commit
+// (hash corto, subject, autor, fecha). Compara contra git directo para no
+// atarse al nombre de rama ni al formato local.
+func TestGitStatusCommit(t *testing.T) {
+	repoDir := setupGitRepo(t)
+
+	s := tcell.NewSimulationScreen("UTF-8")
+	if err := s.Init(); err != nil {
+		t.Fatalf("no se pudo inicializar pantalla: %v", err)
+	}
+	s.SetSize(80, 24)
+	t.Cleanup(s.Fini)
+	app, err := NewAppWithScreen(s, filepath.Join(repoDir, "test.txt"))
+	if err != nil {
+		t.Fatalf("NewAppWithScreen falló: %v", err)
+	}
+	t.Cleanup(app.ws.CloseAll)
+
+	gitOut := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repoDir
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("git %v falló: %v", args, err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+
+	info, err := app.GitStatus()
+	if err != nil {
+		t.Fatalf("GitStatus falló: %v", err)
+	}
+	if want := gitOut("rev-parse", "--short", "HEAD"); info.CommitHash != want {
+		t.Errorf("CommitHash: esperaba %q, obtuvo %q", want, info.CommitHash)
+	}
+	if want := gitOut("log", "-1", "--format=%s"); info.CommitSubject != want {
+		t.Errorf("CommitSubject: esperaba %q, obtuvo %q", want, info.CommitSubject)
+	}
+	if info.CommitAuthor == "" {
+		t.Error("CommitAuthor: esperaba no vacío")
+	}
+	if info.CommitDate == "" {
+		t.Error("CommitDate: esperaba no vacío")
 	}
 }
 
