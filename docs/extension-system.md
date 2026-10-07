@@ -178,6 +178,12 @@ No hay prompt de arranque: no se aplica nada solo, y la gestión es por la venta
   una extensión instalada o actualizada entra en la sesión en el acto.
 - **Nunca impide arrancar**: sin cambios no hay aviso; un proveedor caído se
   avisa en la barra y el editor abre igual con lo que ya está instalado.
+- **Sin falsos positivos**: lo ya listado no re-avisa. El aviso automático
+  cuenta solo las novedades nunca vistas (`proveedor/id@versión`, en
+  `~/.tcode/extensions-seen.json`); la ventana de Disponibles sigue listando
+  todo. Si el autor publica una versión nueva, la clave cambia y vuelve a
+  avisar: es realmente nueva. La revalidación manual (`r`) reporta el estado
+  completo porque fue explícita.
 
 > El chequeo vivía en `main.go` y se ejecutaba antes de abrir la TUI, así que
 > solo se veía por stdout y las extensiones se aplicaban en silencio. Después

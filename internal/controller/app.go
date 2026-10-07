@@ -175,6 +175,9 @@ type App struct {
 	// vieja que llegue tarde no puede pisar el dato fresco.
 	extPrefetchSeq int
 
+	// extSeen es el conjunto de novedades ya listadas.
+	extSeen ext.Seen
+
 	// extJobSeq numera los jobs de escritura (instalar/actualizar) y
 	// extJobRunning dice si hay uno en vuelo. Solo corre uno a la vez:
 	// clonar por red tarda segundos y dos escrituras concurrentes sobre
@@ -555,6 +558,16 @@ var configFilePath = func() string {
 	return filepath.Join(home, ".tcode", "config.json")
 }
 
+// extSeenFilePath resuelve el archivo de estado de novedades ya listadas;
+// es variable para que los tests lo apunten a un directorio temporal.
+var extSeenFilePath = func() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return ext.SeenFilePath(home)
+}
+
 // configFile es el esquema persistido de la configuración: el tamaño de la
 // tabulación, el salto de palabra (puntero: ausencia = default), el ancho
 // máximo del panel lateral del explorador, el id del tema del selector ("" =
@@ -826,18 +839,56 @@ func (a *App) handleExtSnapshot(ev extSnapshotEvent) {
 		}
 		return
 	}
-	n, m := len(a.extUpdates), len(a.extAvailable)
-	if n == 0 && m == 0 {
-		if manual {
-			a.showToast("Extensiones al día", view.ToastSuccess)
-		}
-		return // nada que ofrecer: el estado de la barra sigue siendo el de la sesión
-	}
+	n := len(a.extUpdates)
+	// Listar es ver: lo no visto se calcula ANTES de registrar (si se
+	// marcara primero, todo estaría visto y nada avisaría nunca). Tras
+	// calcular, las disponibles actuales quedan registradas para que el
+	// próximo arranque no las re-anuncie (falsos positivos). La ventana
+	// sigue mostrando TODO (a.extAvailable intacto); solo el AVISO
+	// automático se filtra a lo nunca visto. Un bump de versión cambia la
+	// clave y vuelve a avisar: es realmente nuevo.
+	unseen := ext.FilterUnseen(a.extAvailable, a.loadExtSeen())
+	a.markAvailableSeen()
 	if manual {
+		// La revalidación pedida con r reporta el estado completo con toast:
+		// fue explícita, así que el silencio confundiría.
+		m := len(a.extAvailable)
+		if n == 0 && m == 0 {
+			a.showToast("Extensiones al día", view.ToastSuccess)
+			return
+		}
 		a.showToast(extPendingNotice(n, m), view.ToastInfo)
 		return
 	}
-	a.statusBar.SetMessage(extPendingNotice(n, m))
+	if n == 0 && len(unseen) == 0 {
+		return // nada nuevo que ofrecer: el estado de la barra sigue siendo el de la sesión
+	}
+	a.statusBar.SetMessage(extPendingNotice(n, len(unseen)))
+}
+
+// loadExtSeen devuelve el conjunto de novedades ya listadas, cargándolo del
+// archivo de estado la primera vez. Un estado ausente o corrupto es conjunto
+// vacío (todo es nuevo): perder los vistos re-avisa una vez, nunca rompe el
+// arranque. Solo se toca en el hilo de los eventos.
+func (a *App) loadExtSeen() ext.Seen {
+	if a.extSeen == nil {
+		seen, _ := ext.LoadSeenFile(extSeenFilePath())
+		if seen == nil {
+			seen = make(ext.Seen)
+		}
+		a.extSeen = seen
+	}
+	return a.extSeen
+}
+
+// markAvailableSeen registra las disponibles actuales como ya listadas y las
+// persiste, podando las que ya se instalaron. Un fallo de guardado se ignora
+// en silencio: el costo es re-avisar en el próximo arranque, no un error
+// visible en cada sesión.
+func (a *App) markAvailableSeen() {
+	seen := a.loadExtSeen()
+	a.extSeen = ext.PruneSeen(ext.MarkSeen(seen, a.extAvailable), a.extInstalled)
+	_ = ext.SaveSeenFile(extSeenFilePath(), a.extSeen)
 }
 
 // extPendingNotice arma el aviso de la barra con lo que hay para mirar, sin
@@ -2887,6 +2938,9 @@ func (a *App) refreshExtData() {
 	}
 	a.extSnapshot.Installed = infos
 	a.applyExtSnapshot()
+	// Quien actúa desde la ventana ya vio las listas: lo disponible que queda
+	// no es novedad para el próximo arranque.
+	a.markAvailableSeen()
 	a.reloadExtensions()
 }
 

@@ -29,6 +29,9 @@ import (
 func TestMain(m *testing.M) {
 	themeFilePath = func() string { return filepath.Join(os.TempDir(), "tcode-test-no-theme.json") }
 	configFilePath = func() string { return filepath.Join(os.TempDir(), "tcode-test-no-config.json") }
+	// Sin archivo de vistos: cada App parte con todo como nuevo y nada se
+	// persiste entre tests (los que lo necesitan lo remapean a su TempDir).
+	extSeenFilePath = func() string { return "" }
 	extensionUserSources = func() ([]ext.Provider, string, error) {
 		return nil, filepath.Join(os.TempDir(), "tcode-test-no-extensions"), nil
 	}
