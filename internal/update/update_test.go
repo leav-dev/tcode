@@ -29,6 +29,9 @@ func TestCompare(t *testing.T) {
 		{"v1.2.3-rc1", "v1.2.3", -1},
 		{"v1.2.3", "v1.2.3-rc1", 1},
 		{"v1.2.3-rc1", "v1.2.3-rc1", 0},
+		{"preview-v0.1.3", "preview-v0.1.4", -1}, // el canal pela el prefijo
+		{"preview-v0.1.4", "preview-v0.1.3", 1},
+		{"preview-v0.1.3", "preview-v0.1.3", 0},
 	}
 	for _, c := range cases {
 		if got := Compare(c.a, c.b); got != c.want {
@@ -46,6 +49,99 @@ func TestNeedsUpdate(t *testing.T) {
 		if NeedsUpdate(tc[0], tc[1]) {
 			t.Errorf("NeedsUpdate(%q, %q) debe ser falso", tc[0], tc[1])
 		}
+	}
+	// Canal preview: el bump avisa, repetir o bajar no.
+	if !NeedsUpdate("preview-v0.1.3", "preview-v0.1.4") {
+		t.Error("bump de preview debe avisar")
+	}
+	for _, tc := range [][2]string{{"preview-v0.1.4", "preview-v0.1.4"}, {"preview-v0.1.4", "preview-v0.1.3"}} {
+		if NeedsUpdate(tc[0], tc[1]) {
+			t.Errorf("NeedsUpdate(%q, %q) debe ser falso", tc[0], tc[1])
+		}
+	}
+}
+
+// TestIsPreviewVersion: solo el prefijo preview- marca el canal.
+func TestIsPreviewVersion(t *testing.T) {
+	for _, v := range []string{"preview-v0.1.3", "preview-v1.0.0", "  preview-v0.2.0  "} {
+		if !IsPreviewVersion(v) {
+			t.Errorf("IsPreviewVersion(%q) debe ser verdadero", v)
+		}
+	}
+	for _, v := range []string{"v0.1.3", "", "v0.1.3-preview", "previa-v1"} {
+		if IsPreviewVersion(v) {
+			t.Errorf("IsPreviewVersion(%q) debe ser falso", v)
+		}
+	}
+}
+
+// TestDownloadBaseFor: estable va a latest/download; preview a download/<tag>.
+func TestDownloadBaseFor(t *testing.T) {
+	if got := DownloadBaseFor("v0.2.0"); got != downloadBase {
+		t.Fatalf("DownloadBaseFor estable = %q, esperaba downloadBase", got)
+	}
+	if got, want := DownloadBaseFor("preview-v0.9.1"), "https://github.com/leav-dev/tcode/releases/download/preview-v0.9.1"; got != want {
+		t.Fatalf("DownloadBaseFor preview = %q, esperaba %q", got, want)
+	}
+}
+
+// fakePreviewReleases levanta un fake con lista de releases (la estable
+// primera, como la API: lo más nuevo primero) y descarga del preview bajo
+// /download/<tag>/, que es lo que DownloadBaseFor deriva en tests.
+func fakePreviewReleases(t *testing.T, asset string, bin []byte) string {
+	t.Helper()
+	sum := sha256.Sum256(bin)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/releases", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `[{"tag_name":"v9.9.9"},{"tag_name":"preview-v0.9.1"},{"tag_name":"v0.1.0"}]`)
+	})
+	mux.HandleFunc("/download/preview-v0.9.1/"+asset, func(w http.ResponseWriter, r *http.Request) {
+		w.Write(bin)
+	})
+	mux.HandleFunc("/download/preview-v0.9.1/checksums.txt", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "%s  %s\n", hex.EncodeToString(sum[:]), asset)
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	return server.URL
+}
+
+// TestCheckLatestPreviewTomaElPrimerPreview: salta la estable aunque venga
+// primera en la lista.
+func TestCheckLatestPreviewTomaElPrimerPreview(t *testing.T) {
+	name, err := assetName()
+	if err != nil {
+		t.Skipf("sin asset para esta plataforma: %v", err)
+	}
+	oldAPI := apiBase
+	apiBase = fakePreviewReleases(t, name, []byte("binario"))
+	defer func() { apiBase = oldAPI }()
+	tag, err := CheckLatestPreview(context.Background())
+	if err != nil {
+		t.Fatalf("CheckLatestPreview: %v", err)
+	}
+	if tag != "preview-v0.9.1" {
+		t.Fatalf("tag = %q, esperaba preview-v0.9.1", tag)
+	}
+}
+
+// TestUpdateToDescargaDelCanalPreview: con la base derivada baja el asset
+// del preview y lo verifica, sin tocar latest.
+func TestUpdateToDescargaDelCanalPreview(t *testing.T) {
+	name, err := assetName()
+	if err != nil {
+		t.Skipf("sin asset para esta plataforma: %v", err)
+	}
+	pinBases(t, fakePreviewReleases(t, name, []byte("nuevo-preview")))
+	dest := filepath.Join(t.TempDir(), "tcode")
+	if err := os.WriteFile(dest, []byte("viejo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateTo(context.Background(), "preview-v0.9.1", dest, DownloadBaseFor("preview-v0.9.1")); err != nil {
+		t.Fatalf("UpdateTo: %v", err)
+	}
+	if got, _ := os.ReadFile(dest); string(got) != "nuevo-preview" {
+		t.Fatalf("destino = %q, esperaba el binario del preview", got)
 	}
 }
 

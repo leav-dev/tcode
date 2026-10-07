@@ -2,6 +2,8 @@ package view
 
 import (
 	"strings"
+	"unicode"
+	"unicode/utf8"
 	"unsafe"
 
 	"github.com/gdamore/tcell/v2"
@@ -445,6 +447,150 @@ func (v *EditorView) moveHorizontal(delta int) bool {
 	return true
 }
 
+// isWordRune dice si la runa forma palabra (letras, dígitos y `_`). Todo lo
+// demás —espacios y símbolos como `.`, `(`, `;`— es separador. Es la base del
+// salto por palabra estilo VSCode.
+func isWordRune(r rune) bool {
+	return r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r)
+}
+
+// moveWord salta una palabra entera en la dirección indicada, cruzando líneas.
+// Hacia adelante va al fin de la palabra (fin de la actual si estoy dentro,
+// fin de la próxima si estoy en separadores); hacia atrás es el espejo (al
+// inicio). Devuelve false si el cursor ya está en el extremo del documento.
+func (v *EditorView) moveWord(delta int) bool {
+	if delta > 0 {
+		return v.moveWordRight()
+	}
+	return v.moveWordLeft()
+}
+
+// wordEndForward devuelve el fin de la palabra que arranca en col: col debe
+// apuntar a una runa de palabra. Es el paso común de moveWordRight.
+func wordEndForward(content []byte, col int) int {
+	for col < len(content) {
+		r, size := utf8.DecodeRune(content[col:])
+		if !isWordRune(r) {
+			break
+		}
+		col += size
+	}
+	return col
+}
+
+// skipSeparatorsForward cruza separadores desde col y frena en la próxima
+// runa de palabra o al fin de la línea.
+func skipSeparatorsForward(content []byte, col int) int {
+	for col < len(content) {
+		r, size := utf8.DecodeRune(content[col:])
+		if isWordRune(r) {
+			break
+		}
+		col += size
+	}
+	return col
+}
+
+// wordStartBackward devuelve el inicio de la palabra que termina en col: col
+// debe estar justo después de una runa de palabra. Es el espejo de
+// wordEndForward para moveWordLeft.
+func wordStartBackward(content []byte, col int) int {
+	for col > 0 {
+		r, size := utf8.DecodeLastRune(content[:col])
+		if !isWordRune(r) {
+			break
+		}
+		col -= size
+	}
+	return col
+}
+
+// skipSeparatorsBackward cruza separadores hacia atrás desde col y frena al
+// fin de la palabra anterior o al inicio de la línea.
+func skipSeparatorsBackward(content []byte, col int) int {
+	for col > 0 {
+		r, size := utf8.DecodeLastRune(content[:col])
+		if isWordRune(r) {
+			break
+		}
+		col -= size
+	}
+	return col
+}
+
+func (v *EditorView) moveWordRight() bool {
+	v.breakTypingGroup()
+	startLine, startCol := v.cursor.Line, v.cursor.ByteCol
+	line, col := startLine, startCol
+	for {
+		content := v.model.LineContent(line)
+		if col < len(content) {
+			r, _ := utf8.DecodeRune(content[col:])
+			if isWordRune(r) {
+				// Dentro de palabra: consumir hasta su fin y frenar ahí.
+				col = wordEndForward(content, col)
+				break
+			}
+			// En separadores: cruzarlos y, si hay palabra después en la
+			// misma línea, consumirla hasta su fin.
+			col = skipSeparatorsForward(content, col)
+			if col < len(content) {
+				col = wordEndForward(content, col)
+				break
+			}
+			// Línea sin más palabras: cruzar a la siguiente.
+		}
+		if line+1 >= v.lineCount() {
+			break
+		}
+		line++
+		col = 0
+	}
+	if line == startLine && col == startCol {
+		return false
+	}
+	v.cursor.Line = line
+	v.cursor.ByteCol = col
+	v.cursor.desiredCol = columnAt(v.model.LineContent(line), col)
+	return true
+}
+
+func (v *EditorView) moveWordLeft() bool {
+	v.breakTypingGroup()
+	startLine, startCol := v.cursor.Line, v.cursor.ByteCol
+	line, col := startLine, startCol
+	for {
+		content := v.model.LineContent(line)
+		if col > 0 {
+			r, _ := utf8.DecodeLastRune(content[:col])
+			if isWordRune(r) {
+				// Dentro o al fin de palabra: retroceder hasta su inicio.
+				col = wordStartBackward(content, col)
+				break
+			}
+			// En separadores: cruzarlos hacia atrás.
+			col = skipSeparatorsBackward(content, col)
+			if col > 0 {
+				col = wordStartBackward(content, col)
+				break
+			}
+			// Nada antes en esta línea: cruzar a la anterior.
+		}
+		if line == 0 {
+			break
+		}
+		line--
+		col = len(v.model.LineContent(line))
+	}
+	if line == startLine && col == startCol {
+		return false
+	}
+	v.cursor.Line = line
+	v.cursor.ByteCol = col
+	v.cursor.desiredCol = columnAt(v.model.LineContent(line), col)
+	return true
+}
+
 // moveVertical mueve el cursor de línea conservando la columna deseada, que es lo
 // que evita que el cursor se pegue al final de las líneas cortas.
 func (v *EditorView) moveVertical(delta int) bool {
@@ -868,8 +1014,14 @@ func (v *EditorView) handleKey(ev *tcell.EventKey) bool {
 	case tcell.KeyDown:
 		return v.moveWithShift(shift, func() bool { return v.moveVertical(1) })
 	case tcell.KeyLeft:
+		if ev.Modifiers()&tcell.ModCtrl != 0 {
+			return v.moveWithShift(shift, func() bool { return v.moveWord(-1) })
+		}
 		return v.moveWithShift(shift, func() bool { return v.moveHorizontal(-1) })
 	case tcell.KeyRight:
+		if ev.Modifiers()&tcell.ModCtrl != 0 {
+			return v.moveWithShift(shift, func() bool { return v.moveWord(1) })
+		}
 		return v.moveWithShift(shift, func() bool { return v.moveHorizontal(1) })
 	case tcell.KeyPgUp:
 		// Ctrl+PageUp/PageDown cambian de pestaña y son del controlador, no

@@ -364,13 +364,91 @@ func ThemeNames() []string {
 
 // ThemeByID devuelve el tema del id dado y true, o el tema cero y false si el
 // id no está en el registry (los callers distinguen el Custom por el id vacío).
+// También resuelve los temas aportados por extensiones (RegisterExtensionThemes).
 func ThemeByID(id string) (Theme, bool) {
 	for _, nt := range themeRegistry {
 		if nt.id == id {
 			return nt.build(), true
 		}
 	}
+	for _, et := range extensionThemes {
+		if et.id == id {
+			return et.theme, true
+		}
+	}
 	return Theme{}, false
+}
+
+// ExtensionTheme es un tema aportado por una extensión, ya parseado: el id y
+// la etiqueta del manifest, el id de la extensión que lo aporta (origen
+// visible en la ventana de temas) y la paleta construida con LoadTheme.
+type ExtensionTheme struct {
+	ID    string
+	Label string
+	From  string
+	Data  []byte
+}
+
+// extensionThemes son los temas de extensiones cargados (el controlador los
+// registra tras Discover y tras cada recarga de extensiones).
+var extensionThemes []extensionThemeEntry
+
+type extensionThemeEntry struct {
+	id    string
+	label string
+	from  string
+	theme Theme
+}
+
+// RegisterExtensionThemes reemplaza los temas de extensiones cargados por los
+// dados: cada Data se parsea con LoadTheme (un JSON roto jamás rompe el
+// editor, como el theme.json del usuario). Gana la primera ante ids
+// duplicados (built-ins incluidos: una extensión no puede pisar una paleta
+// del editor); los duplicados entre extensiones se ignoran en orden de lista.
+func RegisterExtensionThemes(themes []ExtensionTheme) {
+	extensionThemes = nil
+	seen := make(map[string]bool, len(themes))
+	for _, th := range themes {
+		if th.ID == "" || seen[th.ID] {
+			continue
+		}
+		if _, ok := ThemeByID(th.ID); ok {
+			continue
+		}
+		seen[th.ID] = true
+		extensionThemes = append(extensionThemes, extensionThemeEntry{
+			id:    th.ID,
+			label: th.Label,
+			from:  th.From,
+			theme: LoadTheme(th.Data),
+		})
+	}
+}
+
+// ThemeOption es una fila de la ventana de temas: el id ("" = Custom), el
+// nombre visible y el origen ("Incluido", el id de la extensión o "Tu archivo").
+type ThemeOption struct {
+	ID     string
+	Name   string
+	Source string
+}
+
+// AvailableThemes lista TODOS los temas del editor en el orden de la ventana:
+// las paletas incluidas, los temas de extensiones y el Custom al final.
+func AvailableThemes() []ThemeOption {
+	opts := make([]ThemeOption, 0, len(themeRegistry)+len(extensionThemes)+1)
+	for _, nt := range themeRegistry {
+		opts = append(opts, ThemeOption{ID: nt.id, Name: nt.name, Source: "Incluido"})
+	}
+	for _, et := range extensionThemes {
+		label := et.label
+		if label == "" {
+			label = et.id
+		}
+		opts = append(opts, ThemeOption{ID: et.id, Name: label, Source: et.from})
+	}
+	opts = append(opts, ThemeOption{ID: "", Name: "Custom", Source: "Tu archivo"})
+	return opts
 }
 
 // LoadTheme construye un tema desde el JSON de configuración del usuario

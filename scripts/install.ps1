@@ -6,6 +6,7 @@
 # (registry 'User' scope, case-insensitive dedupe; never touches system PATH).
 # The checksum is verified against checksums.txt before installing.
 #
+#   -Preview       install the latest `preview-v*` pre-release (no Go needed)
 #   -Build         compile from the current checkout instead (devs, needs Go)
 #   -Uninstall     remove the binary and the PATH entry
 #   -InstallDir    custom install directory (tests / power users)
@@ -16,6 +17,7 @@
 param(
     [string]$InstallDir = "",
     [switch]$Build,
+    [switch]$Preview,
     [switch]$NoPath,
     [switch]$Uninstall
 )
@@ -24,6 +26,30 @@ $ErrorActionPreference = "Stop"
 $TcodeHome   = Join-Path $HOME ".tcode"
 $InstallPath = if ($InstallDir) { $InstallDir } else { Join-Path $TcodeHome "bin" }
 $ReleaseBase = if ($env:TCODE_RELEASE_BASE) { $env:TCODE_RELEASE_BASE } else { "https://github.com/leav-dev/tcode/releases/latest/download" }
+
+if ($Preview -and $Build) {
+    Write-Error "-Preview y -Build son incompatibles (preview descarga binario, build compila local)."
+    exit 1
+}
+
+if ($Preview -and -not $env:TCODE_RELEASE_BASE) {
+    $releasesUrl = "https://api.github.com/repos/leav-dev/tcode/releases"
+    try {
+        $releases = Invoke-RestMethod -Uri $releasesUrl -UseBasicParsing
+    } catch {
+        Write-Error "No se pudo consultar $releasesUrl (sin red o GitHub no responde): $($_.Exception.Message)"
+        exit 1
+    }
+    $previewTag = ($releases | Where-Object { $_.tag_name -like 'preview-v*' } | Select-Object -ExpandProperty tag_name -First 1)
+    if (-not $previewTag) {
+        Write-Error "No hay tags preview-v* en $releasesUrl."
+        exit 1
+    }
+    $ReleaseBase = "https://github.com/leav-dev/tcode/releases/download/$previewTag"
+    Write-Host "Preview: $previewTag ($ReleaseBase)"
+} elseif ($Preview -and $env:TCODE_RELEASE_BASE) {
+    Write-Host "Preview pedido pero TCODE_RELEASE_BASE explícito gana: $ReleaseBase"
+}
 
 function Get-TcodePathEntry {
     param([string]$UserPath)

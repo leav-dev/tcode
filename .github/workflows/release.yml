@@ -3,10 +3,25 @@ name: release
 # Builds tcode for the supported platforms on every v* tag and uploads the
 # binaries plus a checksums.txt as GitHub release assets. The installers
 # download them (scripts/install.sh, scripts/install.ps1).
+#
+# Preview versions use `preview-v*` tags (e.g. preview-v0.1.3) from the
+# preview branch: they build the same assets but the GitHub release is
+# marked as prerelease (stable users and `tcode update`, which reads
+# releases/latest, never see them) and GoReleaser/homebrew is skipped.
+# Never tag a preview as `v*-preview`: it would match `v*` and ship as
+# a stable release.
+#
+# Two phases on purpose: the matrix builds each binary and uploads it as a
+# workflow artifact, and a single publish job merges them into ONE release
+# with ONE checksums.txt (bare filenames, no dist/ prefix). Uploading
+# dist/* from every matrix job races: each job overwrites the other's
+# checksums.txt and the release ends up with a single random entry, which
+# breaks checksum verification for the other platforms.
 on:
   push:
     tags:
       - 'v*'
+      - 'preview-v*'
 
 permissions:
   contents: write
@@ -21,15 +36,19 @@ jobs:
           - target: linux-amd64
             goos: linux
             goarch: amd64
+            ext: ''
           - target: darwin-amd64
             goos: darwin
             goarch: amd64
+            ext: ''
           - target: darwin-arm64
             goos: darwin
             goarch: arm64
+            ext: ''
           - target: windows-amd64
             goos: windows
             goarch: amd64
+            ext: '.exe'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -43,16 +62,42 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           mkdir -p dist
-          out="dist/tcode-${{ matrix.target }}"
-          if [ "${{ matrix.goos }}" = "windows" ]; then out="$out.exe"; fi
-          go build -trimpath -ldflags "-s -w -X github.com/leav-dev/tcode/internal/update.version=${{ github.ref_name }}" -o "$out" .
-          sha256sum "$out" >> dist/checksums.txt
-      - uses: softprops/action-gh-release@v2
+          go build -trimpath -ldflags "-s -w -X github.com/leav-dev/tcode/internal/update.version=${{ github.ref_name }}" -o "dist/tcode-${{ matrix.target }}${{ matrix.ext }}" .
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: asset-${{ matrix.target }}
+          path: dist/tcode-${{ matrix.target }}${{ matrix.ext }}
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: asset-*
+          merge-multiple: true
+          path: dist
+      - name: Write checksums
+        shell: bash
+        run: |
+          ( cd dist && sha256sum tcode-* > checksums.txt )
+          cat dist/checksums.txt
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
         with:
           files: dist/*
           fail_on_unmatched_files: true
+          # Preview tags ship as prerelease so releases/latest (stable
+          # users, installers, `tcode update`) never points at them.
+          prerelease: ${{ startsWith(github.ref_name, 'preview-') }}
 
   release:
+    # Stable only: GoReleaser parses the tag as semver (preview-v* is
+    # not) and bumps the homebrew formula, which must track stable.
+    if: ${{ !startsWith(github.ref_name, 'preview-') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

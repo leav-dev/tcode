@@ -345,14 +345,19 @@ func (m *ConfigMenu) HandleEvent(ev tcell.Event) (handled, changed bool) {
 			return true, m.mutate(1)
 		case tcell.KeyEnter, tcell.KeyLF:
 			// Enter en un entero y en el enum no hace nada (delta 0); en un
-			// booleano alterna; en una fila de acción dispara la acción. Siempre
-			// es de la ventana: la ventana NO se cierra y changed queda false,
-			// porque una acción no es una mutación de la configuración.
+			// booleano alterna; en una fila de acción dispara la acción. La
+			// excepción es la fila Theme: Enter abre la ventana de temas (la
+			// lista completa: incluidas, de extensiones y Custom). Siempre
+			// es de la ventana: no se cierra y changed queda false.
 			if it := configItems()[m.cursor]; it.kind == ConfigAction {
 				m.pending = it.action
 				if m.onAction != nil {
 					return true, m.onAction(it.label)
 				}
+				return true, false
+			}
+			if it := configItems()[m.cursor]; it.label == "Theme" {
+				m.pending = "themes"
 				return true, false
 			}
 			return true, m.mutate(0)

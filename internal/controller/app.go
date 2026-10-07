@@ -145,6 +145,13 @@ type App struct {
 	configMenu   *view.ConfigMenu
 	configActive bool
 
+	// themeMenu es la ventana flotante que lista TODOS los temas (paletas
+	// incluidas, temas de extensiones y Custom) y themeMenuActive dice si
+	// está abierta. Se abre con Enter sobre la fila Theme de la configuración;
+	// Enter aplica el tema del cursor y cierra, lo ajeno cierra descartando.
+	themeMenu       *view.ThemeMenu
+	themeMenuActive bool
+
 	// extManager es la ventana flotante de gestión de extensiones (la fila
 	// "Extensiones" de la de configuración) y extActive dice si está abierta.
 	// Como las demás overlays posee el teclado mientras está activa: Enter
@@ -175,6 +182,9 @@ type App struct {
 	// vieja que llegue tarde no puede pisar el dato fresco.
 	extPrefetchSeq int
 
+	// extSeen es el conjunto de novedades ya listadas.
+	extSeen ext.Seen
+
 	// extJobSeq numera los jobs de escritura (instalar/actualizar) y
 	// extJobRunning dice si hay uno en vuelo. Solo corre uno a la vez:
 	// clonar por red tarda segundos y dos escrituras concurrentes sobre
@@ -182,6 +192,14 @@ type App struct {
 	// EventInterrupt (como el prefetch): el loop nunca se bloquea.
 	extJobSeq     int
 	extJobRunning bool
+
+	// extInstallQueue son las instalaciones en espera: en vez de rechazarse
+	// con un job en vuelo quedan EN COLA y al terminar el vigente arranca
+	// sola la siguiente, siempre DE A UNA (un solo clone a la vez, bajo
+	// consumo). Hay DOS orígenes —la ventana (por proveedor) y el panel del
+	// catálogo— y un solo funnel: el drenado ejecuta cada pedido por su
+	// camino. Solo se toca en el hilo de los eventos.
+	extInstallQueue []extPendingInstall
 
 	// extRefreshManual dice si la lectura en vuelo la pidió el usuario con
 	// la tecla r (y no el arranque): el resultado manual SIEMPRE se reporta
@@ -280,6 +298,7 @@ func NewAppWithScreen(s tcell.Screen, path string) (*App, error) {
 		explorer:     view.NewFileBrowser(),
 		menu:         view.NewTabMenu(),
 		configMenu:   view.NewConfigMenu(),
+		themeMenu:    view.NewThemeMenu(),
 		extPanel:     view.NewExtensionsPanel(),
 		extManager:   view.NewExtManager(),
 		ext:          ext.NewManager(),
@@ -521,6 +540,7 @@ func (a *App) applyTheme() {
 	a.explorer.SetTheme(a.theme)
 	a.menu.SetTheme(a.theme)
 	a.configMenu.SetTheme(a.theme)
+	a.themeMenu.SetTheme(a.theme)
 	a.extPanel.SetTheme(a.theme)
 	a.extManager.SetTheme(a.theme)
 	for _, ed := range a.editors {
@@ -545,6 +565,16 @@ var configFilePath = func() string {
 		return ""
 	}
 	return filepath.Join(home, ".tcode", "config.json")
+}
+
+// extSeenFilePath resuelve el archivo de estado de novedades ya listadas;
+// es variable para que los tests lo apunten a un directorio temporal.
+var extSeenFilePath = func() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return ext.SeenFilePath(home)
 }
 
 // configFile es el esquema persistido de la configuración: el tamaño de la
@@ -681,12 +711,19 @@ var providersConfigPath = func() (string, error) {
 // resuelve las fuentes acá, en el arranque, y manda a la goroutine SOLO la
 // lectura remota.
 
-// editorUpdateCheck pregunta el tag del último release del editor; es
-// variable para que los tests la sustituyan por un fake sin red. Misma
-// razón para editorOwnVersion: la versión propia en tests es dev.
+// editorUpdateCheck pregunta el tag del último release DEL CANAL del editor:
+// un build preview solo mira previews (jamás avisa la estable como update),
+// el resto mira releases/latest. Es variable para que los tests la sustituyan
+// por un fake sin red. Misma razón para editorOwnVersion: la versión propia
+// en tests es dev.
 var (
-	editorUpdateCheck = func(ctx context.Context) (string, error) { return update.CheckLatest(ctx) }
-	editorOwnVersion  = update.CurrentVersion
+	editorUpdateCheck = func(ctx context.Context) (string, error) {
+		if update.IsPreviewVersion(update.CurrentVersion()) {
+			return update.CheckLatestPreview(ctx)
+		}
+		return update.CheckLatest(ctx)
+	}
+	editorOwnVersion = update.CurrentVersion
 )
 
 // editorUpdateEvent es el sobre con el que la goroutine del chequeo del
@@ -818,18 +855,56 @@ func (a *App) handleExtSnapshot(ev extSnapshotEvent) {
 		}
 		return
 	}
-	n, m := len(a.extUpdates), len(a.extAvailable)
-	if n == 0 && m == 0 {
-		if manual {
-			a.showToast("Extensiones al día", view.ToastSuccess)
-		}
-		return // nada que ofrecer: el estado de la barra sigue siendo el de la sesión
-	}
+	n := len(a.extUpdates)
+	// Listar es ver: lo no visto se calcula ANTES de registrar (si se
+	// marcara primero, todo estaría visto y nada avisaría nunca). Tras
+	// calcular, las disponibles actuales quedan registradas para que el
+	// próximo arranque no las re-anuncie (falsos positivos). La ventana
+	// sigue mostrando TODO (a.extAvailable intacto); solo el AVISO
+	// automático se filtra a lo nunca visto. Un bump de versión cambia la
+	// clave y vuelve a avisar: es realmente nuevo.
+	unseen := ext.FilterUnseen(a.extAvailable, a.loadExtSeen())
+	a.markAvailableSeen()
 	if manual {
+		// La revalidación pedida con r reporta el estado completo con toast:
+		// fue explícita, así que el silencio confundiría.
+		m := len(a.extAvailable)
+		if n == 0 && m == 0 {
+			a.showToast("Extensiones al día", view.ToastSuccess)
+			return
+		}
 		a.showToast(extPendingNotice(n, m), view.ToastInfo)
 		return
 	}
-	a.statusBar.SetMessage(extPendingNotice(n, m))
+	if n == 0 && len(unseen) == 0 {
+		return // nada nuevo que ofrecer: el estado de la barra sigue siendo el de la sesión
+	}
+	a.statusBar.SetMessage(extPendingNotice(n, len(unseen)))
+}
+
+// loadExtSeen devuelve el conjunto de novedades ya listadas, cargándolo del
+// archivo de estado la primera vez. Un estado ausente o corrupto es conjunto
+// vacío (todo es nuevo): perder los vistos re-avisa una vez, nunca rompe el
+// arranque. Solo se toca en el hilo de los eventos.
+func (a *App) loadExtSeen() ext.Seen {
+	if a.extSeen == nil {
+		seen, _ := ext.LoadSeenFile(extSeenFilePath())
+		if seen == nil {
+			seen = make(ext.Seen)
+		}
+		a.extSeen = seen
+	}
+	return a.extSeen
+}
+
+// markAvailableSeen registra las disponibles actuales como ya listadas y las
+// persiste, podando las que ya se instalaron. Un fallo de guardado se ignora
+// en silencio: el costo es re-avisar en el próximo arranque, no un error
+// visible en cada sesión.
+func (a *App) markAvailableSeen() {
+	seen := a.loadExtSeen()
+	a.extSeen = ext.PruneSeen(ext.MarkSeen(seen, a.extAvailable), a.extInstalled)
+	_ = ext.SaveSeenFile(extSeenFilePath(), a.extSeen)
 }
 
 // extPendingNotice arma el aviso de la barra con lo que hay para mirar, sin
@@ -886,6 +961,26 @@ func (a *App) loadExtensions() {
 		enabled = append(enabled, e)
 	}
 	a.ext.Reload(enabled)
+	a.refreshExtensionThemes(enabled)
+}
+
+// refreshExtensionThemes carga los temas aportados por las extensiones
+// habilitadas y los registra en la vista: la ventana de temas los lista junto
+// a las paletas incluidas y el Custom, y themeFor los resuelve. Un tema roto
+// no impide el arranque ni la recarga: se avisa una vez en la barra y el
+// resto se carga igual. Tras registrar se reaplica el tema (el activo pudo
+// dejar de existir y debe caer al Custom).
+func (a *App) refreshExtensionThemes(enabled []ext.Extension) {
+	loaded, errs := ext.LoadThemes(enabled)
+	for _, err := range errs {
+		a.statusBar.SetMessage("Tema ignorado: " + err.Error())
+	}
+	inputs := make([]view.ExtensionTheme, 0, len(loaded))
+	for _, th := range loaded {
+		inputs = append(inputs, view.ExtensionTheme{ID: th.ID, Label: th.Label, Data: th.Data, From: th.From})
+	}
+	view.RegisterExtensionThemes(inputs)
+	a.applyTheme()
 }
 
 // reloadExtensions recarga las extensiones y vuelve a disparar la activación
@@ -1392,6 +1487,21 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 			return false
 		}
 
+		// La ventana de temas abierta posee el teclado, como las demás
+		// overlays. Enter aplica el tema del cursor (y lo persiste como un
+		// cambio de configuración); Escape, Ctrl+C y CUALQUIER otra tecla
+		// ajena la cierra descartando.
+		if a.themeMenuActive {
+			handled, selected := a.themeMenu.HandleEvent(ev)
+			if !handled {
+				a.themeMenuActive = false // cualquier tecla ajena —Escape incluido— cierra y descarta
+			} else if selected {
+				a.applyThemeSelection()
+			}
+			a.redraw()
+			return false
+		}
+
 		// La ventana de configuración abierta posee el teclado: (true, changed)
 		// es una tecla suya (y changed dice si una fila se mutó, para persistir
 		// y reencuadrar), y (false, false) —Escape, Ctrl+C y CUALQUIER otra
@@ -1403,9 +1513,13 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 			handled, changed := a.configMenu.HandleEvent(ev)
 			if !handled {
 				a.configActive = false // cualquier tecla ajena —Escape incluido— cierra y descarta
-			} else if a.configMenu.Activated() != "" {
+			} else if act := a.configMenu.Activated(); act != "" {
 				a.configActive = false
-				a.openExtManager()
+				if act == "themes" {
+					a.openThemeMenu()
+				} else {
+					a.openExtManager()
+				}
 			} else if changed {
 				a.configChanged()
 			}
@@ -1764,9 +1878,14 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 				action, handled := a.explorer.HandleEvent(tcell.NewEventMouse(x, y-tabBarHeight, ev.Buttons(), ev.Modifiers()))
 				if handled {
 					a.explorerFocused = true
-					// El pie del panel pide la creación contextual: el mismo flujo
-					// que Ctrl+N / Ctrl+Shift+N.
+					// El pie del panel pide la creación contextual (el mismo flujo
+					// que Ctrl+N / Ctrl+Shift+N); la flecha de un dir colapsado pide
+					// su expansión con E/S (igual que Enter con el foco en el panel).
 					switch action {
+					case view.ActionActivate:
+						a.activateExplorerEntry()
+					case view.ActionExpand:
+						a.explorerExpand()
 					case view.ActionNewFile:
 						a.promptCreateEntry(false)
 					case view.ActionNewFolder:
@@ -2178,6 +2297,18 @@ func (a *App) redraw() {
 		a.configMenu.Draw(a.editorSurf)
 	}
 
+	// La ventana de temas flota centrada sobre el área del editor, como la de
+	// configuración: se compone DESPUÉS (la tapa si alguna vez coincidieran)
+	// con la misma superficie recortada a su región (themeRegion).
+	if a.themeMenuActive {
+		if a.editorSurf == nil {
+			a.editorSurf = view.NewOffsetSurface(a.screen)
+		}
+		x, y, w, h := a.themeRegion()
+		a.editorSurf.SetRegion(x, y, w, h)
+		a.themeMenu.Draw(a.editorSurf)
+	}
+
 	// El panel de extensiones flota centrado sobre el área del editor, como
 	// la ventana de configuración: se compone DESPUÉS del editor (tapa el
 	// documento, sin tocar pestañas ni barra) con la misma superficie
@@ -2235,12 +2366,20 @@ func (a *App) resizeEditors() {
 	}
 }
 
+// hiddenToolDirs son los únicos nombres que el árbol nunca muestra: estado
+// de la herramienta, no código (.git el control de versiones, .tcode la
+// sesión y las extensiones del proyecto). El resto de las convenciones con
+// punto SÍ entra: .github, .gitignore, .vscode y demás dotfiles son código o
+// config que se edita, no estado que ocultar.
+var hiddenToolDirs = map[string]bool{".git": true, ".tcode": true}
+
 // readEntries lee un directorio con las reglas del árbol: directorios primero
-// y luego archivos, ambos alfabéticos (os.ReadDir ya ordena), ocultos
-// incluidos; lo que no es directorio ni archivo regular queda fuera. Sin la
-// entrada sintética "..": la base del árbol es la cima fija de la sesión y
-// nunca se sube. El error se devuelve para que el llamador decida —el arranque
-// muestra el primer nivel vacío, la expansión es un no-op silencioso—.
+// y luego archivos, ambos alfabéticos (os.ReadDir ya ordena); lo que no es
+// directorio ni archivo regular queda fuera, igual que los directorios de
+// hiddenToolDirs. Sin la entrada sintética "..": la base del árbol es la cima
+// fija de la sesión y nunca se sube. El error se devuelve para que el llamador
+// decida —el arranque muestra el primer nivel vacío, la expansión es un no-op
+// silencioso—.
 func readEntries(dir string) ([]view.Entry, error) {
 	infos, err := os.ReadDir(dir)
 	if err != nil {
@@ -2249,11 +2388,11 @@ func readEntries(dir string) ([]view.Entry, error) {
 
 	var dirs, files []view.Entry
 	for _, de := range infos {
-		// Los dotfiles (nombres que arrancan con ".") no entran al árbol: .git,
-		// .tcode y el resto son estado de la herramienta, no código. El filtro
-		// vive acá, en la ÚNICA puerta de datos del disco a la vista: cubre el
-		// nivel raíz y toda expansión de subdirectorio con la misma regla.
-		if strings.HasPrefix(de.Name(), ".") {
+		// Solo el estado conocido de la herramienta queda fuera; las demás
+		// convenciones con punto se listan. El filtro vive acá, en la ÚNICA
+		// puerta de datos del disco a la vista: cubre el nivel raíz y toda
+		// expansión de subdirectorio con la misma regla.
+		if hiddenToolDirs[de.Name()] {
 			continue
 		}
 		info, err := de.Info()
@@ -2693,37 +2832,40 @@ func (a *App) setCatalog(res catalogResult) {
 }
 
 // installCatalogEntries instala las extensiones del catálogo indicadas por id
-// (Enter del panel): busca cada entrada en el último catálogo consultado, la
-// instala con installExtension (clon real si no hay fake) y deja el resultado
-// en la barra: "N instaladas" o "N instaladas · M fallidas". Nunca crashea:
-// cada error se acumula al contador de fallidas. Después refresca el flag
-// Installed de las entradas instaladas y vuelve a depositar la lista en el
-// panel.
+// (Enter del panel) por LA MISMA cola que la ventana: cada id conocido entra
+// como pedido de catálogo —si hay un job en vuelo espera su turno, si no la
+// primera arranca de inmediato— y las entregas marcan su entrada como
+// Installed una por una, con su toast de éxito o error. Solo los ids que ya
+// no están en el catálogo quedan fuera en el acto (desconocidos, no fallidos):
+// sin entrada no hay nada que encolar. El panel NO se congela: el clon corre
+// en segundo plano como los demás jobs.
 func (a *App) installCatalogEntries(ids []string) {
-	root := userExtensionRoot()
-	var installed, failed int
+	// unknown cuenta los ids que ya no están en el catálogo: sin entrada no
+	// hay nada que encolar (no son jobs fallidos, son pedidos sin destino).
+	unknown := 0
 	for _, id := range ids {
-		idx := a.catalogIndex(id)
-		if idx < 0 {
-			failed++
+		if a.catalogIndex(id) < 0 {
+			unknown++
 			continue
 		}
-		entry := a.catalog[idx]
-		if _, err := installExtension("https://github.com/"+ext.CatalogRepo, entry.Subdir, root, nil); err != nil {
-			a.statusBar.SetMessage("Error instalando " + entry.ID + ": " + err.Error())
-			failed++
+		if a.extJobRunning {
+			a.enqueueInstall(extPendingInstall{catalogID: id})
 			continue
 		}
-		a.catalog[idx].Installed = true
-		installed++
+		a.startCatalogInstallJob(id)
 	}
-	switch {
-	case failed == 0:
-		a.statusBar.SetMessage(fmt.Sprintf("%d instaladas", installed))
-	default:
-		a.statusBar.SetMessage(fmt.Sprintf("%d instaladas · %d fallidas", installed, failed))
+	// Solo se avisan cuando son TODOS: mezclados con encolados o en curso,
+	// el aviso taparía el trabajo que sí avanza.
+	if unknown == len(ids) && unknown > 0 {
+		a.statusBar.SetMessage(plural(unknown, "desconocida", "desconocidas"))
 	}
-	// Refresca el panel con los flags Installed nuevos.
+	a.redraw()
+}
+
+// refreshCatalogPanel repone las filas del panel del catálogo desde el último
+// catálogo consultado: lo que cambia tras instalar es el flag Installed, no
+// las entradas.
+func (a *App) refreshCatalogPanel() {
 	entries := make([]view.ExtensionEntry, len(a.catalog))
 	for i, e := range a.catalog {
 		entries[i] = view.ExtensionEntry{
@@ -2781,6 +2923,41 @@ func (a *App) configChanged() {
 	width, height := a.screen.Size()
 	a.explorer.Resize(panelWidth(width), editorHeight(height))
 	a.tabBar.EnsureActive(a.ws, a.tabBarWidth())
+}
+
+// openThemeMenu abre la ventana de temas: la dimensiona a su región y la
+// llena con TODOS los temas (incluidas, de extensiones y Custom), con el
+// cursor sobre el activo. Sin espacio para el editor no abre. El caller
+// redibuja (la ventana de configuración que la abre).
+func (a *App) openThemeMenu() {
+	width, _ := a.screen.Size()
+	if width-a.explorerColumn() <= 0 {
+		return
+	}
+	a.themeMenuActive = true
+	a.themeMenu.Open()
+	_, _, w, h := a.themeRegion()
+	a.themeMenu.Resize(w, h)
+}
+
+// applyThemeSelection aplica el tema del cursor de la ventana de temas y la
+// cierra: fija el id activo ("" = Custom), lo aplica en vivo a todas las
+// vistas y lo persiste como un cambio de configuración. El caller redibuja.
+func (a *App) applyThemeSelection() {
+	opt, ok := a.themeMenu.Selected()
+	a.themeMenuActive = false
+	if !ok {
+		return
+	}
+	view.SetActiveThemeID(opt.ID)
+	a.configChanged()
+}
+
+// themeRegion devuelve la región de la ventana de temas: centrada en el área
+// del editor como la de configuración, con alto según las filas (marco + una
+// por tema) topado por el máximo y el área del editor.
+func (a *App) themeRegion() (x, y, w, h int) {
+	return a.centeredRegion(len(view.AvailableThemes()) + 2)
 }
 
 // extManagerWidth es el ancho con el que se dimensiona la ventana de
@@ -2872,6 +3049,9 @@ func (a *App) refreshExtData() {
 	}
 	a.extSnapshot.Installed = infos
 	a.applyExtSnapshot()
+	// Quien actúa desde la ventana ya vio las listas: lo disponible que queda
+	// no es novedad para el próximo arranque.
+	a.markAvailableSeen()
 	a.reloadExtensions()
 }
 
@@ -3055,13 +3235,33 @@ func (a *App) clearExtArtifacts(id string) {
 	a.syncStatus()
 }
 
+// extPendingInstall es un pedido de instalación en espera en extInstallQueue:
+// o viene de la ventana (item, que se instala por proveedor con InstallByID)
+// o del panel del catálogo (catalogID, que se clona del repo del catálogo).
+// El drenado ejecuta cada uno por su camino, siempre DE A UNO: un solo funnel
+// secuencial para no pisar la raíz ni clonar en paralelo.
+type extPendingInstall struct {
+	item      view.ExtItem
+	catalogID string
+}
+
+// label nombra el pedido para avisos y dedup: la ref proveedor/id de la
+// ventana, el id del catálogo para el panel.
+func (p extPendingInstall) label() string {
+	if p.catalogID != "" {
+		return p.catalogID
+	}
+	return p.item.Ref
+}
+
 // extJobKind dice qué escritura corre un job en segundo plano: instalar una
-// extensión suelta o actualizar las que difieren. Borrar es disco local y
-// queda sincrónico.
+// extensión de la ventana, instalar una entrada del catálogo o actualizar las
+// que difieren. Borrar es disco local y queda sincrónico.
 type extJobKind int
 
 const (
 	extJobInstall extJobKind = iota
+	extJobCatalogInstall
 	extJobUpdate
 )
 
@@ -3076,21 +3276,31 @@ type extJobEvent struct {
 	Kind    extJobKind
 	Ref     string
 	Applied int
-	ErrMsg  string
+	// CatalogID es el id de la entrada del catálogo que instaló un job de
+	// catálogo: con él se marca la entrada como Installed al entregar.
+	CatalogID string
+	ErrMsg    string
 }
 
 // handleExtJob aplica el resultado de un job de escritura: limpia el flag de
 // job en vuelo, repinta la ventana desde el disco local (el catálogo no
 // cambió, así que no se relee el proveedor) con recarga de la sesión, y
 // avisa con toast. La ventana NO se cierra: el usuario sigue donde estaba.
+// El job de catálogo va por su propio camino (handleCatalogInstallJob): la
+// ventana de extensiones (snapshot de proveedores) no cambia con ese job.
 func (a *App) handleExtJob(ev extJobEvent) {
 	if ev.Seq < a.extJobSeq {
 		return // llegó un job viejo: el dato fresco ya está en caché
 	}
 	a.extJobRunning = false
+	if ev.Kind == extJobCatalogInstall {
+		a.handleCatalogInstallJob(ev)
+		return
+	}
 	a.refreshExtData()
 	if ev.ErrMsg != "" {
 		a.showToast(ev.Ref+": "+ev.ErrMsg, view.ToastError)
+		a.drainInstallQueue()
 		return
 	}
 	switch ev.Kind {
@@ -3103,6 +3313,105 @@ func (a *App) handleExtJob(ev extJobEvent) {
 			a.showToast(plural(ev.Applied, "actualización aplicada", "actualizaciones aplicadas"), view.ToastSuccess)
 		}
 	}
+	// La vigente terminó: si hay pedidos en espera arranca sola la
+	// siguiente, de a una. El drenado vale para ambos kinds porque la
+	// actualización también tomaba el lock de escritura.
+	a.drainInstallQueue()
+}
+
+// handleCatalogInstallJob aplica el resultado de un job de catálogo: marca
+// SU entrada como Installed y repinta SU panel, con su toast de éxito o
+// error. Es el camino que handleExtJob deriva para ev.Kind ==
+// extJobCatalogInstall.
+func (a *App) handleCatalogInstallJob(ev extJobEvent) {
+	if ev.ErrMsg != "" {
+		a.showToast(ev.Ref+": "+ev.ErrMsg, view.ToastError)
+	} else {
+		// El catálogo marca SU entrada y repinta SU panel: la ventana de
+		// extensiones (snapshot de proveedores) no cambió con este job.
+		if idx := a.catalogIndex(ev.CatalogID); idx >= 0 {
+			a.catalog[idx].Installed = true
+		}
+		a.refreshCatalogPanel()
+		a.showToast("Instalada: "+ev.Ref, view.ToastSuccess)
+	}
+	a.drainInstallQueue()
+}
+
+// enqueueInstall agrega el pedido a la cola (con dedup por label) y avisa
+// en la barra. Devuelve false si ya estaba pedido o la cola está llena: en
+// ambos casos el pedido NO entra dos veces ni sin cota.
+func (a *App) enqueueInstall(p extPendingInstall) bool {
+	for _, q := range a.extInstallQueue {
+		if q.label() == p.label() {
+			a.statusBar.SetMessage(p.label() + " ya está en cola")
+			return false
+		}
+	}
+	if len(a.extInstallQueue) >= maxInstallQueue {
+		a.statusBar.SetMessage("cola de instalación llena: esperá a que termine la vigente")
+		return false
+	}
+	a.extInstallQueue = append(a.extInstallQueue, p)
+	a.statusBar.SetMessage(fmt.Sprintf("En cola: %s (%d en espera)", p.label(), len(a.extInstallQueue)))
+	return true
+}
+
+// drainInstallQueue arranca el siguiente pedido encolado, si hay y no corre
+// ningún job. Cada pedido va por su camino (ventana por proveedor, panel por
+// clon del catálogo), siempre DE A UNO: el job que arranca levanta el flag y
+// la cadena sigue hasta vaciar la cola. Si las fuentes de la ventana no se
+// resuelven, la cola se descarta con el error en la barra: reintentar es
+// pedir de nuevo, no adivinar.
+func (a *App) drainInstallQueue() {
+	if a.extJobRunning || len(a.extInstallQueue) == 0 {
+		return
+	}
+	next := a.extInstallQueue[0]
+	a.extInstallQueue = a.extInstallQueue[1:]
+	if next.catalogID != "" {
+		a.startCatalogInstallJob(next.catalogID)
+		return
+	}
+	providers, userRoot, err := extensionUserSources()
+	if err != nil {
+		a.extInstallQueue = nil
+		a.statusBar.SetMessage("cola de instalación descartada: " + err.Error())
+		return
+	}
+	a.startInstallJob(next.item, providers, userRoot, startupExtFetch)
+}
+
+// startCatalogInstallJob lanza en segundo plano la instalación de una entrada
+// del catálogo: clona su subdir del repo del catálogo con installExtension
+// (variable para los fakes de test) y entrega por EventInterrupt como los
+// demás jobs. Subdir, raíz e instalador se capturan POR VALOR en el hilo de
+// los eventos: la goroutine no relee el catálogo, que puede cambiar mientras
+// clona.
+func (a *App) startCatalogInstallJob(id string) {
+	a.extJobSeq++
+	seq := a.extJobSeq
+	a.extJobRunning = true
+	idx := a.catalogIndex(id)
+	subdir, root := "", userExtensionRoot()
+	if idx >= 0 {
+		subdir = a.catalog[idx].Subdir
+	}
+	installer := installExtension
+	msg := "Instalando " + id + " en segundo plano…"
+	if n := len(a.extInstallQueue); n > 0 {
+		msg += fmt.Sprintf(" (%d en cola)", n)
+	}
+	a.showToast(msg, view.ToastInfo)
+	go func() {
+		ev := extJobEvent{Seq: seq, Kind: extJobCatalogInstall, Ref: id, CatalogID: id}
+		if idx < 0 {
+			ev.ErrMsg = "ya no está en el catálogo"
+		} else if _, err := installer("https://github.com/"+ext.CatalogRepo, subdir, root, nil); err != nil {
+			ev.ErrMsg = err.Error()
+		}
+		a.screen.PostEvent(tcell.NewEventInterrupt(ev))
+	}()
 }
 
 // startInstallJob lanza la instalación en una goroutine y vuelve de
@@ -3114,7 +3423,11 @@ func (a *App) startInstallJob(item view.ExtItem, providers []ext.Provider, userR
 	a.extJobSeq++
 	seq := a.extJobSeq
 	a.extJobRunning = true
-	a.showToast("Instalando "+item.Ref+" en segundo plano…", view.ToastInfo)
+	msg := "Instalando " + item.Ref + " en segundo plano…"
+	if n := len(a.extInstallQueue); n > 0 {
+		msg += fmt.Sprintf(" (%d en cola)", n)
+	}
+	a.showToast(msg, view.ToastInfo)
 	go func() {
 		res, err := ext.InstallByID(item.ID, providers, userRoot, fetcher, nil)
 		ev := extJobEvent{Seq: seq, Kind: extJobInstall, Ref: item.Ref}
@@ -3168,16 +3481,23 @@ func (a *App) promptInstallExtension(item view.ExtItem) {
 	})
 }
 
+// maxInstallQueue acota las instalaciones en espera: una cola sin tope es
+// memoria sin cota, y 32 sobra para extensiones (pedir más es esperar a que
+// se vacíe, no seguir acumulando).
+const maxInstallQueue = 32
+
 // installExtension instala la extensión por id con la MISMA ruta que la CLI
 // (ext.InstallByID, no una reinvención): resolución por orden de proveedores y
 // validación del manifest antes de tocar el destino. Corre en SEGUNDO PLANO
 // (startInstallJob): esta función vuelve de inmediato y el editor sigue
 // respondiendo mientras git clona; el resultado llega por EventInterrupt y
-// repinta la ventana con recarga de la sesión. Si ya hay un job en vuelo se
-// rechaza: dos escrituras concurrentes sobre la raíz se pisarían.
+// repinta la ventana con recarga de la sesión. Si ya hay un job en vuelo la
+// instalación queda EN COLA en vez de rechazarse: al terminar el vigente
+// arranca sola la siguiente, siempre de a una (dos escrituras concurrentes
+// sobre la raíz se pisarían y N clones a la vez suben el consumo).
 func (a *App) installExtension(item view.ExtItem) error {
 	if a.extJobRunning {
-		a.statusBar.SetMessage("ya hay una instalación en curso")
+		a.enqueueInstall(extPendingInstall{item: item})
 		return nil
 	}
 	providers, userRoot, err := extensionUserSources()

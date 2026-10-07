@@ -21,12 +21,127 @@ import (
 // proveedores manejan ~/.tcode/providers.json, la lista de fuentes desde la
 // que se resuelve cada id de extensión.
 const (
+	flagHelp             = "--help"
+	flagVersion          = "--version"
 	flagInstallExtension = "--install-extension"
 	flagListExtensions   = "--list-extensions"
 	flagRemoveExtension  = "--remove-extension"
 	flagAddProvider      = "--add-provider"
 	flagApproveProvider  = "--approve-provider"
 )
+
+// commandGuideLines es la guía de comandos que se muestra ante un flag
+// desconocido: qué se puede pedir sin abrir el editor.
+var commandGuideLines = []string{
+	"--help · muestra esta ayuda",
+	"--version · muestra la versión del editor",
+	"--install-extension <id> · instala una extensión por id",
+	"--list-extensions · lista las instaladas",
+	"--remove-extension <proveedor:id|id> · borra una extensión",
+	"--add-provider <url-git|carpeta> · registra una fuente",
+	"--approve-provider <nombre> · confía en una fuente",
+	"update · actualiza el editor a lo último de su canal",
+	"uninstall · desinstala el editor (binario + PATH, conserva config y extensiones)",
+}
+
+// versionLine arma la línea de versión sin imprimirla (testeable): la
+// inyectada por ldflags en releases, o marca de dev sin ella.
+func versionLine() string {
+	if v := update.CurrentVersion(); v != "" {
+		return "tcode " + v
+	}
+	return "tcode dev (build de desarrollo)"
+}
+
+// guideCommands extrae el comando de cada línea de la guía (su primer
+// campo): es lo que suggestFlag compara, parseado en un solo lugar en vez
+// de rebanar las líneas en cada pasada.
+func guideCommands() []string {
+	cmds := make([]string, 0, len(commandGuideLines))
+	for _, line := range commandGuideLines {
+		cmds = append(cmds, strings.Fields(line)[0])
+	}
+	return cmds
+}
+
+// suggestFlag propone el comando más parecido al flag desconocido: primero
+// por prefijo (en ambas direcciones); si no hay, por distancia de edición
+// ≤ 2 (typos como --versoin). "" si no hay nada cercano.
+func suggestFlag(unknown string) string {
+	u := strings.TrimLeft(unknown, "-")
+	if u == "" {
+		return ""
+	}
+	cmds := guideCommands()
+	for _, cmd := range cmds {
+		bare := strings.TrimLeft(cmd, "-")
+		if strings.HasPrefix(bare, u) || strings.HasPrefix(u, bare) {
+			return cmd
+		}
+	}
+	best, bestDist := "", 3
+	for _, cmd := range cmds {
+		if d := editDistance(u, strings.TrimLeft(cmd, "-")); d < bestDist {
+			best, bestDist = cmd, d
+		}
+	}
+	if bestDist > 2 {
+		return ""
+	}
+	return best
+}
+
+// editDistance es Levenshtein básico sobre runas: los comandos son cortos y
+// la guía es chica, así que no necesita optimización.
+func editDistance(a, b string) int {
+	ar, br := []rune(a), []rune(b)
+	prev := make([]int, len(br)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(ar); i++ {
+		cur := make([]int, len(br)+1)
+		cur[0] = i
+		for j := 1; j <= len(br); j++ {
+			cost := 0
+			if ar[i-1] != br[j-1] {
+				cost = 1
+			}
+			cur[j] = min(prev[j]+1, cur[j-1]+1, prev[j-1]+cost)
+		}
+		prev = cur
+	}
+	return prev[len(br)]
+}
+
+// printCommandGuide imprime el glosario de comandos en w (stdout para
+// --help, stderr para la guía de error). Es la misma lista en ambos lados
+// para que nunca diverjan.
+func printCommandGuide(w *os.File) {
+	fmt.Fprintln(w, "comandos permitidos:")
+	for _, line := range commandGuideLines {
+		fmt.Fprintf(w, "  %s\n", line)
+	}
+}
+
+// printHelp muestra uso + glosario (--help / -h) y sale sin abrir el editor.
+func printHelp() {
+	fmt.Println("tcode — editor de texto en la terminal")
+	fmt.Println("uso: tcode [archivo|carpeta] [flag] [...]")
+	printCommandGuide(os.Stdout)
+}
+
+// printUnknownFlagGuide reporta un flag que no existe con la guía de lo
+// permitido (y una sugerencia si hay algo cercano). Un flag con typo antes
+// caía al editor como si fuera un archivo a abrir; ahora falla fuerte.
+func printUnknownFlagGuide(flag string) {
+	fmt.Fprintf(os.Stderr, "tcode: flag desconocido: %q\n", flag)
+	if s := suggestFlag(flag); s != "" {
+		fmt.Fprintf(os.Stderr, "tcode: ¿quisiste decir %s?\n", s)
+	}
+	fmt.Fprintln(os.Stderr, "tcode:")
+	printCommandGuide(os.Stderr)
+}
 
 func main() {
 	if code, ok := runCommandMode(); ok {
@@ -155,28 +270,70 @@ func runCommandMode() (int, bool) {
 			return 1, true
 		}
 		return 0, true
+
+	case flagHelp, "-h":
+		printHelp()
+		return 0, true
+
+	case flagVersion, "-v":
+		fmt.Println(versionLine())
+		return 0, true
+
+	case "uninstall":
+		exe, err := os.Executable()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "tcode: resolviendo el ejecutable: %v\n", err)
+			return 1, true
+		}
+		removed, err := update.Uninstall(home, exe)
+		if len(removed) > 0 {
+			fmt.Println("Eliminado:")
+			for _, r := range removed {
+				fmt.Printf("  %s\n", r)
+			}
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "tcode: desinstalación parcial: %v\n", err)
+			return 1, true
+		}
+		fmt.Println("abrí una terminal nueva para salir del PATH de esta sesión")
+		return 0, true
+	}
+
+	if strings.HasPrefix(args[0], "-") {
+		printUnknownFlagGuide(args[0])
+		return 1, true
 	}
 
 	return 0, false
 }
 
-// runUpdate actualiza el editor al último release: pregunta el tag, compara
-// con la versión propia y, si hay algo nuevo, descarga el asset verificado y
-// reemplaza el ejecutable en uso. Ya estar al día no es error: se informa y
-// listo. Sin versión propia conocida igual funciona: instala latest a ciegas
-// y avisa que no pudo comparar.
+// runUpdate actualiza el editor al último release DE SU CANAL: pregunta el
+// tag, compara con la versión propia y, si hay algo nuevo, descarga el asset
+// verificado y reemplaza el ejecutable en uso. Un build preview solo mira
+// previews (jamás se degrada a estable); el resto mira releases/latest como
+// siempre. Ya estar al día no es error: se informa y listo. Sin versión
+// propia conocida igual funciona: instala latest a ciegas y avisa que no
+// pudo comparar.
 func runUpdate() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	tag, err := update.CheckLatest(ctx)
+	current := update.CurrentVersion()
+	check := update.CheckLatest
+	if update.IsPreviewVersion(current) {
+		check = update.CheckLatestPreview
+	}
+	tag, err := check(ctx)
 	if err != nil {
 		return err
 	}
 	if tag == "" {
+		if update.IsPreviewVersion(current) {
+			return fmt.Errorf("no se pudo saber el último preview (sin red, rate limit o aún no hay previews)")
+		}
 		return fmt.Errorf("no se pudo saber el último release (sin red o rate limit)")
 	}
-	current := update.CurrentVersion()
 	if current != "" && !update.NeedsUpdate(current, tag) {
 		fmt.Printf("Ya estás al día: %s\n", current)
 		return nil
@@ -190,7 +347,7 @@ func runUpdate() error {
 	} else {
 		fmt.Printf("Actualizando %s → %s en %s\n", current, tag, exe)
 	}
-	if err := update.Update(ctx, tag, exe); err != nil {
+	if err := update.UpdateTo(ctx, tag, exe, update.DownloadBaseFor(tag)); err != nil {
 		return err
 	}
 	fmt.Printf("Actualizado a %s\n", tag)

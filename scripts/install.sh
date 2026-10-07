@@ -6,6 +6,7 @@
 # directory to the PATH of the current user (marked block in ~/.zshrc and
 # ~/.bashrc, idempotent).
 #
+#   --preview     install the latest `preview-v*` pre-release (no Go needed)
 #   --build      compile from the current checkout instead (devs)
 #   --uninstall  remove the binary and the PATH entries
 #
@@ -35,11 +36,66 @@ uninstall() {
   exit 0
 }
 
-if [ "${1:-}" = "--uninstall" ]; then
-  uninstall
+PREVIEW=0
+for arg in "$@"; do
+  case "${arg}" in
+    --uninstall) uninstall ;;
+    --build) BUILD_LOCAL=1 ;;
+    --preview) PREVIEW=1 ;;
+    *)
+      echo "error: unknown argument ${arg} (expected --preview, --build or --uninstall)" >&2
+      exit 1
+      ;;
+  esac
+done
+
+if [ "${PREVIEW}" = "1" ] && [ "${BUILD_LOCAL}" = "1" ]; then
+  echo "error: --preview y --build son incompatibles (preview descarga binario, build compila local)." >&2
+  exit 1
 fi
-if [ "${1:-}" = "--build" ] || [ "${BUILD_LOCAL}" = "1" ]; then
-  BUILD_LOCAL=1
+
+# resolve_preview_tag: latest `preview-v*` tag via the GitHub releases API.
+# No jq: python3 first, grep/sed fallback. Fails with a clear message
+# when offline or when there are no preview releases.
+resolve_preview_tag() {
+  local api_url="https://api.github.com/repos/leav-dev/tcode/releases"
+  local json
+  if ! json="$(curl -fsSL --max-time 20 "${api_url}" 2>/dev/null)"; then
+    echo "error: no se pudo consultar ${api_url} (sin red o GitHub no responde)." >&2
+    exit 1
+  fi
+  local tag=""
+  if command -v python3 >/dev/null 2>&1; then
+    tag="$(printf '%s' "${json}" | python3 -c 'import json,sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+for r in data:
+    t = r.get("tag_name", "")
+    if isinstance(t, str) and t.startswith("preview-v"):
+        print(t)
+        break
+' 2>/dev/null)" || tag=""
+  fi
+  if [ -z "${tag}" ]; then
+    tag="$(printf '%s' "${json}" | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"preview-v[^"]*"' | head -n 1 | sed -E 's/^"tag_name"[[:space:]]*:[[:space:]]*"//;s/"$//')"
+  fi
+  if [ -z "${tag}" ]; then
+    echo "error: no hay tags preview-v* en ${api_url}." >&2
+    exit 1
+  fi
+  printf '%s' "${tag}"
+}
+
+if [ "${PREVIEW}" = "1" ]; then
+  if [ -n "${TCODE_RELEASE_BASE:-}" ]; then
+    echo "Preview pedido pero TCODE_RELEASE_BASE explícito gana: ${RELEASE_BASE}"
+  else
+    PREVIEW_TAG="$(resolve_preview_tag)"
+    RELEASE_BASE="https://github.com/leav-dev/tcode/releases/download/${PREVIEW_TAG}"
+    echo "Preview: ${PREVIEW_TAG} (${RELEASE_BASE})"
+  fi
 fi
 
 # build_local: compile from the checkout (requires Go 1.25+).
@@ -83,7 +139,12 @@ release_install() {
   else
     BIN_FILE="tcode"
   fi
-  ASSET="tcode-${OS}-${ARCH}$( [ "${OS}" = "windows" ] && printf '.exe' )"
+  # Ojo con `set -e`: un `$( [ .. ] && .. )` cuyo test falla mata el script
+  # (el fallo se hereda dentro de la sustitución), así que el sufijo va con if.
+  ASSET="tcode-${OS}-${ARCH}"
+  if [ "${OS}" = "windows" ]; then
+    ASSET="${ASSET}.exe"
+  fi
 
   command -v curl >/dev/null 2>&1 || {
     echo "error: curl is required to download the release binary." >&2
@@ -99,7 +160,11 @@ release_install() {
   curl -fSL -o "${TMP_DIR}/checksums.txt" "${RELEASE_BASE}/checksums.txt"
 
   # Verify sha256 from checksums.txt (sha256sum on Linux/Git Bash, shasum on macOS).
-  ( cd "${TMP_DIR}" && grep "${ASSET}" checksums.txt > checksums.line )
+  # El grep con `set -e` moría en silencio si el asset no figura: fallo fuerte.
+  ( cd "${TMP_DIR}" && grep -F -- "${ASSET}" checksums.txt > checksums.line ) || {
+    echo "error: ${ASSET} no figura en checksums.txt de ${RELEASE_BASE}." >&2
+    exit 1
+  }
   if command -v sha256sum >/dev/null 2>&1; then
     ( cd "${TMP_DIR}" && sha256sum -c checksums.line )
   else

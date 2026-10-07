@@ -29,6 +29,9 @@ import (
 func TestMain(m *testing.M) {
 	themeFilePath = func() string { return filepath.Join(os.TempDir(), "tcode-test-no-theme.json") }
 	configFilePath = func() string { return filepath.Join(os.TempDir(), "tcode-test-no-config.json") }
+	// Sin archivo de vistos: cada App parte con todo como nuevo y nada se
+	// persiste entre tests (los que lo necesitan lo remapean a su TempDir).
+	extSeenFilePath = func() string { return "" }
 	extensionUserSources = func() ([]ext.Provider, string, error) {
 		return nil, filepath.Join(os.TempDir(), "tcode-test-no-extensions"), nil
 	}
@@ -1456,16 +1459,17 @@ func panelRow(app *App, y int) string {
 	return strings.TrimRight(sb.String(), " ")
 }
 
-// TestReadEntriesSkipsDotfiles: readEntries —la única puerta de datos del
-// disco al árbol— NO lista los dotfiles: carpetas y archivos que arrancan
-// con "." (.git/, .tcode/, .oculto) quedan fuera, en el nivel raíz y en
-// cualquier subdirectorio. Es el contrato "el árbol muestra código, no el
-// estado de la herramienta".
-func TestReadEntriesSkipsDotfiles(t *testing.T) {
+// TestReadEntriesHidesOnlyToolDirs: readEntries —la única puerta de datos del
+// disco al árbol— oculta SOLO el estado conocido de la herramienta (.git/,
+// .tcode/); las demás convenciones con punto (.github/, .gitignore, .oculto)
+// se listan, en el nivel raíz y en cualquier subdirectorio. Es el contrato
+// "el árbol muestra código, no el estado de la herramienta".
+func TestReadEntriesHidesOnlyToolDirs(t *testing.T) {
 	dir := t.TempDir()
-	for _, name := range []string{".git", ".tcode", "docs", "visible.txt", ".oculto.txt"} {
+	dirs := map[string]bool{".git": true, ".tcode": true, ".github": true, "docs": true}
+	for _, name := range []string{".git", ".tcode", ".github", "docs", "visible.txt", ".gitignore", ".oculto.txt"} {
 		p := filepath.Join(dir, name)
-		if name == ".git" || name == ".tcode" || name == "docs" {
+		if dirs[name] {
 			if err := os.MkdirAll(p, 0o755); err != nil {
 				t.Fatalf("no se pudo crear el dir %s: %v", name, err)
 			}
@@ -1474,6 +1478,9 @@ func TestReadEntriesSkipsDotfiles(t *testing.T) {
 		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
 			t.Fatalf("no se pudo crear %s: %v", name, err)
 		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".github", "release.yml"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 
 	entries, err := readEntries(dir)
@@ -1484,25 +1491,21 @@ func TestReadEntriesSkipsDotfiles(t *testing.T) {
 	for _, e := range entries {
 		names = append(names, e.Name)
 	}
-	want := []string{"docs", "visible.txt"} // dirs primero, sin dotfiles
+	// Dirs primero (.github, docs), después archivos (.gitignore, .oculto.txt,
+	// visible.txt); .git y .tcode fuera.
+	want := []string{".github", "docs", ".gitignore", ".oculto.txt", "visible.txt"}
 	if got := strings.Join(names, ","); got != strings.Join(want, ",") {
-		t.Fatalf("readEntries = %v, se esperaba %v (los dotfiles no se listan)", names, want)
+		t.Fatalf("readEntries = %v, se esperaba %v (solo .git/.tcode se ocultan)", names, want)
 	}
 
-	// Un subdirectorio con dotfiles tampoco los muestra.
-	sub := filepath.Join(dir, "docs")
-	if err := os.MkdirAll(filepath.Join(sub, ".escondido"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sub, "nota.md"), []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	// Un subdirectorio con dotfiles los muestra (salvo estado conocido).
+	sub := filepath.Join(dir, ".github")
 	entries, err = readEntries(sub)
 	if err != nil {
 		t.Fatalf("readEntries del subdir falló: %v", err)
 	}
-	if len(entries) != 1 || entries[0].Name != "nota.md" {
-		t.Fatalf("readEntries del subdir = %+v, se esperaba solo nota.md", entries)
+	if len(entries) != 1 || entries[0].Name != "release.yml" {
+		t.Fatalf("readEntries del subdir = %+v, se esperaba solo release.yml", entries)
 	}
 }
 
@@ -4187,21 +4190,86 @@ func pollEvent(app *App) <-chan tcell.Event {
 	return ch
 }
 
-// TestExtensionWindowRejectsConcurrentJob: con un job en vuelo, otra
-// instalación no se encola: se avisa en la barra y el job vigente sigue.
-func TestExtensionWindowRejectsConcurrentJob(t *testing.T) {
+// TestExtensionWindowQueuesConcurrentInstall: con un job en vuelo, otra
+// instalación no se rechaza: queda EN COLA, se avisa en la barra con cuántas
+// hay en espera y el job vigente sigue. Pedir dos veces la misma no duplica.
+func TestExtensionWindowQueuesConcurrentInstall(t *testing.T) {
 	resetConfigVars(t)
 	app, _, _ := extWindowFixture(t, true)
 	app.extJobRunning = true
 	item := view.ExtItem{Kind: view.ExtItemInstall, ID: "tcode.tema", Provider: "remoto", Ref: "remoto/tcode.tema"}
 	if err := app.installExtension(item); err != nil {
-		t.Fatalf("rechazar un job concurrente no es error: %v", err)
+		t.Fatalf("encolar un job concurrente no es error: %v", err)
 	}
-	if !strings.Contains(app.statusBar.Message(), "en curso") {
-		t.Fatalf("el mensaje es %q, debe avisar que hay una instalación en curso", app.statusBar.Message())
+	if len(app.extInstallQueue) != 1 {
+		t.Fatalf("la cola tiene %d pedidos, se esperaba 1", len(app.extInstallQueue))
+	}
+	if !strings.Contains(app.statusBar.Message(), "En cola") {
+		t.Fatalf("el mensaje es %q, debe avisar que quedó en cola", app.statusBar.Message())
 	}
 	if !app.extJobRunning {
 		t.Fatal("el job vigente debe seguir en vuelo")
+	}
+	// La misma dos veces no duplica: ya está pedida.
+	if err := app.installExtension(item); err != nil {
+		t.Fatalf("repetir un pedido encolado no es error: %v", err)
+	}
+	if len(app.extInstallQueue) != 1 {
+		t.Fatalf("la cola tiene %d pedidos, la repetida no debe duplicar", len(app.extInstallQueue))
+	}
+	if !strings.Contains(app.statusBar.Message(), "ya está en cola") {
+		t.Fatalf("el mensaje es %q, debe avisar que ya está en cola", app.statusBar.Message())
+	}
+}
+
+// TestExtensionWindowDrainsInstallQueue: lo encolado arranca solo al terminar
+// el job vigente, DE A UNA: con dos novedades pedidas seguidas, ambas quedan
+// instaladas en disco sin otro pedido de por medio y la cola queda vacía.
+func TestExtensionWindowDrainsInstallQueue(t *testing.T) {
+	resetConfigVars(t)
+	src := startupProviderFixture(t, map[string][3]string{
+		"linter": {"tcode.linter", "Linter", "1.0.0"},
+		"tema":   {"tcode.tema", "Tema", "2.0.0"},
+		"otra":   {"tcode.otra", "Otra", "3.0.0"},
+	})
+	userRoot := t.TempDir()
+	p := ext.Provider{Name: "remoto", Source: src, Approved: true}
+	if _, err := ext.InstallByID("tcode.linter", []ext.Provider{p}, userRoot, extFetchFake(src), nil); err != nil {
+		t.Fatalf("InstallByID del linter: %v", err)
+	}
+	pinExtSources(t, []ext.Provider{p}, userRoot)
+	app, _ := newTestApp(t, "uno")
+	awaitExtSnapshot(t, app)
+
+	first := view.ExtItem{Kind: view.ExtItemInstall, ID: "tcode.tema", Provider: "remoto", Ref: "remoto/tcode.tema"}
+	second := view.ExtItem{Kind: view.ExtItemInstall, ID: "tcode.otra", Provider: "remoto", Ref: "remoto/tcode.otra"}
+	if err := app.installExtension(first); err != nil {
+		t.Fatalf("installExtension: %v", err)
+	}
+	if !app.extJobRunning {
+		t.Fatal("el primer pedido debe lanzar el job en segundo plano")
+	}
+	// El segundo llega con el primero en vuelo: queda en cola.
+	if err := app.installExtension(second); err != nil {
+		t.Fatalf("installExtension: %v", err)
+	}
+	if len(app.extInstallQueue) != 1 {
+		t.Fatalf("la cola tiene %d pedidos, se esperaba 1", len(app.extInstallQueue))
+	}
+	// Un solo await consume la cadena entera: al terminar cada job el
+	// manejador arranca solo el siguiente, así que el flag sigue en vuelo
+	// hasta vaciar la cola.
+	awaitExtJob(t, app)
+	if app.extJobRunning {
+		t.Fatal("vaciada la cola no debe quedar ningún job en vuelo")
+	}
+	if len(app.extInstallQueue) != 0 {
+		t.Fatalf("la cola tiene %d pedidos, debe quedar vacía", len(app.extInstallQueue))
+	}
+	for _, id := range []string{"tcode.tema", "tcode.otra"} {
+		if _, err := os.Stat(filepath.Join(userRoot, "remoto", id, "extension.json")); err != nil {
+			t.Fatalf("la extensión %s debe quedar instalada: %v", id, err)
+		}
 	}
 }
 

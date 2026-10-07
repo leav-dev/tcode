@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -27,9 +28,20 @@ type Manifest struct {
 
 // Contributions son los puntos de contribución que la extensión declara.
 type Contributions struct {
-	Commands    []Command    `json:"commands"`
-	Keybindings []Keybinding `json:"keybindings"`
-	Hooks       []Hook       `json:"hooks"`
+	Commands    []Command           `json:"commands"`
+	Keybindings []Keybinding        `json:"keybindings"`
+	Hooks       []Hook              `json:"hooks"`
+	Themes      []ThemeContribution `json:"themes"`
+}
+
+// ThemeContribution declara un tema aportado por la extensión: su id y la
+// etiqueta que muestra la ventana de temas, más el archivo JSON con la
+// paleta (ruta relativa al directorio de la extensión, mismo formato que
+// ~/.tcode/theme.json, el que consume view.LoadTheme).
+type ThemeContribution struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	File  string `json:"file"`
 }
 
 // Command declara un comando: su id y el título que mostraría una futura
@@ -143,6 +155,23 @@ func validate(m *Manifest) error {
 			return fmt.Errorf("keybinding %d: %w", i, err)
 		}
 	}
+
+	seenThemes := make(map[string]bool, len(m.Contributes.Themes))
+	for i, th := range m.Contributes.Themes {
+		if err := validateID(th.ID); err != nil {
+			return fmt.Errorf("theme %d: %w", i, err)
+		}
+		if seenThemes[th.ID] {
+			return fmt.Errorf("theme duplicado: %q", th.ID)
+		}
+		seenThemes[th.ID] = true
+		if strings.TrimSpace(th.Label) == "" {
+			return fmt.Errorf("theme %d: label vacío", i)
+		}
+		if err := validateThemeFile(th.File); err != nil {
+			return fmt.Errorf("theme %d: %w", i, err)
+		}
+	}
 	return nil
 }
 
@@ -165,6 +194,26 @@ func validateID(id string) error {
 func validateBindingKey(key string) error {
 	_, err := parseKeybinding(key)
 	return err
+}
+
+// validateThemeFile exige un archivo de tema relativo, sin escape del
+// directorio de la extensión y con extensión .json: el formato es el mismo
+// JSON por rol que consume view.LoadTheme.
+func validateThemeFile(file string) error {
+	if strings.TrimSpace(file) == "" {
+		return errors.New("file: vacío")
+	}
+	if !strings.HasSuffix(strings.ToLower(file), ".json") {
+		return fmt.Errorf("file %q sin extensión .json", file)
+	}
+	if filepath.IsAbs(file) {
+		return fmt.Errorf("file %q absoluto", file)
+	}
+	clean := filepath.Clean(file)
+	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("file %q escapa de la extensión", file)
+	}
+	return nil
 }
 
 // splitChord separa mods de la tecla y verifica los mods (conocidos y sin
