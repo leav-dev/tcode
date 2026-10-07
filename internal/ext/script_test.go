@@ -530,3 +530,31 @@ func TestScriptHostLineOutOfRange(t *testing.T) {
 		})
 	}
 }
+
+// TestScriptHostGitStatusExposesBranch: tcode.git.status() expone la rama
+// como campo branch ("" cuando el editor no la pudo determinar), junto al
+// último commit (commit_hash/subject/author/date).
+func TestScriptHostGitStatusExposesBranch(t *testing.T) {
+	api := &fakeAPI{gitInfo: GitInfo{Branch: "preview", AddedLines: 1,
+		CommitHash: "a1b2c3d", CommitSubject: "do things", CommitAuthor: "Ada",
+		CommitDate: "2026-10-07"}}
+	h, err := NewScriptHost(`
+		function main()
+			local git = tcode.git.status()
+			tcode.statusBar.setSection("tcode.gitchanges",
+				"branch=" .. git.branch .. " commit=" .. git.commit_hash .. " " .. git.commit_subject)
+		end
+	`, api, "src")
+	if err != nil {
+		t.Fatalf("NewScriptHost falló: %v", err)
+	}
+	defer h.Close()
+
+	if err := h.Call("main"); err != nil {
+		t.Fatalf("Call falló: %v", err)
+	}
+	want := "branch=preview commit=a1b2c3d do things"
+	if api.sections["tcode.gitchanges"] != want {
+		t.Errorf("sección = %q, esperaba %q", api.sections["tcode.gitchanges"], want)
+	}
+}

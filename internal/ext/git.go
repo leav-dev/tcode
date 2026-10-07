@@ -8,6 +8,11 @@ type GitInfo struct {
 	UntrackedFiles []string // Archivos nuevos untracked
 	AddedLines     int      // Total de líneas agregadas (staged + unstaged)
 	DeletedLines   int      // Total de líneas borradas (staged + unstaged)
+	Branch         string   // Rama actual (SHA corto si detached HEAD, "" si indeterminable)
+	CommitHash     string   // SHA corto del último commit ("" si indeterminable)
+	CommitSubject  string   // Subject del último commit ("" si indeterminable)
+	CommitAuthor   string   // Autor del último commit ("" si indeterminable)
+	CommitDate     string   // Fecha corta del último commit ("" si indeterminable)
 }
 
 // FileDiffLine representa una línea individual con cambios en un diff.
