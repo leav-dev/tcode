@@ -34,6 +34,9 @@ func TestNextMatchIndexIsCircular(t *testing.T) {
 	if nextMatchIndex(m, 99, 0) != 0 {
 		t.Fatal("al final debe volver al inicio (circular)")
 	}
+	if nextMatchIndex(m, 99, 1) != 0 {
+		t.Fatal("al final debe volver al primero aunque el índice previo no sea 0")
+	}
 	if nextMatchIndex(nil, 0, 0) != -1 {
 		t.Fatal("sin matches debe dar -1")
 	}

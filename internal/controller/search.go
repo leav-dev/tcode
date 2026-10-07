@@ -48,8 +48,9 @@ func findOffsets(buf *model.PieceTable, query string) []int {
 }
 
 // nextMatchIndex elige el primer match estrictamente después de cur
-// (circular): Enter repetido cicla por el archivo.
-func nextMatchIndex(matches []int, cur, startIdx int) int {
+// (circular): Enter repetido cicla por el archivo, y al pasar el último
+// vuelve al primero (índice 0).
+func nextMatchIndex(matches []int, cur, _ int) int {
 	if len(matches) == 0 {
 		return -1
 	}
@@ -58,7 +59,7 @@ func nextMatchIndex(matches []int, cur, startIdx int) int {
 			return i
 		}
 	}
-	return startIdx % len(matches)
+	return 0
 }
 
 // searchWorkspace recorre root buscando query como subcadena literal por
@@ -92,8 +93,15 @@ func searchWorkspace(root, query string) []view.RepoMatch {
 		if err != nil || info.Size() > searchMaxFileBytes {
 			return nil
 		}
+		// Solo archivos regulares: sin esto un FIFO, socket o dispositivo
+		// bloquearía el hilo de eventos al leerse (la búsqueda corre
+		// sincrónica en el evento de Enter).
+		if !info.Mode().IsRegular() {
+			return nil
+		}
 		content, err := os.ReadFile(path)
-		if err != nil || bytes.IndexByte(content, 0) >= 0 {
+		// Cota post-lectura: el archivo pudo crecer entre Info y Read.
+		if err != nil || len(content) > searchMaxFileBytes || bytes.IndexByte(content, 0) >= 0 {
 			return nil
 		}
 		rel := path
