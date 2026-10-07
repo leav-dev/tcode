@@ -121,10 +121,11 @@ tcode                # carpeta actual
 
 | Querés | Hacé |
 |---|---|
-| Seleccionar | `Shift`+flechas, `Ctrl+A` todo, arrastrar con mouse, `Shift+clic` extiende |
+| Seleccionar | `Shift`+flechas, `Ctrl+Shift+Left/Right` por palabra, `Ctrl+A` todo, arrastrar con mouse, `Shift+clic` extiende |
 | Copiar / cortar / pegar | `Ctrl+C` / `Ctrl+X` / `Ctrl+V` |
 | Deshacer / rehacer | `Ctrl+Z` / `Ctrl+Y` |
-| Salto de palabra | `Ctrl+Shift+W` |
+| Salto por palabra | `Ctrl+Left` / `Ctrl+Right` (con `Shift` extiende selección) |
+| Salto de línea visual (wrap) | `Ctrl+Shift+W` |
 | Ventana de extensiones | `Ctrl+P` → **Extensiones** (`←`/`→` cambia pestaña, `Enter` instala/actualiza/borra, `r` revalida) |
 | Instalar por id | `tcode --install-extension tcode.vimlite` |
 | Listar / borrar | `tcode --list-extensions` · `tcode --remove-extension <proveedor:id\|id>` |
