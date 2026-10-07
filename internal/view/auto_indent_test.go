@@ -91,11 +91,26 @@ func TestEnterPlainLineNoIndent(t *testing.T) {
 }
 
 // TestEnterAfterTrailingSpacesStillDetectsBrace: el whitespace de cola no
-// esconde el carácter que abre el bloque.
+// esconde el carácter que abre el bloque. Con auto-cierre, tipear `{` trae
+// su `}`: se lo salta con Right y se lo borra con Backspace para dejar la
+// línea como antes (`if (x) {   `) y comprobar que el Enter igual indenta.
 func TestEnterAfterTrailingSpacesStillDetectsBrace(t *testing.T) {
 	pt := model.NewPieceTable()
 	v := NewEditorView(pt, 10, 30)
-	typeAndEnter(t, v, "if (x) {   ")
+	// Tipear hasta la llave (el Enter va después): el auto-cierre trae su `}`.
+	for _, r := range "if (x) {" {
+		if !v.handleKey(evRune(r).(*tcell.EventKey)) {
+			t.Fatalf("handleKey rechazó la runa %q", r)
+		}
+	}
+	// Quitar el cierre auto-insertado: Right lo salta, Backspace lo borra.
+	if !v.HandleEvent(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone)) {
+		t.Fatal("Right no saltó el cierre")
+	}
+	if !v.HandleEvent(tcell.NewEventKey(tcell.KeyBackspace, 0, tcell.ModNone)) {
+		t.Fatal("Backspace no borró el cierre")
+	}
+	typeAndEnter(t, v, "   ")
 
 	if got := lineContent(t, pt, 1); got != indentUnit {
 		t.Fatalf("línea nueva = %q, esperaba indentUnit", got)
