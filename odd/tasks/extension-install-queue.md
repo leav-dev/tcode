@@ -8,9 +8,10 @@ arranca sola la siguiente, siempre DE A UNA (un solo `git clone` a la vez para
 mantener el bajo consumo).
 
 ## Decisiones de diseño
-- La cola vive en el App (`extInstallQueue []view.ExtItem`) y solo corre en el
-  hilo de los eventos: `installExtension` encola, `handleExtJob` drena al
-  terminar cada job (instalación o actualización, que también toma el lock).
+- La cola vive en el App (`extInstallQueue []extPendingInstall`, un pedido por
+  entrada con su origen: ventana o catálogo) y solo corre en el hilo de los
+  eventos: `installExtension` encola, `handleExtJob` drena al terminar cada
+  job (instalación o actualización, que también toma el lock).
 - Sin paralelismo a propósito: dos escrituras concurrentes sobre la misma raíz
   se pisarían y N clones a la vez suben el consumo. La cola es secuencial.
 - Deduplicación por `Ref`: pedir dos veces la misma extensión encolada avisa

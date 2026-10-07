@@ -63,11 +63,12 @@ func MarkSeen(seen Seen, available []AvailableExt) Seen {
 	return seen
 }
 
-// PruneSeen saca del conjunto las claves de extensiones que ya están
-// instaladas: una instalada nunca vuelve a ser novedad, así que guardar su
-// clave es peso muerto. Las claves de catálogos ilegibles se CONSERVAN: si un
-// proveedor cayó en esta lectura, sus vistos no se pierden y no re-avisan
-// cuando vuelve (eso sería el falso positivo que esto evita).
+// PruneSeen saca del conjunto las claves cuya referencia (proveedor/id, sin
+// versión) ya está instalada bajo esa MISMA referencia: seguir guardándolas
+// es peso muerto. El mismo id ofrecido por OTRO proveedor sigue siendo novedad
+// (tiene otra clave) y se conserva; igual que las claves de catálogos
+// ilegibles: si un proveedor cayó en esta lectura, sus vistos no se pierden
+// y no re-avisan cuando vuelve (eso sería el falso positivo que esto evita).
 func PruneSeen(seen Seen, installed []Info) Seen {
 	if len(seen) == 0 {
 		return seen

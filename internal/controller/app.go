@@ -2771,14 +2771,16 @@ func (a *App) setCatalog(res catalogResult) {
 // como pedido de catálogo —si hay un job en vuelo espera su turno, si no la
 // primera arranca de inmediato— y las entregas marcan su entrada como
 // Installed una por una, con su toast de éxito o error. Solo los ids que ya
-// no están en el catálogo se cuentan como fallidos en el acto: sin entrada no
-// hay nada que encolar. El panel NO se congela: el clon corre en segundo plano
-// como los demás jobs.
+// no están en el catálogo quedan fuera en el acto (desconocidos, no fallidos):
+// sin entrada no hay nada que encolar. El panel NO se congela: el clon corre
+// en segundo plano como los demás jobs.
 func (a *App) installCatalogEntries(ids []string) {
-	failed := 0
+	// unknown cuenta los ids que ya no están en el catálogo: sin entrada no
+	// hay nada que encolar (no son jobs fallidos, son pedidos sin destino).
+	unknown := 0
 	for _, id := range ids {
 		if a.catalogIndex(id) < 0 {
-			failed++
+			unknown++
 			continue
 		}
 		if a.extJobRunning {
@@ -2787,8 +2789,10 @@ func (a *App) installCatalogEntries(ids []string) {
 		}
 		a.startCatalogInstallJob(id)
 	}
-	if failed == len(ids) && failed > 0 {
-		a.statusBar.SetMessage(plural(failed, "fallida", "fallidas"))
+	// Solo se avisan cuando son TODOS: mezclados con encolados o en curso,
+	// el aviso taparía el trabajo que sí avanza.
+	if unknown == len(ids) && unknown > 0 {
+		a.statusBar.SetMessage(plural(unknown, "desconocida", "desconocidas"))
 	}
 	a.redraw()
 }
