@@ -145,6 +145,13 @@ type App struct {
 	configMenu   *view.ConfigMenu
 	configActive bool
 
+	// themeMenu es la ventana flotante que lista TODOS los temas (paletas
+	// incluidas, temas de extensiones y Custom) y themeMenuActive dice si
+	// está abierta. Se abre con Enter sobre la fila Theme de la configuración;
+	// Enter aplica el tema del cursor y cierra, lo ajeno cierra descartando.
+	themeMenu       *view.ThemeMenu
+	themeMenuActive bool
+
 	// extManager es la ventana flotante de gestión de extensiones (la fila
 	// "Extensiones" de la de configuración) y extActive dice si está abierta.
 	// Como las demás overlays posee el teclado mientras está activa: Enter
@@ -291,6 +298,7 @@ func NewAppWithScreen(s tcell.Screen, path string) (*App, error) {
 		explorer:     view.NewFileBrowser(),
 		menu:         view.NewTabMenu(),
 		configMenu:   view.NewConfigMenu(),
+		themeMenu:    view.NewThemeMenu(),
 		extPanel:     view.NewExtensionsPanel(),
 		extManager:   view.NewExtManager(),
 		ext:          ext.NewManager(),
@@ -532,6 +540,7 @@ func (a *App) applyTheme() {
 	a.explorer.SetTheme(a.theme)
 	a.menu.SetTheme(a.theme)
 	a.configMenu.SetTheme(a.theme)
+	a.themeMenu.SetTheme(a.theme)
 	a.extPanel.SetTheme(a.theme)
 	a.extManager.SetTheme(a.theme)
 	for _, ed := range a.editors {
@@ -952,6 +961,26 @@ func (a *App) loadExtensions() {
 		enabled = append(enabled, e)
 	}
 	a.ext.Reload(enabled)
+	a.refreshExtensionThemes(enabled)
+}
+
+// refreshExtensionThemes carga los temas aportados por las extensiones
+// habilitadas y los registra en la vista: la ventana de temas los lista junto
+// a las paletas incluidas y el Custom, y themeFor los resuelve. Un tema roto
+// no impide el arranque ni la recarga: se avisa una vez en la barra y el
+// resto se carga igual. Tras registrar se reaplica el tema (el activo pudo
+// dejar de existir y debe caer al Custom).
+func (a *App) refreshExtensionThemes(enabled []ext.Extension) {
+	loaded, errs := ext.LoadThemes(enabled)
+	for _, err := range errs {
+		a.statusBar.SetMessage("Tema ignorado: " + err.Error())
+	}
+	inputs := make([]view.ExtensionTheme, 0, len(loaded))
+	for _, th := range loaded {
+		inputs = append(inputs, view.ExtensionTheme{ID: th.ID, Label: th.Label, Data: th.Data, From: th.From})
+	}
+	view.RegisterExtensionThemes(inputs)
+	a.applyTheme()
 }
 
 // reloadExtensions recarga las extensiones y vuelve a disparar la activación
@@ -1458,6 +1487,21 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 			return false
 		}
 
+		// La ventana de temas abierta posee el teclado, como las demás
+		// overlays. Enter aplica el tema del cursor (y lo persiste como un
+		// cambio de configuración); Escape, Ctrl+C y CUALQUIER otra tecla
+		// ajena la cierra descartando.
+		if a.themeMenuActive {
+			handled, selected := a.themeMenu.HandleEvent(ev)
+			if !handled {
+				a.themeMenuActive = false // cualquier tecla ajena —Escape incluido— cierra y descarta
+			} else if selected {
+				a.applyThemeSelection()
+			}
+			a.redraw()
+			return false
+		}
+
 		// La ventana de configuración abierta posee el teclado: (true, changed)
 		// es una tecla suya (y changed dice si una fila se mutó, para persistir
 		// y reencuadrar), y (false, false) —Escape, Ctrl+C y CUALQUIER otra
@@ -1469,9 +1513,13 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 			handled, changed := a.configMenu.HandleEvent(ev)
 			if !handled {
 				a.configActive = false // cualquier tecla ajena —Escape incluido— cierra y descarta
-			} else if a.configMenu.Activated() != "" {
+			} else if act := a.configMenu.Activated(); act != "" {
 				a.configActive = false
-				a.openExtManager()
+				if act == "themes" {
+					a.openThemeMenu()
+				} else {
+					a.openExtManager()
+				}
 			} else if changed {
 				a.configChanged()
 			}
@@ -2244,6 +2292,18 @@ func (a *App) redraw() {
 		a.configMenu.Draw(a.editorSurf)
 	}
 
+	// La ventana de temas flota centrada sobre el área del editor, como la de
+	// configuración: se compone DESPUÉS (la tapa si alguna vez coincidieran)
+	// con la misma superficie recortada a su región (themeRegion).
+	if a.themeMenuActive {
+		if a.editorSurf == nil {
+			a.editorSurf = view.NewOffsetSurface(a.screen)
+		}
+		x, y, w, h := a.themeRegion()
+		a.editorSurf.SetRegion(x, y, w, h)
+		a.themeMenu.Draw(a.editorSurf)
+	}
+
 	// El panel de extensiones flota centrado sobre el área del editor, como
 	// la ventana de configuración: se compone DESPUÉS del editor (tapa el
 	// documento, sin tocar pestañas ni barra) con la misma superficie
@@ -2858,6 +2918,41 @@ func (a *App) configChanged() {
 	width, height := a.screen.Size()
 	a.explorer.Resize(panelWidth(width), editorHeight(height))
 	a.tabBar.EnsureActive(a.ws, a.tabBarWidth())
+}
+
+// openThemeMenu abre la ventana de temas: la dimensiona a su región y la
+// llena con TODOS los temas (incluidas, de extensiones y Custom), con el
+// cursor sobre el activo. Sin espacio para el editor no abre. El caller
+// redibuja (la ventana de configuración que la abre).
+func (a *App) openThemeMenu() {
+	width, _ := a.screen.Size()
+	if width-a.explorerColumn() <= 0 {
+		return
+	}
+	a.themeMenuActive = true
+	a.themeMenu.Open()
+	_, _, w, h := a.themeRegion()
+	a.themeMenu.Resize(w, h)
+}
+
+// applyThemeSelection aplica el tema del cursor de la ventana de temas y la
+// cierra: fija el id activo ("" = Custom), lo aplica en vivo a todas las
+// vistas y lo persiste como un cambio de configuración. El caller redibuja.
+func (a *App) applyThemeSelection() {
+	opt, ok := a.themeMenu.Selected()
+	a.themeMenuActive = false
+	if !ok {
+		return
+	}
+	view.SetActiveThemeID(opt.ID)
+	a.configChanged()
+}
+
+// themeRegion devuelve la región de la ventana de temas: centrada en el área
+// del editor como la de configuración, con alto según las filas (marco + una
+// por tema) topado por el máximo y el área del editor.
+func (a *App) themeRegion() (x, y, w, h int) {
+	return a.centeredRegion(len(view.AvailableThemes()) + 2)
 }
 
 // extManagerWidth es el ancho con el que se dimensiona la ventana de
