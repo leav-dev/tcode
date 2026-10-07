@@ -1456,6 +1456,7 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		if a.extPanelActive {
 			handled, ids, close := a.extPanel.HandleEvent(ev)
 			if close {
+				a.lastEscape = time.Time{}
 				a.extPanelActive = false
 				a.configActive = true
 				a.redraw()
@@ -1477,9 +1478,18 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		// fila la ejecuta el controlador; (false, _) —Escape, Ctrl+C y
 		// CUALQUIER otra tecla ajena— cierra la ventana descartando.
 		if a.extActive {
+			if ev.Key() == tcell.KeyEscape {
+				// Esc vuelve a la ventana anterior (la configuración que la
+				// abrió) en vez de cerrar todo. Como todo Escape de ventana,
+				// invalida la doble presión de salida: dos Esc rápidos en
+				// ventanas jamás cierran el editor.
+				a.backToConfigFromExt()
+				a.redraw()
+				return false
+			}
 			handled, intent := a.extManager.HandleEvent(ev)
 			if !handled {
-				a.extActive = false // cualquier tecla ajena —Escape incluido— cierra y descarta
+				a.extActive = false // cualquier tecla ajena cierra y descarta (Esc ya volvió atrás arriba)
 			} else {
 				a.handleExtIntent(intent)
 			}
@@ -1492,9 +1502,16 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		// cambio de configuración); Escape, Ctrl+C y CUALQUIER otra tecla
 		// ajena la cierra descartando.
 		if a.themeMenuActive {
+			if ev.Key() == tcell.KeyEscape {
+				// Como en la ventana de extensiones: Esc vuelve a la
+				// configuración e invalida la doble presión de salida.
+				a.backToConfigFromTheme()
+				a.redraw()
+				return false
+			}
 			handled, selected := a.themeMenu.HandleEvent(ev)
 			if !handled {
-				a.themeMenuActive = false // cualquier tecla ajena —Escape incluido— cierra y descarta
+				a.themeMenuActive = false // cualquier tecla ajena cierra y descarta (Esc ya volvió atrás arriba)
 			} else if selected {
 				a.applyThemeSelection()
 			}
@@ -1512,6 +1529,13 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		if a.configActive {
 			handled, changed := a.configMenu.HandleEvent(ev)
 			if !handled {
+				// Escape (y toda tecla ajena) cierra descartando. El Escape,
+				// además, invalida la doble presión de salida: un Escape del
+				// documento seguido de navegación por ventanas jamás suma
+				// para el quit.
+				if ev.Key() == tcell.KeyEscape {
+					a.lastEscape = time.Time{}
+				}
 				a.configActive = false // cualquier tecla ajena —Escape incluido— cierra y descarta
 			} else if act := a.configMenu.Activated(); act != "" {
 				a.configActive = false
@@ -1534,6 +1558,9 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		if a.menuActive {
 			handled, activate := a.menu.HandleEvent(ev)
 			if !handled {
+				if ev.Key() == tcell.KeyEscape {
+					a.lastEscape = time.Time{}
+				}
 				a.menuActive = false // cualquier tecla ajena —Escape incluido— cierra y descarta
 			} else if activate {
 				a.menuSwitchTab() // Enter: cambiar y cerrar
@@ -2067,6 +2094,9 @@ func (a *App) saveAsFor(buf *model.PieceTable) { a.forceSave[buf] = true }
 func (a *App) handlePromptKey(ev *tcell.EventKey) {
 	switch ev.Key() {
 	case tcell.KeyEscape, tcell.KeyCtrlC:
+		// Cancelar el pedido invalida la doble presión de salida, como
+		// todo Escape de ventana: no arma el quit del editor.
+		a.lastEscape = time.Time{}
 		a.endPrompt()
 		a.showToast("Cancelado", view.ToastInfo)
 		a.redraw()
@@ -2958,6 +2988,28 @@ func (a *App) applyThemeSelection() {
 // por tema) topado por el máximo y el área del editor.
 func (a *App) themeRegion() (x, y, w, h int) {
 	return a.centeredRegion(len(view.AvailableThemes()) + 2)
+}
+
+// backToConfigFromExt vuelve de la ventana de extensiones a la ventana de
+// configuración que la abrió: cierra la hija, reabre la configuración
+// (redimensionada a su región, por si la terminal cambió) e invalida la doble
+// presión de salida —los Escape de ventanas nunca arman el quit del editor—.
+// El caller redibuja.
+func (a *App) backToConfigFromExt() {
+	a.extActive = false
+	a.configActive = true
+	a.lastEscape = time.Time{}
+	_, _, w, h := a.configRegion()
+	a.configMenu.Resize(w, h)
+}
+
+// backToConfigFromTheme es el espejo para la ventana de temas.
+func (a *App) backToConfigFromTheme() {
+	a.themeMenuActive = false
+	a.configActive = true
+	a.lastEscape = time.Time{}
+	_, _, w, h := a.configRegion()
+	a.configMenu.Resize(w, h)
 }
 
 // extManagerWidth es el ancho con el que se dimensiona la ventana de
