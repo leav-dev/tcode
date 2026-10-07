@@ -305,9 +305,39 @@ func (a *App) runRepoSearch(query string) {
 	a.repoResults.SetTheme(a.theme)
 	a.repoResults.SetResults(matches, query)
 	a.repoResultsActive = true
-	width, height := a.screen.Size()
-	a.repoResults.Resize(width-a.explorerColumn(), min(len(matches), editorHeight(height)))
+	x, y, w, h := a.searchRegion()
+	_ = x
+	_ = y
+	a.repoResults.Resize(w, h)
 	a.statusBar.SetMessage(fmt.Sprintf("%d coincidencias", len(matches)))
+}
+
+// searchRegion devuelve la región flotante centrada de la ventana de
+// resultados: el ancho lo pide el contenido (etiqueta más larga + marco +
+// aire) topado al editor, y el alto es matches+marco topado al área.
+func (a *App) searchRegion() (x, y, w, h int) {
+	width, height := a.screen.Size()
+	editorW := width - a.explorerColumn()
+	w = a.repoResults.DesiredWidth() + 4
+	if w < 24 {
+		w = 24
+	}
+	if w > editorW {
+		w = editorW
+	}
+	h = a.repoResults.Len() + 2
+	if h < 5 {
+		h = 5
+	}
+	if h > 20 {
+		h = 20
+	}
+	if h > editorHeight(height) {
+		h = editorHeight(height)
+	}
+	x = a.explorerColumn() + (editorW-w)/2
+	y = tabBarHeight + (editorHeight(height)-h)/2
+	return
 }
 
 // jumpToRepoMatch abre el archivo de la coincidencia del cursor y mueve el

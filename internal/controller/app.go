@@ -2357,16 +2357,17 @@ func (a *App) redraw() {
 		a.menu.Draw(a.editorSurf, a.ws, editorW)
 	}
 
-	// La ventana de resultados del repo flota sobre la región del editor
-	// como el menú de pestañas: se compone DESPUÉS del editor con la misma
-	// superficie recortada, con el alto de los resultados listados.
+	// La ventana de resultados del repo flota centrada sobre el editor
+	// como la de configuración: se compone DESPUÉS del editor con la
+	// superficie recortada a su región (searchRegion).
 	if a.repoResultsActive && a.repoResults.Len() > 0 {
 		if a.editorSurf == nil {
 			a.editorSurf = view.NewOffsetSurface(a.screen)
 		}
-		editorW := width - a.explorerColumn()
-		a.editorSurf.SetRegion(a.explorerColumn(), tabBarHeight, editorW, min(a.repoResults.Len(), editorHeight(height)))
-		a.repoResults.Draw(a.editorSurf, editorW)
+		x, y, w, h := a.searchRegion()
+		a.editorSurf.SetRegion(x, y, w, h)
+		a.repoResults.Resize(w, h)
+		a.repoResults.Draw(a.editorSurf, w)
 	}
 
 	// La ventana de configuración flota centrada sobre el área del editor,

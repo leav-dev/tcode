@@ -62,22 +62,31 @@ func (m *SearchResults) clamp() {
 		return
 	}
 	m.cursor = min(max(m.cursor, 0), len(m.matches)-1)
-	maxTop := len(m.matches) - m.height
+	maxTop := len(m.matches) - m.visibleRows()
 	if maxTop < 0 {
 		maxTop = 0
 	}
 	m.top = min(max(m.top, 0), maxTop)
 }
 
+// visibleRows son las filas de resultados que entran en la ventana: el alto
+// total menos el marco (borde superior con título e inferior).
+func (m *SearchResults) visibleRows() int {
+	if m.height < 3 {
+		return 0
+	}
+	return m.height - 2
+}
+
 func (m *SearchResults) ensureCursorVisible() {
-	if len(m.matches) == 0 || m.height <= 0 {
+	if len(m.matches) == 0 || m.visibleRows() <= 0 {
 		return
 	}
 	if m.cursor < m.top {
 		m.top = m.cursor
 	}
-	if m.cursor >= m.top+m.height {
-		m.top = m.cursor - m.height + 1
+	if m.cursor >= m.top+m.visibleRows() {
+		m.top = m.cursor - m.visibleRows() + 1
 	}
 	m.clamp()
 }
@@ -102,10 +111,28 @@ func (m *SearchResults) moveCursor(delta int) bool {
 }
 
 func (m *SearchResults) page() int {
-	if m.height > 1 {
-		return m.height
+	if m.visibleRows() > 1 {
+		return m.visibleRows()
 	}
 	return 1
+}
+
+// repoLabel arma la etiqueta de una coincidencia: "ruta:línea:col: texto",
+// con línea base 1 para el humano.
+func repoLabel(rm RepoMatch) string {
+	return fmt.Sprintf("%s:%d:%d: %s", rm.Path, rm.Line+1, rm.Col+1, rm.Text)
+}
+
+// DesiredWidth devuelve el ancho de la etiqueta más larga (para dimensionar
+// la ventana flotante), mínimo 20 para que el marco y el título respiren.
+func (m *SearchResults) DesiredWidth() int {
+	w := 20
+	for _, rm := range m.matches {
+		if l := displayWidth(repoLabel(rm)); l > w {
+			w = l
+		}
+	}
+	return w
 }
 
 // Resize actualiza las dimensiones y reencuadra el scroll.
@@ -163,28 +190,56 @@ func (m *SearchResults) HandleEvent(ev tcell.Event) (handled, activate bool) {
 	return false, false
 }
 
-// Draw pinta la ventana en coordenadas propias desde (0,0): la fila del
-// cursor va resaltada a todo el ancho. Cada fila es
-// "ruta:línea:col: texto", con línea base 1 para el humano.
+// Draw pinta la ventana flotante en coordenadas propias desde (0,0): marco
+// con el título centrado sobre el borde superior y las filas visibles en el
+// interior (desde la fila 1), la del cursor con la barra de selección a
+// todo el ancho interior. Cada fila es "ruta:línea:col: texto", con línea
+// base 1. Sin matches o sin tamaño mínimo no hay nada que dibujar.
 func (m *SearchResults) Draw(s Surface, width int) {
-	if len(m.matches) == 0 || m.height <= 0 || width <= 0 {
+	if len(m.matches) == 0 || m.width < 3 || m.height < 3 || width <= 0 {
 		return
 	}
-	for row := 0; row < m.height; row++ {
+	th := themeOr(m.theme)
+	w := min(m.width, width)
+	// Marco: bordes superior e inferior y paredes laterales.
+	s.SetContent(0, 0, '┌', nil, th.Text)
+	for x := 1; x < w-1; x++ {
+		s.SetContent(x, 0, '─', nil, th.Text)
+	}
+	s.SetContent(w-1, 0, '┐', nil, th.Text)
+	s.SetContent(0, m.height-1, '└', nil, th.Text)
+	for x := 1; x < w-1; x++ {
+		s.SetContent(x, m.height-1, '─', nil, th.Text)
+	}
+	s.SetContent(w-1, m.height-1, '┘', nil, th.Text)
+	for y := 1; y < m.height-1; y++ {
+		s.SetContent(0, y, '│', nil, th.Text)
+		s.SetContent(w-1, y, '│', nil, th.Text)
+	}
+	// Título centrado sobre el borde superior: query + conteo.
+	title := fmt.Sprintf("Buscar: %s (%d)", m.query, len(m.matches))
+	if start := (w - displayWidth(title)) / 2; start > 0 {
+		writeString(s, start, 0, title, th.Text, w)
+	} else {
+		writeString(s, 0, 0, title, th.Text, w)
+	}
+	// Interior: cada fila se pinta entera antes de escribir su texto para
+	// que el documento no se transparente a través de la ventana.
+	for row := 0; row < m.visibleRows(); row++ {
+		y := row + 1
 		idx := m.top + row
 		if idx >= len(m.matches) {
 			break
 		}
-		th := themeOr(m.theme)
 		style := th.TabIdle
 		if idx == m.cursor {
 			style = th.TabActive
 		}
-		for x := 0; x < width; x++ {
-			s.SetContent(x, row, ' ', nil, style)
+		for x := 1; x < w-1; x++ {
+			s.SetContent(x, y, ' ', nil, style)
 		}
-		rm := m.matches[idx]
-		label := fmt.Sprintf("%s:%d:%d: %s", rm.Path, rm.Line+1, rm.Col+1, rm.Text)
-		writeString(s, 0, row, label, style, width)
+		// El texto arranca en el interior (x=1) y se recorta antes de la
+		// pared derecha.
+		writeString(s, 1, y, repoLabel(m.matches[idx]), style, w-2)
 	}
 }
