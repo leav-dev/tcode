@@ -113,6 +113,8 @@ tcode                # carpeta actual
 | Borrar nodo del cursor | `Delete` (con confirmación) |
 | Cambiar pestaña | `Ctrl+PgDn` / `Ctrl+PgUp` · `Ctrl+K` / `Ctrl+L` |
 | Menú de pestañas | `Ctrl+T` |
+| Buscar en archivo | `Ctrl+F` (Enter = siguiente, `Esc` cierra) |
+| Buscar en todo el repo | `Ctrl+Shift+F` (ventana de resultados, `Enter` salta a la línea) |
 | Configuración | `Ctrl+P` |
 | Salir | Doble `Esc` rápido |
 
@@ -124,6 +126,7 @@ tcode                # carpeta actual
 | Seleccionar | `Shift`+flechas, `Ctrl+Shift+Left/Right` por palabra, `Ctrl+A` todo, arrastrar con mouse, `Shift+clic` extiende |
 | Copiar / cortar / pegar | `Ctrl+C` / `Ctrl+X` / `Ctrl+V` |
 | Deshacer / rehacer | `Ctrl+Z` / `Ctrl+Y` |
+| Cerrar pares | `(` `[` `{` `"` `'` cierran solos; el cierre se salta, `Backspace` borra el par, `Enter` entre pares parte con indent |
 | Salto por palabra | `Ctrl+Left` / `Ctrl+Right` (con `Shift` extiende selección) |
 | Salto de línea visual (wrap) | `Ctrl+Shift+W` |
 | Ventana de extensiones | `Ctrl+P` → **Extensiones** (`←`/`→` cambia pestaña, `Enter` instala/actualiza/borra, `r` revalida) |

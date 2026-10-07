@@ -137,6 +137,24 @@ type App struct {
 	menu       *view.TabMenu
 	menuActive bool
 
+	// searchActive/searchBuf sostienen el pedido de Ctrl+F (buscar en el
+	// archivo): modo propio —no reusa el prompt de SaveAs/crear— porque
+	// necesita edición continua + Enter repetido para "siguiente".
+	// searchMatches son los offsets de cada ocurrencia y searchIdx el
+	// actual para el mensaje "i/n".
+	searchActive  bool
+	searchBuf     string
+	searchMatches []int
+	searchIdx     int
+
+	// repoPromptActive/repoBuf son el pedido de Ctrl+Shift+F (query en la
+	// barra); repoResults/repoResultsActive son la ventana de
+	// coincidencias —Enter salta a archivo:línea, lo ajeno cierra—.
+	repoPromptActive  bool
+	repoBuf           string
+	repoResults       *view.SearchResults
+	repoResultsActive bool
+
 	// configMenu es la ventana flotante de configuración (Ctrl+P) y
 	// configActive dice si está abierta. Como el menú de pestañas, mientras
 	// está activa posee el teclado y el mouse: las teclas que la ventana no
@@ -297,6 +315,7 @@ func NewAppWithScreen(s tcell.Screen, path string) (*App, error) {
 		toast:        view.NewToast(),
 		explorer:     view.NewFileBrowser(),
 		menu:         view.NewTabMenu(),
+		repoResults:  view.NewSearchResults(),
 		configMenu:   view.NewConfigMenu(),
 		themeMenu:    view.NewThemeMenu(),
 		extPanel:     view.NewExtensionsPanel(),
@@ -539,6 +558,7 @@ func (a *App) applyTheme() {
 	a.toast.SetTheme(a.theme)
 	a.explorer.SetTheme(a.theme)
 	a.menu.SetTheme(a.theme)
+	a.repoResults.SetTheme(a.theme)
 	a.configMenu.SetTheme(a.theme)
 	a.themeMenu.SetTheme(a.theme)
 	a.extPanel.SetTheme(a.theme)
@@ -1427,6 +1447,28 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 			a.handlePromptKey(ev)
 			return false
 		}
+		// El pedido de Ctrl+F posee el teclado como el prompt: tipear edita
+		// la query, Enter salta al siguiente, Escape cancela.
+		if a.searchActive {
+			a.handleSearchKey(ev)
+			return false
+		}
+		// El pedido de Ctrl+Shift+F (query del repo) y su ventana de
+		// resultados poseen el teclado con la misma regla.
+		if a.repoPromptActive {
+			a.handleRepoPromptKey(ev)
+			return false
+		}
+		if a.repoResultsActive {
+			handled, activate := a.repoResults.HandleEvent(ev)
+			if !handled {
+				a.repoResultsActive = false // cualquier tecla ajena cierra y descarta
+			} else if activate {
+				a.jumpToRepoMatch()
+			}
+			a.redraw()
+			return false
+		}
 
 		// Ctrl+P abre la ventana flotante de configuración —también con el
 		// workspace vacío: la configuración existe sin buffers—. Arrancó como
@@ -1652,6 +1694,14 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 			return false
 		}
 
+		// Ctrl+Shift+F busca en todo el repo —también con el workspace
+		// vacío: la búsqueda recorre el disco (ws.Root), no los buffers—,
+		// y ANTES del guard por la misma razón que crear.
+		if isFindRepoKey(ev) {
+			a.startRepoPrompt()
+			return false
+		}
+
 		// Workspace vacío: no hay nada que editar, guardar ni deshacer. Salir
 		// sigue funcionando, y sin buffers no hay nada que perder.
 		buf := a.activeBuffer()
@@ -1677,6 +1727,10 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 
 		case isSaveAsKey(ev):
 			a.startPrompt()
+			return false
+
+		case isFindKey(ev):
+			a.startFind()
 			return false
 
 		case isRedoKey(ev):
@@ -1787,7 +1841,7 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		a.pasteActive, a.pasteBuf = false, strings.Builder{}
 		// Con un pedido o un overlay abierto el teclado es de esos, no del
 		// documento: el paste se descarta como cualquier tecla ajena.
-		if text == "" || a.promptActive || a.menuActive || a.configActive {
+		if text == "" || a.promptActive || a.menuActive || a.configActive || a.searchActive || a.repoPromptActive || a.repoResultsActive {
 			return false
 		}
 		if ed := a.activeEditor(); ed != nil && ed.PasteText(text) {
@@ -1841,7 +1895,7 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 		// no traduce nada ni redibuja— y el clic no puede cambiar de pestaña,
 		// seleccionar un archivo ni raspar el documento por debajo de lo que el
 		// usuario está escribiendo.
-		if a.menuActive || a.promptActive || a.configActive || a.extPanelActive || a.extActive {
+		if a.menuActive || a.promptActive || a.configActive || a.extPanelActive || a.extActive || a.searchActive || a.repoPromptActive || a.repoResultsActive {
 			return false
 		}
 		a.checkExternalReloads()
@@ -1991,6 +2045,20 @@ func isSaveAsKey(ev *tcell.EventKey) bool {
 		ev.Modifiers()&tcell.ModCtrl != 0 &&
 		ev.Modifiers()&tcell.ModShift != 0 &&
 		(ev.Rune() == 's' || ev.Rune() == 'S')
+}
+
+// isFindKey reconoce Ctrl+F sin Shift: buscar en el archivo activo.
+func isFindKey(ev *tcell.EventKey) bool {
+	return ev.Key() == tcell.KeyCtrlF && ev.Modifiers()&tcell.ModShift == 0
+}
+
+// isFindRepoKey reconoce Ctrl+Shift+F: como en Ctrl+Shift+S, tcell lo
+// entrega como KeyRune con ModCtrl y ModShift en lugar del código KeyCtrl*.
+func isFindRepoKey(ev *tcell.EventKey) bool {
+	return ev.Key() == tcell.KeyRune &&
+		ev.Modifiers()&tcell.ModCtrl != 0 &&
+		ev.Modifiers()&tcell.ModShift != 0 &&
+		(ev.Rune() == 'f' || ev.Rune() == 'F')
 }
 
 // startPrompt abre el pedido de Save As, prellenado con la ruta actual para
@@ -2281,6 +2349,18 @@ func (a *App) redraw() {
 		editorW := width - a.explorerColumn()
 		a.editorSurf.SetRegion(a.explorerColumn(), tabBarHeight, editorW, min(a.ws.Len(), editorHeight(height)))
 		a.menu.Draw(a.editorSurf, a.ws, editorW)
+	}
+
+	// La ventana de resultados del repo flota sobre la región del editor
+	// como el menú de pestañas: se compone DESPUÉS del editor con la misma
+	// superficie recortada, con el alto de los resultados listados.
+	if a.repoResultsActive && a.repoResults.Len() > 0 {
+		if a.editorSurf == nil {
+			a.editorSurf = view.NewOffsetSurface(a.screen)
+		}
+		editorW := width - a.explorerColumn()
+		a.editorSurf.SetRegion(a.explorerColumn(), tabBarHeight, editorW, min(a.repoResults.Len(), editorHeight(height)))
+		a.repoResults.Draw(a.editorSurf, editorW)
 	}
 
 	// La ventana de configuración flota centrada sobre el área del editor,

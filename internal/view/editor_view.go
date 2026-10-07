@@ -722,6 +722,142 @@ func (v *EditorView) insertText(s string) bool {
 	return true
 }
 
+// autoClosePairs mapea cada apertura con su cierre. Las comillas y el
+// backtick cierran sobre sí mismos.
+var autoClosePairs = map[rune]rune{
+	'(':  ')',
+	'[':  ']',
+	'{':  '}',
+	'"':  '"',
+	'\'': '\'',
+	'`':  '`',
+}
+
+// pairOpenerOf dice si r es un cierre y devuelve su apertura.
+func pairOpenerOf(r rune) (rune, bool) {
+	for open, close := range autoClosePairs {
+		if close == r {
+			return open, true
+		}
+	}
+	return 0, false
+}
+
+// surroundSelection envuelve la selección con el par open/close y deja el
+// cursor tras el texto envuelto (antes del cierre).
+func (v *EditorView) surroundSelection(open, close rune) bool {
+	start, end, ok := v.SelectionRange()
+	if !ok {
+		return false
+	}
+	text := v.model.TextRange(start, end)
+	v.breakTypingGroup()
+	if _, err := v.model.Delete(start, end); err != nil {
+		return false
+	}
+	s := string(open) + text + string(close)
+	if err := v.model.Insert(start, s); err != nil {
+		return false
+	}
+	v.setCursorAt(start + len(string(open)) + len(text))
+	v.clearSelection()
+	return true
+}
+
+// typePair maneja la tecla de un par (apertura o cierre). Devuelve false si
+// la runa no es par o si corresponde insertarla tal cual, y el caller cae al
+// insertText normal. No toca el pegado: solo llega desde handleKey.
+func (v *EditorView) typePair(r rune) bool {
+	closer, isOpener := autoClosePairs[r]
+	_, isCloser := pairOpenerOf(r)
+	if !isOpener && !isCloser {
+		return false
+	}
+
+	// Con selección, la tecla envuelve el texto (vale para apertura y
+	// cierre: tipear `)` con "foo" marcado deja "(foo)").
+	if v.SelectionActive() {
+		open := r
+		if closerOf, ok := autoClosePairs[r]; ok {
+			closer = closerOf
+		} else if openOf, ok := pairOpenerOf(r); ok {
+			open = openOf
+			closer = r
+		}
+		return v.surroundSelection(open, closer)
+	}
+
+	content := v.model.LineContent(v.cursor.Line)
+	// Sobreescritura: si lo tipeado es un cierre y el siguiente es el mismo,
+	// se avanza sin duplicar.
+	if isCloser && v.cursor.ByteCol < len(content) {
+		if next, size := utf8.DecodeRune(content[v.cursor.ByteCol:]); next == r {
+			v.breakTypingGroup()
+			v.cursor.ByteCol += size
+			v.cursor.desiredCol = columnAt(content, v.cursor.ByteCol)
+			return true
+		}
+	}
+	if !isOpener {
+		return false
+	}
+	// Apóstrofe tras palabra: comilla simple sola, para no romper "don't".
+	if r == '\'' && v.cursor.ByteCol > 0 {
+		if prev, _ := utf8.DecodeLastRune(content[:v.cursor.ByteCol]); isWordRune(prev) {
+			return false
+		}
+	}
+	// Insertar el par y quedar en el medio, en un solo paso de deshacer.
+	// (insertText dejaría el cursor tras el cierre: se replica su cuerpo con
+	// el offset del medio.)
+	off := v.cursorOffset()
+	if err := v.model.Insert(off, string(r)+string(closer)); err != nil {
+		return false
+	}
+	v.setCursorAt(off + len(string(r)))
+	return true
+}
+
+// trySplitPair parte la línea cuando el cursor está justo entre un par
+// adyacente (recién abierto o no): el cierre salta a la línea siguiente y el
+// cursor queda en la del medio, con un nivel extra de indent para ([{.
+func (v *EditorView) trySplitPair() bool {
+	if v.SelectionActive() {
+		return false
+	}
+	content := v.model.LineContent(v.cursor.Line)
+	col := v.cursor.ByteCol
+	if col == 0 || col >= len(content) {
+		return false
+	}
+	open, _ := utf8.DecodeLastRune(content[:col])
+	closer, ok := autoClosePairs[open]
+	if !ok {
+		return false
+	}
+	if next, _ := utf8.DecodeRune(content[col:]); next != closer {
+		return false
+	}
+	i := 0
+	for i < len(content) && (content[i] == ' ' || content[i] == '\t') {
+		i++
+	}
+	base := string(content[:i])
+	inner := base
+	if open == '(' || open == '[' || open == '{' {
+		inner = base + indentUnit
+	}
+	// Se inserta en un solo paso, pero el cursor queda en la línea del
+	// medio (tras el indent), no tras el cierre.
+	s := "\n" + inner + "\n" + base
+	off := v.cursorOffset()
+	if err := v.model.Insert(off, s); err != nil {
+		return false
+	}
+	v.setCursorAt(off + 1 + len(inner))
+	return true
+}
+
 // PasteText inserta el texto COMPLETO de un paste del TERMINAL (evento de
 // bracketed paste: tcode pide el modo con EnablePaste y el terminal entrega el
 // portapapeles como un solo evento, con sus saltos de línea intactos). Es la
@@ -744,6 +880,19 @@ func (v *EditorView) backspace() bool {
 	if v.cursor.ByteCol > 0 {
 		start := v.model.LineStart(line)
 		content := v.model.LineContent(line)
+		// Entre un par vacío, Backspace borra los dos juntos en un paso.
+		if prev, size := utf8.DecodeLastRune(content[:v.cursor.ByteCol]); size > 0 {
+			if closer, ok := autoClosePairs[prev]; ok && v.cursor.ByteCol < len(content) {
+				if next, _ := utf8.DecodeRune(content[v.cursor.ByteCol:]); next == closer {
+					from := start + v.cursor.ByteCol - size
+					if _, err := v.model.Delete(from, start+v.cursor.ByteCol+len(string(closer))); err != nil {
+						return false
+					}
+					v.setCursorAt(from)
+					return true
+				}
+			}
+		}
 		from := start + prevCluster(content, v.cursor.ByteCol)
 		if _, err := v.model.Delete(from, start+v.cursor.ByteCol); err != nil {
 			return false
@@ -1059,7 +1208,11 @@ func (v *EditorView) handleKey(ev *tcell.EventKey) bool {
 	case tcell.KeyEnter, tcell.KeyLF:
 		// KeyEnter es el camino normal (CR). Algunos terminales y modos de línea
 		// mandan LF, así que se acepta también para no perder el salto de línea.
-		// La línea nueva hereda la indentación de la línea de origen (autoIndent).
+		// Entre un par adyacente el cierre salta a la línea siguiente; si no,
+		// la línea nueva hereda la indentación de la línea de origen (autoIndent).
+		if v.trySplitPair() {
+			return true
+		}
 		return v.insertText("\n" + v.autoIndent())
 	case tcell.KeyTab:
 		// El tab del editor es la unidad de indentación estándar (4 espacios por
@@ -1068,9 +1221,13 @@ func (v *EditorView) handleKey(ev *tcell.EventKey) bool {
 	}
 
 	// Texto: solo runas sin modificadores. Ctrl y Alt quedan libres para atajos,
-	// así que una combinación nunca inserta por accidente.
+	// así que una combinación nunca inserta por accidente. Las teclas de pares
+	// pasan primero por el auto-cierre.
 	if ev.Key() == tcell.KeyRune && ev.Modifiers()&(tcell.ModCtrl|tcell.ModAlt) == 0 {
 		if r := ev.Rune(); r != 0 {
+			if v.typePair(r) {
+				return true
+			}
 			return v.insertText(string(r))
 		}
 	}
