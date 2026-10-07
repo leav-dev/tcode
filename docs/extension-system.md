@@ -370,6 +370,39 @@ con los datos recalculados.
 | `contributes.commands` | Comandos declarados. Se registran como stubs: ejecutarlos activa la extensión y avisa que falta el backend de scripting. |
 | `contributes.keybindings` | Tecla (o chord de dos tiempos) → comando registrado. Puede apuntar a `tcode.*`. |
 | `contributes.hooks` | `evento → comando`; el comando corre cuando el editor emite el evento y la extensión está activa. |
+| `contributes.themes` | Temas aportados: `{id, label, file}` donde `file` es el JSON de la paleta relativo a la extensión (mismo formato que `~/.tcode/theme.json`). |
+
+### Temas aportados por extensiones
+
+Una extensión puede aportar paletas con `contributes.themes`:
+
+```json
+{
+  "id": "demo.temas",
+  "version": "1.0.0",
+  "contributes": {
+    "themes": [
+      { "id": "demo.rosa", "label": "Rosa", "file": "themes/rosa.json" }
+    ]
+  }
+}
+```
+
+| Campo del tema | Regla |
+| --- | --- |
+| `id` | Obligatorio, formato de id (`demo.rosa`). No puede pisar una paleta incluida; ante duplicados gana la primera. |
+| `label` | Obligatorio, no vacío. Es el nombre que muestra la ventana de temas. |
+| `file` | Obligatorio. Ruta relativa a la extensión con extensión `.json`, sin escape (`../` o absoluta se rechazan). El contenido es el mapa rol→color de `theme.json` (roles ausentes = default). |
+
+Los temas se cargan al arrancar y se recargan al instalar/actualizar/borrar
+sin reiniciar. Un tema roto (archivo faltante o JSON inválido) se ignora con
+un aviso en la barra; el resto se carga igual. Las extensiones desactivadas no
+aportan sus temas (como si no estuvieran instaladas).
+
+Todos los temas —paletas incluidas, de extensiones y `Custom` (tu
+`theme.json`)— se eligen en la **ventana de temas**: `Ctrl+P` → fila `Theme` →
+`Enter`. `Left`/`Right` sobre la fila siguen ciclando; `Enter` en la ventana
+aplica el tema del cursor en vivo y lo persiste en `config.json`.
 
 ### Eventos de activación
 
@@ -451,8 +484,9 @@ barra de estado. La evolución prevista, por la misma costura:
    necesita registrar los suyos y enganchar la activación a la carga del módulo.
 2. **Command palette**: invocar cualquier comando registrado por id, sin
    depender de un keybinding.
-3. **Contribuciones de lenguaje**: gramáticas, snippets y temas declarativos
-   (la siguiente capa estática, sin scripts).
+3. **Contribuciones de lenguaje**: gramáticas y snippets (la siguiente capa
+   estática, sin scripts). Los temas declarativos ya están: `contributes.themes`
+   + ventana de temas.
 
 El costo de diseño de las costuras es cero hoy, y el modelo queda fiel al de
 VSCode sin prometer lo que no ejecuta.

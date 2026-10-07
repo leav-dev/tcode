@@ -420,10 +420,13 @@ func TestConfigMenuThemeCustomClearsTheID(t *testing.T) {
 	if got := ActiveThemeID(); got != "mocha" {
 		t.Fatalf("ActiveThemeID() = %q tras Right, se esperaba \"mocha\"", got)
 	}
-	// Enter sobre el enum no hace nada (delta 0), como en los enteros, pero la
-	// tecla sigue siendo de la ventana: (true, false) y el id no cambia.
+	// Enter sobre Theme abre la ventana de temas (acción pendiente "themes"):
+	// (true, false) y el id no cambia.
 	if handled, changed := m.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone)); !handled || changed {
 		t.Fatalf("Enter en Theme devolvió (handled=%v, changed=%v), se esperaba (true, false)", handled, changed)
+	}
+	if got := m.Activated(); got != "themes" {
+		t.Fatalf("Activated() = %q tras Enter en Theme, se esperaba \"themes\"", got)
 	}
 	if got := ActiveThemeID(); got != "mocha" {
 		t.Fatalf("Enter debe dejar el tema intacto: ActiveThemeID() = %q, se esperaba \"mocha\"", got)
