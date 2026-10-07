@@ -702,12 +702,19 @@ var providersConfigPath = func() (string, error) {
 // resuelve las fuentes acá, en el arranque, y manda a la goroutine SOLO la
 // lectura remota.
 
-// editorUpdateCheck pregunta el tag del último release del editor; es
-// variable para que los tests la sustituyan por un fake sin red. Misma
-// razón para editorOwnVersion: la versión propia en tests es dev.
+// editorUpdateCheck pregunta el tag del último release DEL CANAL del editor:
+// un build preview solo mira previews (jamás avisa la estable como update),
+// el resto mira releases/latest. Es variable para que los tests la sustituyan
+// por un fake sin red. Misma razón para editorOwnVersion: la versión propia
+// en tests es dev.
 var (
-	editorUpdateCheck = func(ctx context.Context) (string, error) { return update.CheckLatest(ctx) }
-	editorOwnVersion  = update.CurrentVersion
+	editorUpdateCheck = func(ctx context.Context) (string, error) {
+		if update.IsPreviewVersion(update.CurrentVersion()) {
+			return update.CheckLatestPreview(ctx)
+		}
+		return update.CheckLatest(ctx)
+	}
+	editorOwnVersion = update.CurrentVersion
 )
 
 // editorUpdateEvent es el sobre con el que la goroutine del chequeo del
