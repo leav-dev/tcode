@@ -114,7 +114,7 @@ tcode                # carpeta actual
 | Cambiar pestaña | `Ctrl+PgDn` / `Ctrl+PgUp` · `Ctrl+K` / `Ctrl+L` |
 | Menú de pestañas | `Ctrl+T` |
 | Buscar en archivo | `Ctrl+F` (Enter = siguiente, `Esc` cierra) |
-| Buscar en todo el repo | `Ctrl+Shift+F` (ventana de resultados, `Enter` salta a la línea) |
+| Buscar en todo el repo | `Ctrl+Shift+F` o `Alt+F` (ventana de resultados, `Enter` salta a la línea) |
 | Configuración | `Ctrl+P` |
 | Salir | Doble `Esc` rápido |
 

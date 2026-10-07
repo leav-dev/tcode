@@ -2054,11 +2054,17 @@ func isFindKey(ev *tcell.EventKey) bool {
 
 // isFindRepoKey reconoce Ctrl+Shift+F: como en Ctrl+Shift+S, tcell lo
 // entrega como KeyRune con ModCtrl y ModShift en lugar del código KeyCtrl*.
+// Acepta además el alias Alt+F (con o sin Shift): hay terminales
+// (Alacritty) que interceptan Ctrl+Shift+F y nunca lo entregan —el mismo
+// caso que Ctrl+, movido a Ctrl+P—, mientras Alt pasa limpio casi siempre.
 func isFindRepoKey(ev *tcell.EventKey) bool {
-	return ev.Key() == tcell.KeyRune &&
-		ev.Modifiers()&tcell.ModCtrl != 0 &&
-		ev.Modifiers()&tcell.ModShift != 0 &&
-		(ev.Rune() == 'f' || ev.Rune() == 'F')
+	if ev.Key() != tcell.KeyRune || (ev.Rune() != 'f' && ev.Rune() != 'F') {
+		return false
+	}
+	if ev.Modifiers()&tcell.ModCtrl != 0 && ev.Modifiers()&tcell.ModShift != 0 {
+		return true
+	}
+	return ev.Modifiers()&tcell.ModAlt != 0 && ev.Modifiers()&tcell.ModCtrl == 0
 }
 
 // startPrompt abre el pedido de Save As, prellenado con la ruta actual para

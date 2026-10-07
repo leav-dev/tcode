@@ -133,6 +133,23 @@ func TestRepoSearchOpensWindowAndJumps(t *testing.T) {
 	}
 }
 
+func TestAltFOpensRepoPromptAsAlias(t *testing.T) {
+	dir := t.TempDir()
+	app, err := newTestAppOnDir(t, dir)
+	if err != nil {
+		t.Fatalf("NewAppWithScreen falló: %v", err)
+	}
+	// Alt+F es el alias para terminales que interceptan Ctrl+Shift+F.
+	app.handleEvent(tcell.NewEventKey(tcell.KeyRune, 'f', tcell.ModAlt))
+	if !app.repoPromptActive {
+		t.Fatal("Alt+F debe abrir el pedido del repo")
+	}
+	app.handleEvent(tcell.NewEventKey(tcell.KeyEscape, 0, tcell.ModNone))
+	if app.repoPromptActive {
+		t.Fatal("Escape debe cerrar el pedido del repo")
+	}
+}
+
 func TestRepoSearchSkipsGitAndBinary(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
