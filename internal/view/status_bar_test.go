@@ -177,6 +177,40 @@ func TestStatusBarDrawsSectionsWithoutMessage(t *testing.T) {
 	}
 }
 
+func TestStatusBarSectionsPinnedRight(t *testing.T) {
+	// Sin mensaje, la sección de git va fija al borde derecho, no pegada
+	// a la etiqueta.
+	s := newStatusScreen(t, 60)
+	bar := NewStatusBar()
+	bar.SetFile("main.go", false)
+	bar.SetSections(map[string]string{"tcode.gitchanges": "Git: 3 files"})
+	bar.Draw(s, 0, 60)
+
+	got := statusRow(t, s)
+	if !strings.HasSuffix(got, "Git: 3 files") {
+		t.Fatalf("barra = %q, se esperaba la sección al borde derecho", got)
+	}
+	if !strings.HasPrefix(got, "main.go") {
+		t.Fatalf("barra = %q, se esperaba la etiqueta a la izquierda", got)
+	}
+}
+
+func TestStatusBarSectionsPinnedRightOfMessage(t *testing.T) {
+	// Con mensaje, las secciones van fijas a la derecha del hueco,
+	// pegadas al mensaje de la derecha.
+	s := newStatusScreen(t, 60)
+	bar := NewStatusBar()
+	bar.SetFile("main.go", false)
+	bar.SetMessage("Recargado")
+	bar.SetSections(map[string]string{"tcode.gitchanges": "Git: 3 files"})
+	bar.Draw(s, 0, 60)
+
+	got := statusRow(t, s)
+	if !strings.HasSuffix(got, "Git: 3 files Recargado") {
+		t.Fatalf("barra = %q, se esperaba sección pegada al mensaje a la derecha", got)
+	}
+}
+
 func TestStatusBarSectionsTruncateBeforeTheLabel(t *testing.T) {
 	// Con mensaje y ancho choco: el mensaje gana, la etiqueta conserva
 	// su lugar y las secciones se recortan primero.

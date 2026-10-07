@@ -127,10 +127,18 @@ func (s *StatusBar) Draw(sc tcell.Screen, y, width int) {
 	}
 
 	if s.message == "" {
-		// Sin mensaje: la etiqueta y las secciones ocupan la barra.
+		// Sin mensaje: la etiqueta a la izquierda y las secciones fijas a
+		// la derecha (columna estable para la info de extensiones: git,
+		// linters). La etiqueta gana: si no entran, las secciones se
+		// recortan desde la izquierda de su zona, igual que antes.
 		col := writeString(sc, 0, y, label, labelStyle, width)
 		if sections != "" && col < width {
-			writeString(sc, col, y, " "+sections, section, width-col)
+			secText := " " + sections
+			start := width - displayWidth(secText)
+			if start < col {
+				start = col
+			}
+			writeString(sc, start, y, secText, section, width-start)
 		}
 		return
 	}
@@ -150,11 +158,17 @@ func (s *StatusBar) Draw(sc tcell.Screen, y, width int) {
 	start := width - msgWidth
 	// La etiqueta y las secciones ceden: como mucho ocupan hasta la celda
 	// anterior al mensaje. Entre ellas, la etiqueta gana: las secciones se
-	// recortan antes que el nombre del archivo.
+	// recortan antes que el nombre del archivo. Las secciones van fijas a
+	// la derecha del hueco, pegadas al mensaje.
 	left := start - 1
 	col := writeString(sc, 0, y, label, labelStyle, left)
 	if sections != "" && col < left {
-		writeString(sc, col, y, " "+sections, section, left-col)
+		secText := " " + sections
+		sstart := start - displayWidth(secText)
+		if sstart < col {
+			sstart = col
+		}
+		writeString(sc, sstart, y, secText, section, start-sstart)
 	}
 	writeString(sc, start, y, msg, message, msgWidth)
 }
