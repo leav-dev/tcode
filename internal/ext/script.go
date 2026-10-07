@@ -327,8 +327,9 @@ func NewScriptHost(code string, api ScriptAPI, source string) (*ScriptHost, erro
 		return 1
 	}))
 	// tcode.git.status(): información de git del directorio del buffer activo.
-	// Devuelve {staged={}, unstaged={}, untracked={}, added=N, deleted=N} o nil
-	// cuando no hay buffer, no es repo git, o git no está disponible.
+	// Devuelve {staged={}, unstaged={}, untracked={}, added=N, deleted=N,
+	// branch="name"} o nil cuando no hay buffer, no es repo git, o git no
+	// está disponible. branch es "" cuando no se pudo determinar.
 	git := L.NewTable()
 	L.SetField(git, "status", L.NewFunction(func(L *lua.LState) int {
 		info, err := api.GitStatus()
@@ -353,6 +354,11 @@ func NewScriptHost(code string, api ScriptAPI, source string) (*ScriptHost, erro
 		t.RawSetString("untracked", untracked)
 		t.RawSetString("added", lua.LNumber(info.AddedLines))
 		t.RawSetString("deleted", lua.LNumber(info.DeletedLines))
+		t.RawSetString("branch", lua.LString(info.Branch))
+		t.RawSetString("commit_hash", lua.LString(info.CommitHash))
+		t.RawSetString("commit_subject", lua.LString(info.CommitSubject))
+		t.RawSetString("commit_author", lua.LString(info.CommitAuthor))
+		t.RawSetString("commit_date", lua.LString(info.CommitDate))
 		L.Push(t)
 		return 1
 	}))

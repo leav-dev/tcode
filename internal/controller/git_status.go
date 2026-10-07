@@ -44,7 +44,57 @@ func (a *App) GitStatus() (ext.GitInfo, error) {
 		return ext.GitInfo{}, err
 	}
 
+	// Rama actual: un solo spawn barato (--show-current); en detached HEAD
+	// cae al SHA corto. Si no se puede determinar queda vacía y el llamador
+	// degrada sin romper.
+	info.Branch = getBranch(dir)
+
+	// Último commit: un solo `git log -1`, solo informativo. Sin commits o
+	// con git roto queda vacío y el llamador degrada sin romper.
+	info.CommitHash, info.CommitSubject, info.CommitAuthor, info.CommitDate = getLastCommit(dir)
+
 	return info, nil
+}
+
+// getBranch devuelve la rama actual del repo que contiene a dir: el nombre
+// de `git branch --show-current`, el SHA corto de `git rev-parse --short
+// HEAD` en detached HEAD, o "" si git no lo puede determinar (repo sin
+// commits, git ausente). Nunca devuelve error: la rama es informativa.
+func getBranch(dir string) string {
+	cmd := exec.Command("git", "branch", "--show-current")
+	cmd.Dir = dir
+	if out, err := cmd.Output(); err == nil {
+		if branch := strings.TrimSpace(string(out)); branch != "" {
+			return branch
+		}
+	}
+	cmd = exec.Command("git", "rev-parse", "--short", "HEAD")
+	cmd.Dir = dir
+	if out, err := cmd.Output(); err == nil {
+		if sha := strings.TrimSpace(string(out)); sha != "" {
+			return sha
+		}
+	}
+	return ""
+}
+
+// getLastCommit devuelve (hash corto, subject, autor, fecha corta) del
+// último commit del repo que contiene a dir, en un solo spawn de
+// `git log -1`. Cualquier fallo (repo sin commits, git ausente) devuelve
+// strings vacías: el commit es informativo y nunca un error.
+func getLastCommit(dir string) (hash, subject, author, date string) {
+	cmd := exec.Command("git", "log", "-1",
+		"--format=%h%x1f%s%x1f%an%x1f%ad", "--date=short")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return "", "", "", ""
+	}
+	parts := strings.Split(strings.TrimSpace(string(out)), "\x1f")
+	if len(parts) != 4 {
+		return "", "", "", ""
+	}
+	return parts[0], parts[1], parts[2], parts[3]
 }
 
 // checkGitRepo verifica que el directorio está en un repo git
