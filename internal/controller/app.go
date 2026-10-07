@@ -3286,24 +3286,15 @@ type extJobEvent struct {
 // job en vuelo, repinta la ventana desde el disco local (el catálogo no
 // cambió, así que no se relee el proveedor) con recarga de la sesión, y
 // avisa con toast. La ventana NO se cierra: el usuario sigue donde estaba.
+// El job de catálogo va por su propio camino (handleCatalogInstallJob): la
+// ventana de extensiones (snapshot de proveedores) no cambia con ese job.
 func (a *App) handleExtJob(ev extJobEvent) {
 	if ev.Seq < a.extJobSeq {
 		return // llegó un job viejo: el dato fresco ya está en caché
 	}
 	a.extJobRunning = false
 	if ev.Kind == extJobCatalogInstall {
-		// El catálogo marca SU entrada y repinta SU panel: la ventana de
-		// extensiones (snapshot de proveedores) no cambió con este job.
-		if ev.ErrMsg != "" {
-			a.showToast(ev.Ref+": "+ev.ErrMsg, view.ToastError)
-		} else {
-			if idx := a.catalogIndex(ev.CatalogID); idx >= 0 {
-				a.catalog[idx].Installed = true
-			}
-			a.refreshCatalogPanel()
-			a.showToast("Instalada: "+ev.Ref, view.ToastSuccess)
-		}
-		a.drainInstallQueue()
+		a.handleCatalogInstallJob(ev)
 		return
 	}
 	a.refreshExtData()
@@ -3325,6 +3316,25 @@ func (a *App) handleExtJob(ev extJobEvent) {
 	// La vigente terminó: si hay pedidos en espera arranca sola la
 	// siguiente, de a una. El drenado vale para ambos kinds porque la
 	// actualización también tomaba el lock de escritura.
+	a.drainInstallQueue()
+}
+
+// handleCatalogInstallJob aplica el resultado de un job de catálogo: marca
+// SU entrada como Installed y repinta SU panel, con su toast de éxito o
+// error. Es el camino que handleExtJob deriva para ev.Kind ==
+// extJobCatalogInstall.
+func (a *App) handleCatalogInstallJob(ev extJobEvent) {
+	if ev.ErrMsg != "" {
+		a.showToast(ev.Ref+": "+ev.ErrMsg, view.ToastError)
+	} else {
+		// El catálogo marca SU entrada y repinta SU panel: la ventana de
+		// extensiones (snapshot de proveedores) no cambió con este job.
+		if idx := a.catalogIndex(ev.CatalogID); idx >= 0 {
+			a.catalog[idx].Installed = true
+		}
+		a.refreshCatalogPanel()
+		a.showToast("Instalada: "+ev.Ref, view.ToastSuccess)
+	}
 	a.drainInstallQueue()
 }
 
