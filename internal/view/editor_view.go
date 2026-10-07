@@ -465,6 +465,59 @@ func (v *EditorView) moveWord(delta int) bool {
 	return v.moveWordLeft()
 }
 
+// wordEndForward devuelve el fin de la palabra que arranca en col: col debe
+// apuntar a una runa de palabra. Es el paso común de moveWordRight.
+func wordEndForward(content []byte, col int) int {
+	for col < len(content) {
+		r, size := utf8.DecodeRune(content[col:])
+		if !isWordRune(r) {
+			break
+		}
+		col += size
+	}
+	return col
+}
+
+// skipSeparatorsForward cruza separadores desde col y frena en la próxima
+// runa de palabra o al fin de la línea.
+func skipSeparatorsForward(content []byte, col int) int {
+	for col < len(content) {
+		r, size := utf8.DecodeRune(content[col:])
+		if isWordRune(r) {
+			break
+		}
+		col += size
+	}
+	return col
+}
+
+// wordStartBackward devuelve el inicio de la palabra que termina en col: col
+// debe estar justo después de una runa de palabra. Es el espejo de
+// wordEndForward para moveWordLeft.
+func wordStartBackward(content []byte, col int) int {
+	for col > 0 {
+		r, size := utf8.DecodeLastRune(content[:col])
+		if !isWordRune(r) {
+			break
+		}
+		col -= size
+	}
+	return col
+}
+
+// skipSeparatorsBackward cruza separadores hacia atrás desde col y frena al
+// fin de la palabra anterior o al inicio de la línea.
+func skipSeparatorsBackward(content []byte, col int) int {
+	for col > 0 {
+		r, size := utf8.DecodeLastRune(content[:col])
+		if isWordRune(r) {
+			break
+		}
+		col -= size
+	}
+	return col
+}
+
 func (v *EditorView) moveWordRight() bool {
 	v.breakTypingGroup()
 	startLine, startCol := v.cursor.Line, v.cursor.ByteCol
@@ -475,32 +528,14 @@ func (v *EditorView) moveWordRight() bool {
 			r, _ := utf8.DecodeRune(content[col:])
 			if isWordRune(r) {
 				// Dentro de palabra: consumir hasta su fin y frenar ahí.
-				for col < len(content) {
-					r2, size := utf8.DecodeRune(content[col:])
-					if !isWordRune(r2) {
-						break
-					}
-					col += size
-				}
+				col = wordEndForward(content, col)
 				break
 			}
 			// En separadores: cruzarlos y, si hay palabra después en la
 			// misma línea, consumirla hasta su fin.
-			for col < len(content) {
-				r2, size := utf8.DecodeRune(content[col:])
-				if isWordRune(r2) {
-					break
-				}
-				col += size
-			}
+			col = skipSeparatorsForward(content, col)
 			if col < len(content) {
-				for col < len(content) {
-					r2, size := utf8.DecodeRune(content[col:])
-					if !isWordRune(r2) {
-						break
-					}
-					col += size
-				}
+				col = wordEndForward(content, col)
 				break
 			}
 			// Línea sin más palabras: cruzar a la siguiente.
@@ -530,31 +565,13 @@ func (v *EditorView) moveWordLeft() bool {
 			r, _ := utf8.DecodeLastRune(content[:col])
 			if isWordRune(r) {
 				// Dentro o al fin de palabra: retroceder hasta su inicio.
-				for col > 0 {
-					r2, size := utf8.DecodeLastRune(content[:col])
-					if !isWordRune(r2) {
-						break
-					}
-					col -= size
-				}
+				col = wordStartBackward(content, col)
 				break
 			}
 			// En separadores: cruzarlos hacia atrás.
-			for col > 0 {
-				r2, size := utf8.DecodeLastRune(content[:col])
-				if isWordRune(r2) {
-					break
-				}
-				col -= size
-			}
+			col = skipSeparatorsBackward(content, col)
 			if col > 0 {
-				for col > 0 {
-					r2, size := utf8.DecodeLastRune(content[:col])
-					if !isWordRune(r2) {
-						break
-					}
-					col -= size
-				}
+				col = wordStartBackward(content, col)
 				break
 			}
 			// Nada antes en esta línea: cruzar a la anterior.
