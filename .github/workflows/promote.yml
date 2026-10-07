@@ -1,0 +1,61 @@
+name: promote-preview
+
+# Promoción preview → estable: cada push a main (típicamente el merge de un PR
+# desde preview) detecta el último tag preview-v* alcanzable y, si su versión
+# estable v* todavía no existe, la crea y la pushea. Ese push dispara
+# release.yml, que arma los binarios y publica el release estable (GoReleaser
+# corre solo para tags no-preview).
+#
+# Reglas:
+# - Sin tag preview alcanzable: no hace nada (push directo sin preview previa).
+# - Si el tag estable ya existe: no hace nada (idempotente, re-ejecuciones
+#   seguras).
+# - Solo promueve semver vX.Y.Z (lo demás se avisa y se salta).
+#
+# Requiere el secret TCODE_RELEASE_TOKEN (PAT clásico con permiso contents:
+# write): un push hecho con GITHUB_TOKEN no dispara otros workflows y el
+# release nunca correría. Sin el secret, el job falla explicándolo.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Promover último preview a estable
+        env:
+          RELEASE_TOKEN: ${{ secrets.TCODE_RELEASE_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RELEASE_TOKEN:-}" ]; then
+            echo "::error::Falta el secret TCODE_RELEASE_TOKEN (PAT clásico con contents: write). Crealo en Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+          latest="$(git tag --list 'preview-v*' --merged HEAD | sed 's/^preview-//' | sort -V | tail -n 1 || true)"
+          if [ -z "$latest" ]; then
+            echo "Sin tags preview-v* alcanzables desde main: nada que promover."
+            exit 0
+          fi
+          if ! [[ "$latest" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::warning::El último preview ($latest) no es semver vX.Y.Z: no se promueve."
+            exit 0
+          fi
+          if git rev-parse -q --verify "refs/tags/$latest" >/dev/null; then
+            echo "El tag $latest ya existe: nada que promover."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$latest" -m "Promoción estable $latest (desde preview-$latest)"
+          git push "https://x-access-token:${RELEASE_TOKEN}@github.com/leav-dev/tcode.git" "$latest"
+          echo "Promovido $latest: release.yml arma la versión estable."
