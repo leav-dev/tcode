@@ -36,8 +36,12 @@ archives:
       - LICENSE
       - README.md
 
+# checksums-archives.txt (NO checksums.txt): el job publish ya sube su propio
+# checksums.txt con los hashes de los binarios crudos (lo verifican
+# install.sh y `tcode update`); reutilizar el nombre hace chocar el upload de
+# GoReleaser con 422 already_exists.
 checksum:
-  name_template: "checksums.txt"
+  name_template: "checksums-archives.txt"
   algorithm: sha256
 
 changelog:
