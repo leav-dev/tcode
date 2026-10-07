@@ -1830,9 +1830,14 @@ func (a *App) handleEvent(ev tcell.Event) bool {
 				action, handled := a.explorer.HandleEvent(tcell.NewEventMouse(x, y-tabBarHeight, ev.Buttons(), ev.Modifiers()))
 				if handled {
 					a.explorerFocused = true
-					// El pie del panel pide la creación contextual: el mismo flujo
-					// que Ctrl+N / Ctrl+Shift+N.
+					// El pie del panel pide la creación contextual (el mismo flujo
+					// que Ctrl+N / Ctrl+Shift+N); la flecha de un dir colapsado pide
+					// su expansión con E/S (igual que Enter con el foco en el panel).
 					switch action {
+					case view.ActionActivate:
+						a.activateExplorerEntry()
+					case view.ActionExpand:
+						a.explorerExpand()
 					case view.ActionNewFile:
 						a.promptCreateEntry(false)
 					case view.ActionNewFolder:
