@@ -21,6 +21,7 @@ import (
 // proveedores manejan ~/.tcode/providers.json, la lista de fuentes desde la
 // que se resuelve cada id de extensión.
 const (
+	flagHelp             = "--help"
 	flagVersion          = "--version"
 	flagInstallExtension = "--install-extension"
 	flagListExtensions   = "--list-extensions"
@@ -32,6 +33,7 @@ const (
 // commandGuideLines es la guía de comandos que se muestra ante un flag
 // desconocido: qué se puede pedir sin abrir el editor.
 var commandGuideLines = []string{
+	"--help · muestra esta ayuda",
 	"--version · muestra la versión del editor",
 	"--install-extension <id> · instala una extensión por id",
 	"--list-extensions · lista las instaladas",
@@ -39,6 +41,7 @@ var commandGuideLines = []string{
 	"--add-provider <url-git|carpeta> · registra una fuente",
 	"--approve-provider <nombre> · confía en una fuente",
 	"update · actualiza el editor a lo último de su canal",
+	"uninstall · desinstala el editor (binario + PATH, conserva config y extensiones)",
 }
 
 // versionLine arma la línea de versión sin imprimirla (testeable): la
@@ -101,6 +104,23 @@ func editDistance(a, b string) int {
 	return prev[len(br)]
 }
 
+// printCommandGuide imprime el glosario de comandos en w (stdout para
+// --help, stderr para la guía de error). Es la misma lista en ambos lados
+// para que nunca diverjan.
+func printCommandGuide(w *os.File) {
+	fmt.Fprintln(w, "comandos permitidos:")
+	for _, line := range commandGuideLines {
+		fmt.Fprintf(w, "  %s\n", line)
+	}
+}
+
+// printHelp muestra uso + glosario (--help / -h) y sale sin abrir el editor.
+func printHelp() {
+	fmt.Println("tcode — editor de texto en la terminal")
+	fmt.Println("uso: tcode [archivo|carpeta] [flag] [...]")
+	printCommandGuide(os.Stdout)
+}
+
 // printUnknownFlagGuide reporta un flag que no existe con la guía de lo
 // permitido (y una sugerencia si hay algo cercano). Un flag con typo antes
 // caía al editor como si fuera un archivo a abrir; ahora falla fuerte.
@@ -109,10 +129,8 @@ func printUnknownFlagGuide(flag string) {
 	if s := suggestFlag(flag); s != "" {
 		fmt.Fprintf(os.Stderr, "tcode: ¿quisiste decir %s?\n", s)
 	}
-	fmt.Fprintln(os.Stderr, "tcode: comandos permitidos:")
-	for _, line := range commandGuideLines {
-		fmt.Fprintf(os.Stderr, "  %s\n", line)
-	}
+	fmt.Fprintln(os.Stderr, "tcode:")
+	printCommandGuide(os.Stderr)
 }
 
 func main() {
@@ -243,8 +261,30 @@ func runCommandMode() (int, bool) {
 		}
 		return 0, true
 
+	case flagHelp, "-h":
+		printHelp()
+		return 0, true
+
 	case flagVersion, "-v":
 		fmt.Println(versionLine())
+		return 0, true
+
+	case "uninstall":
+		exe, err := os.Executable()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "tcode: resolviendo el ejecutable: %v\n", err)
+			return 1, true
+		}
+		removed, err := update.Uninstall(home, exe)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "tcode: %v\n", err)
+			return 1, true
+		}
+		fmt.Println("Desinstalado:")
+		for _, r := range removed {
+			fmt.Printf("  %s\n", r)
+		}
+		fmt.Println("abrí una terminal nueva para salir del PATH de esta sesión")
 		return 0, true
 	}
 

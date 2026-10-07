@@ -128,8 +128,9 @@ tcode                # carpeta actual
 | Ventana de extensiones | `Ctrl+P` → **Extensiones** (`←`/`→` cambia pestaña, `Enter` instala/actualiza/borra, `r` revalida) |
 | Instalar por id | `tcode --install-extension tcode.vimlite` |
 | Listar / borrar | `tcode --list-extensions` · `tcode --remove-extension <proveedor:id\|id>` |
-| Versión | `tcode --version` (un flag que no existe falla con la guía de permitidos) |
+| Ayuda / versión | `tcode --help` · `tcode --version` (un flag que no existe falla con la guía de permitidos) |
 | Actualizar tcode | `tcode update` (el preview solo sigue previews, nunca baja a estable) |
+| Desinstalar tcode | `tcode uninstall` (saca binario + PATH, conserva config y extensiones) |
 
 </details>
 

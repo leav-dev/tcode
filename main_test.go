@@ -34,6 +34,7 @@ func TestSuggestFlagProponePorPrefijo(t *testing.T) {
 		{"--add", "--add-provider"},
 		{"--approve", "--approve-provider"},
 		{"--upd", "update"},
+		{"--hep", "--help"},
 		{"--zzz", ""},
 		{"-", ""},
 	}
@@ -48,8 +49,9 @@ func TestSuggestFlagProponePorPrefijo(t *testing.T) {
 func TestGuideCubreLosComandos(t *testing.T) {
 	joined := strings.Join(commandGuideLines, "\n")
 	for _, cmd := range []string{
-		flagVersion, flagInstallExtension, flagListExtensions,
+		flagHelp, flagVersion, flagInstallExtension, flagListExtensions,
 		flagRemoveExtension, flagAddProvider, flagApproveProvider, "update",
+		"uninstall",
 	} {
 		if !strings.Contains(joined, cmd) {
 			t.Errorf("la guía no menciona %s", cmd)

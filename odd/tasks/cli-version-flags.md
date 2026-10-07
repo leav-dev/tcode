@@ -17,6 +17,8 @@ un archivo a abrir (`tcode --versoin` abría un buffer llamado así).
 ## Tasks
 - [x] `main.go`: `flagVersion`, `versionLine`, `commandGuideLines`,
   `suggestFlag`+`editDistance`, rama en el switch + detector `HasPrefix -`
+- [x] `--help`/`-h`: `printHelp` (uso + glosario) con `printCommandGuide`
+  compartido para que la guía nunca diverja; `--help` también en la guía
 - [x] `main_test.go`: versión, prefijos/typos, guía cubre comandos
 - [x] Docs: README (fila Versión + nota de canal en update)
 
