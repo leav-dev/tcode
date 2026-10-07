@@ -72,14 +72,21 @@ go install github.com/leav-dev/tcode@latest     # Go 1.25+
 
 Probá lo último de la rama `preview` sin ensuciar tu instalación estable. Los tags `preview-v*` salen como **Pre-release** en GitHub: `tcode update` y el instalador por defecto los ignoran a propósito.
 
-**Opción A — binario del prerelease (sin Go):**
+**Opción A — último preview (sin Go):**
 
 ```bash
-# mirá el último tag en: https://github.com/leav-dev/tcode/releases
-# (buscá el que diga Pre-release, ej. preview-v0.1.3)
-TCODE_RELEASE_BASE=https://github.com/leav-dev/tcode/releases/download/preview-v0.1.3 \
-  bash scripts/install.sh
+# macOS / Linux
+bash scripts/install.sh --preview
+# o directo desde GitHub:
+curl -fsSL https://raw.githubusercontent.com/leav-dev/tcode/main/scripts/install.sh | bash -s -- --preview
 ```
+
+```powershell
+# Windows (PowerShell)
+powershell -ExecutionPolicy Bypass -File scripts/install.ps1 -Preview
+```
+
+> Avanzado: pineá una versión con `TCODE_RELEASE_BASE=https://github.com/leav-dev/tcode/releases/download/preview-vX.Y.Z bash scripts/install.sh` (`$env:TCODE_RELEASE_BASE` en PowerShell).
 
 **Opción B — desde la rama (siempre al día, requiere Go 1.25+):**
 
