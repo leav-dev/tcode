@@ -97,7 +97,9 @@ jobs:
   release:
     # Stable only: GoReleaser parses the tag as semver (preview-v* is
     # not) and bumps the homebrew formula, which must track stable.
-    if: ${{ !startsWith(github.ref_name, 'preview-') }}
+    # Pausado por ahora (el push de la fórmula al tap falla con 403 y voltea
+    # todo el job): para reactivar, volver a `if: ${{ !startsWith(github.ref_name, 'preview-') }}`.
+    if: false
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
