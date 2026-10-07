@@ -189,6 +189,6 @@ Convenciones: rama por feature en `feat/*`, commits en inglés, se commitea al t
 
 **¿Te sirve tcode? Dejale una ⭐ y contanos qué extensión te falta.**
 
-[Releases](https://github.com/leav-dev/tcode/releases) · [Issues](https://github.com/leav-dev/tcode/issues) · [Docs](docs/constitution.md)
+[Releases](https://github.com/leav-dev/tcode/releases) · [Issues](https://github.com/leav-dev/tcode/issues) · [Docs](docs/constitution.md) · [Privacidad](PRIVACY.md)
 
 </div>
