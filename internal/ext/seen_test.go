@@ -128,6 +128,37 @@ func TestLoadSeenFileMissingIsEmpty(t *testing.T) {
 	}
 }
 
+// TestPruneConservaVistosDeProveedorCaido: un proveedor ilegible (ni en
+// disponibles ni en instaladas) no pierde sus vistos en el ciclo completo
+// marcar → podar → guardar → cargar; la instalada sí se poda.
+func TestPruneConservaVistosDeProveedorCaido(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "extensions-seen.json")
+	seen := Seen{
+		SeenKey("a", "tcode.linter", "1.0.0"): true, // se instala después
+		SeenKey("b", "tcode.tema", "2.0.0"):   true, // proveedor caído
+	}
+	available := []AvailableExt{{Provider: Provider{Name: "b"}, ID: "tcode.tema", Version: "2.0.0"}}
+	installed := []Info{{ID: "tcode.linter", Version: "1.0.0", Provider: "a"}}
+
+	seen = PruneSeen(MarkSeen(seen, available), installed)
+	if seen[SeenKey("a", "tcode.linter", "1.0.0")] {
+		t.Fatalf("la instalada debió podarse: %+v", seen)
+	}
+	if !seen[SeenKey("b", "tcode.tema", "2.0.0")] {
+		t.Fatalf("la del proveedor caído debió conservarse: %+v", seen)
+	}
+	if err := SaveSeenFile(path, seen); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadSeenFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded[SeenKey("b", "tcode.tema", "2.0.0")] || len(loaded) != 1 {
+		t.Fatalf("round trip = %+v, esperaba solo la conservada", loaded)
+	}
+}
+
 // TestLoadSeenFileCorruptReports: un archivo corrupto se reporta y devuelve
 // vacío en vez de romper el arranque.
 func TestLoadSeenFileCorruptReports(t *testing.T) {

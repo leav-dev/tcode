@@ -1,6 +1,7 @@
 package update
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,10 @@ import (
 // de instalación si es el que lo contenía (~/.tcode/bin) y los bloques PATH
 // marcados en ~/.bashrc y ~/.zshrc. Es el espejo en Go de
 // `scripts/install.sh --uninstall`: mismos efectos, mismo alcance.
+//
+// Best-effort tras borrar el binario: un paso que falla se acumula y no
+// corta a los demás, y lo ya eliminado se devuelve junto al error para que
+// el llamador lo cuente (nunca un nil que esconda el progreso parcial).
 //
 // Lo que NO toca a propósito: config.json, theme.json, extensiones ni
 // providers (~/.tcode/ sigue intacto para una futura instalación).
@@ -34,6 +39,10 @@ func Uninstall(home, exe string) ([]string, error) {
 		return nil, fmt.Errorf("ruta del ejecutable vacía")
 	}
 
+	// Desinstalar es best-effort a partir de acá: el binario ya salió (o no
+	// había nada que hacer) y cada paso siguiente suma lo suyo o acumula su
+	// error sin cortar a los demás. El llamador recibe el progreso parcial
+	// JUNTO al error para poder contarlo, no un nil que lo esconda.
 	var removed []string
 	if err := os.Remove(exe); err != nil {
 		if os.IsNotExist(err) {
@@ -43,16 +52,29 @@ func Uninstall(home, exe string) ([]string, error) {
 	}
 	removed = append(removed, exe)
 
+	var errs []error
 	// Si el ejecutable vivía en el dir de instalación (~/.tcode/bin, lo único
-	// que el instalador escribe ahí), el directorio queda vacío: se va entero.
+	// que el instalador escribe ahí), el directorio se va si quedó vacío.
+	// Con archivos ajenos no es nuestro para vaciarlo a la fuerza: se deja
+	// y se sigue (el binario, que es lo que importa, ya salió).
 	// Cualquier otro dir (~/go/bin con más herramientas, /usr/local/bin, …)
 	// no se toca: solo sale el binario propio.
 	installDir := filepath.Join(home, ".tcode", "bin")
 	if filepath.Dir(exe) == installDir {
-		if err := os.Remove(installDir); err != nil && !os.IsNotExist(err) {
-			return nil, fmt.Errorf("borrando %s: %w", installDir, err)
+		removeErr := os.Remove(installDir)
+		switch {
+		case removeErr == nil:
+			removed = append(removed, installDir)
+		case os.IsNotExist(removeErr):
+			// Ya no estaba: nada que reportar.
+		default:
+			// Con archivos ajenos no es nuestro para vaciarlo a la fuerza:
+			// se deja en silencio. Vacío pero inborrable (permiso, lock)
+			// sí se acumula y se sigue con los rc.
+			if entries, rerr := os.ReadDir(installDir); rerr == nil && len(entries) == 0 {
+				errs = append(errs, fmt.Errorf("borrando %s: %w", installDir, removeErr))
+			}
 		}
-		removed = append(removed, installDir)
 	}
 
 	// Bloques PATH que escribe el instalador (marcas >>> tcode >>>).
@@ -60,18 +82,19 @@ func Uninstall(home, exe string) ([]string, error) {
 		path := filepath.Join(home, rc)
 		data, err := os.ReadFile(path)
 		if err != nil {
-			continue // sin rc no hay nada que limpiar
+			continue // sin rc (o ilegible) no hay nada que limpiar
 		}
 		cleaned := stripMarkedBlock(string(data))
 		if cleaned == string(data) {
 			continue
 		}
 		if err := os.WriteFile(path, []byte(cleaned), 0o644); err != nil {
-			return nil, fmt.Errorf("limpiando %s: %w", path, err)
+			errs = append(errs, fmt.Errorf("limpiando %s: %w", path, err))
+			continue
 		}
 		removed = append(removed, path)
 	}
-	return removed, nil
+	return removed, errors.Join(errs...)
 }
 
 // stripMarkedBlock saca de un rc el bloque entre las marcas del instalador,

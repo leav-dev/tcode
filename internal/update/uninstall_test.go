@@ -111,6 +111,34 @@ func TestUninstallSegundaVezFalla(t *testing.T) {
 	}
 }
 
+// TestUninstallDirNoVacioTolera: con archivos ajenos en el dir de
+// instalación, el binario sale, el dir se deja (no es nuestro para vaciarlo)
+// y la limpieza sigue con éxito.
+func TestUninstallDirNoVacioTolera(t *testing.T) {
+	home, exe := uninstallFixture(t)
+	if err := os.WriteFile(filepath.Join(filepath.Dir(exe), "archivo-ajeno"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := Uninstall(home, exe)
+	if err != nil {
+		t.Fatalf("Uninstall con dir no vacío: %v", err)
+	}
+	if _, err := os.Stat(exe); !os.IsNotExist(err) {
+		t.Fatalf("el binario sigue: %v", err)
+	}
+	if _, err := os.Stat(filepath.Dir(exe)); err != nil {
+		t.Fatalf("el dir con archivos ajenos debió conservarse: %v", err)
+	}
+	for _, r := range removed {
+		if r == filepath.Dir(exe) {
+			t.Fatalf("el dir no vaciado no debe reportarse eliminado: %v", removed)
+		}
+	}
+	if len(removed) != 3 { // binario + 2 rcs
+		t.Fatalf("eliminados = %v, esperaba binario y rcs", removed)
+	}
+}
+
 // TestStripMarkedBlock: saca el bloque marcado y deja el resto; sin marcas
 // devuelve el texto intacto para no reescribir.
 func TestStripMarkedBlock(t *testing.T) {

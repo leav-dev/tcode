@@ -53,6 +53,17 @@ func versionLine() string {
 	return "tcode dev (build de desarrollo)"
 }
 
+// guideCommands extrae el comando de cada línea de la guía (su primer
+// campo): es lo que suggestFlag compara, parseado en un solo lugar en vez
+// de rebanar las líneas en cada pasada.
+func guideCommands() []string {
+	cmds := make([]string, 0, len(commandGuideLines))
+	for _, line := range commandGuideLines {
+		cmds = append(cmds, strings.Fields(line)[0])
+	}
+	return cmds
+}
+
 // suggestFlag propone el comando más parecido al flag desconocido: primero
 // por prefijo (en ambas direcciones); si no hay, por distancia de edición
 // ≤ 2 (typos como --versoin). "" si no hay nada cercano.
@@ -61,16 +72,15 @@ func suggestFlag(unknown string) string {
 	if u == "" {
 		return ""
 	}
-	for _, line := range commandGuideLines {
-		cmd := strings.Fields(line)[0]
+	cmds := guideCommands()
+	for _, cmd := range cmds {
 		bare := strings.TrimLeft(cmd, "-")
 		if strings.HasPrefix(bare, u) || strings.HasPrefix(u, bare) {
 			return cmd
 		}
 	}
 	best, bestDist := "", 3
-	for _, line := range commandGuideLines {
-		cmd := strings.Fields(line)[0]
+	for _, cmd := range cmds {
 		if d := editDistance(u, strings.TrimLeft(cmd, "-")); d < bestDist {
 			best, bestDist = cmd, d
 		}
@@ -276,13 +286,15 @@ func runCommandMode() (int, bool) {
 			return 1, true
 		}
 		removed, err := update.Uninstall(home, exe)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "tcode: %v\n", err)
-			return 1, true
+		if len(removed) > 0 {
+			fmt.Println("Eliminado:")
+			for _, r := range removed {
+				fmt.Printf("  %s\n", r)
+			}
 		}
-		fmt.Println("Desinstalado:")
-		for _, r := range removed {
-			fmt.Printf("  %s\n", r)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "tcode: desinstalación parcial: %v\n", err)
+			return 1, true
 		}
 		fmt.Println("abrí una terminal nueva para salir del PATH de esta sesión")
 		return 0, true
