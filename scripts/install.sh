@@ -139,7 +139,12 @@ release_install() {
   else
     BIN_FILE="tcode"
   fi
-  ASSET="tcode-${OS}-${ARCH}$( [ "${OS}" = "windows" ] && printf '.exe' )"
+  # Ojo con `set -e`: un `$( [ .. ] && .. )` cuyo test falla mata el script
+  # (el fallo se hereda dentro de la sustitución), así que el sufijo va con if.
+  ASSET="tcode-${OS}-${ARCH}"
+  if [ "${OS}" = "windows" ]; then
+    ASSET="${ASSET}.exe"
+  fi
 
   command -v curl >/dev/null 2>&1 || {
     echo "error: curl is required to download the release binary." >&2
@@ -155,7 +160,11 @@ release_install() {
   curl -fSL -o "${TMP_DIR}/checksums.txt" "${RELEASE_BASE}/checksums.txt"
 
   # Verify sha256 from checksums.txt (sha256sum on Linux/Git Bash, shasum on macOS).
-  ( cd "${TMP_DIR}" && grep "${ASSET}" checksums.txt > checksums.line )
+  # El grep con `set -e` moría en silencio si el asset no figura: fallo fuerte.
+  ( cd "${TMP_DIR}" && grep -F -- "${ASSET}" checksums.txt > checksums.line ) || {
+    echo "error: ${ASSET} no figura en checksums.txt de ${RELEASE_BASE}." >&2
+    exit 1
+  }
   if command -v sha256sum >/dev/null 2>&1; then
     ( cd "${TMP_DIR}" && sha256sum -c checksums.line )
   else
