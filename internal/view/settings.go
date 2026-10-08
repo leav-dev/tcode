@@ -31,12 +31,32 @@ func SetExplorerWidth(n int) { explorerWidth = n }
 func IndentSize() int { return len(indentUnit) }
 
 // SetIndentSize fija el tamaño de la indentación a n espacios, con mínimo 1:
-// un tab de 0 espacios no existe.
+// un tab de 0 espacios no existe. También sincroniza el ancho visual del
+// tab para que lo que el usuario configura en Tab size (Ctrl+P) mueva
+// parejo la inserción y el render/cursor.
 func SetIndentSize(n int) {
 	if n < 1 {
 		n = 1
 	}
 	indentUnit = strings.Repeat(" ", n)
+	tabWidth = n
+}
+
+// TabWidth devuelve el ancho visual actual de una tabulación en columnas:
+// lo que usan el render, el cursor y el hit testing del mouse.
+func TabWidth() int {
+	if tabWidth < 1 {
+		return 1
+	}
+	return tabWidth
+}
+
+// SetTabWidth fija el ancho visual de la tabulación, con mínimo 1.
+func SetTabWidth(n int) {
+	if n < 1 {
+		n = 1
+	}
+	tabWidth = n
 }
 
 // SetWordWrapEnabled fija la configuración del salto de palabra. ToggleWordWrap

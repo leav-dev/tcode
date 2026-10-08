@@ -118,7 +118,25 @@ func softLineAt(line string, width, byteCol int) (row, col int) {
 			if min > len(sl.text) {
 				min = len(sl.text)
 			}
-			return r, uniseg.StringWidth(sl.text[:min])
+			// La columna se mide con el mismo ancho que usa el dibujo
+			// (wrapClusterWidth: tabs expandidos a TabWidth(), CJK x2).
+			// StringWidth cuenta "\t" como 0 y dejaba el cursor a la
+			// izquierda del texto real: lo tipeado aparecía a la derecha
+			// del indicador en líneas indentadas con tabs.
+			col := 0
+			g := uniseg.NewGraphemes(sl.text)
+			for g.Next() {
+				from, _ := g.Positions()
+				if from >= min {
+					break
+				}
+				if g.Str() == "\r" {
+					col = 0
+					continue
+				}
+				col += wrapClusterWidth(g.Str(), col)
+			}
+			return r, col
 		}
 	}
 	if len(ls) == 0 {
@@ -158,7 +176,8 @@ func softLineToByte(line string, width, row, col int) int {
 // real del grapheme (uniseg). 0 = sin celda propia (combinante huérfano).
 func wrapClusterWidth(cl string, col int) int {
 	if cl == "\t" {
-		return tabWidth - col%tabWidth
+		w := TabWidth()
+		return w - col%w
 	}
 	if w := uniseg.StringWidth(cl); w > 0 {
 		return w

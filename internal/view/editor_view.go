@@ -11,8 +11,11 @@ import (
 	"github.com/rivo/uniseg"
 )
 
-// tabWidth es la cantidad de columnas a la que se expande una tabulación.
-const tabWidth = 4
+// tabWidth es el ancho en columnas con el que se expande una tabulación.
+// Es variable para seguir al Tab size que configura el usuario (Ctrl+P):
+// SetIndentSize lo sincroniza y SetTabWidth lo fija directo. Nunca debe
+// quedar < 1 (los getters lo clampen para no dividir por cero en col%tabWidth).
+var tabWidth = 4
 
 // indentUnit es la unidad estándar de indentación del editor: la que inserta
 // Tab y la que se suma como nivel extra tras abrir un bloque. Es una variable
@@ -216,7 +219,8 @@ func graphemes(b []byte) *uniseg.Graphemes {
 // tabulaciones contra la columna en la que caen.
 func clusterWidth(g *uniseg.Graphemes, col int) int {
 	if g.Str() == "\t" {
-		return tabWidth - col%tabWidth
+		w := TabWidth()
+		return w - col%w
 	}
 	if w := g.Width(); w > 0 {
 		return w
