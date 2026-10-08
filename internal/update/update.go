@@ -18,8 +18,9 @@ import (
 )
 
 // version es la versión del binario, inyectada al compilar los releases con
-// -ldflags "-X main.version=vX.Y.Z" (ver .github/workflows/release.yml). Vacía
-// en builds de desarrollo: ahí manda debug.ReadBuildInfo (go install) o nada.
+// -ldflags "-X github.com/leav-dev/tcode/internal/update.version=vX.Y.Z"
+// (ver .github/workflows/release.yml y .goreleaser.yml). Vacía en builds de
+// desarrollo: ahí manda debug.ReadBuildInfo (go install) o nada.
 var version string
 
 // SetVersion fija la versión en tests (el valor real lo pone el linker).
