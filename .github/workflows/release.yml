@@ -97,6 +97,10 @@ jobs:
   release:
     # Stable only: GoReleaser parses the tag as semver (preview-v* is
     # not) and bumps the homebrew formula, which must track stable.
+    # Serialized after publish on purpose: both jobs create the release
+    # for the tag, and running them in parallel races (already_exists).
+    # publish creates it first, GoReleaser's mode: replace then appends.
+    needs: publish
     if: ${{ !startsWith(github.ref_name, 'preview-') }}
     runs-on: ubuntu-latest
     steps:
