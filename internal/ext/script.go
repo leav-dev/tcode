@@ -38,6 +38,10 @@ type ScriptAPI interface {
 	// Line devuelve el texto de la línea n (0-indexada) del buffer activo; ok
 	// es false cuando no hay buffer abierto o n está fuera de rango.
 	Line(n int) (text string, ok bool)
+	// Cursor devuelve la posición del cursor del editor activo como (línea
+	// 0-indexada, byte dentro de la línea); ok es false cuando no hay buffer
+	// abierto o no hay editor.
+	Cursor() (line, col int, ok bool)
 	// SetDiagnostics reemplaza las anotaciones del buffer activo de UN
 	// proveedor (source: el key del script del host): el editor mergea las de
 	// todos los proveedores. El backend de scripting deposita acá las
@@ -219,6 +223,20 @@ func NewScriptHost(code string, api ScriptAPI, source string) (*ScriptHost, erro
 		}
 		L.Push(lua.LString(line))
 		return 1
+	}))
+	// tcode.cursor(): posición del cursor como (línea, col) en numeración Lua
+	// (1-indexada), igual que tcode.line. La traducción Go → Lua (0-indexada
+	// → 1-indexada) vive acá, en un solo lugar: el col es ByteCol, así que en
+	// Lua line:sub(1, col-1) son los bytes antes del cursor en la línea
+	// actual. Sin buffer activo no devuelve nada (nil, como tcode.buffer).
+	L.SetField(tcode, "cursor", L.NewFunction(func(L *lua.LState) int {
+		line, col, ok := api.Cursor()
+		if !ok {
+			return 0
+		}
+		L.Push(lua.LNumber(line + 1))
+		L.Push(lua.LNumber(col + 1))
+		return 2
 	}))
 	// tcode.diagnostics.set(lista) y tcode.diagnostics.clear(): el backend de
 	// scripting es el proveedor de las anotaciones del HITO A. La tabla anida

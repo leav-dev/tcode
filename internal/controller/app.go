@@ -1217,6 +1217,21 @@ func (a *App) LineCount() (int, bool) {
 	return buf.LineCount(), true
 }
 
+// Cursor devuelve la posición del cursor del editor activo (ScriptAPI) como
+// (línea 0-indexada, byte dentro de la línea); sin buffer abierto o sin
+// editor, ok=false, como ActiveBuffer y LineCount.
+func (a *App) Cursor() (line, col int, ok bool) {
+	if a.activeBuffer() == nil {
+		return 0, 0, false
+	}
+	ed := a.activeEditor()
+	if ed == nil {
+		return 0, 0, false
+	}
+	line, col = ed.CursorPosition()
+	return line, col, true
+}
+
 // Line devuelve el texto de la línea n (0-indexada) del buffer activo
 // (ScriptAPI); sin buffer activo o con n fuera de [0, LineCount), ok=false.
 // El modelo no copia la línea: LineContent la extrae del PieceTable.

@@ -31,6 +31,9 @@ type fakeAPI struct {
 	lineCountCalls int
 	lines          []string
 	lineCalls      []int
+	cursorLine     int
+	cursorCol      int
+	cursorOK       bool
 	diags          [][]view.Diagnostic
 	diagErr        error
 	files          []HostFile
@@ -91,6 +94,10 @@ func (f *fakeAPI) Line(n int) (string, bool) {
 		return "", false
 	}
 	return f.lines[n], true
+}
+
+func (f *fakeAPI) Cursor() (int, int, bool) {
+	return f.cursorLine, f.cursorCol, f.cursorOK
 }
 
 func (f *fakeAPI) SetDiagnostics(source string, d []view.Diagnostic) error {
@@ -556,5 +563,53 @@ func TestScriptHostGitStatusExposesBranch(t *testing.T) {
 	want := "branch=preview commit=a1b2c3d do things"
 	if api.sections["tcode.gitchanges"] != want {
 		t.Errorf("sección = %q, esperaba %q", api.sections["tcode.gitchanges"], want)
+	}
+}
+
+// TestScriptHostCursorTranslatesToOneIndexed: tcode.cursor traduce la
+// posición Go (0-indexada) a numeración Lua (1-indexada), como tcode.line:
+// line:sub(1, col-1) son los bytes antes del cursor.
+func TestScriptHostCursorTranslatesToOneIndexed(t *testing.T) {
+	api := &fakeAPI{cursorLine: 1, cursorCol: 2, cursorOK: true}
+	h, err := NewScriptHost(`
+		function f()
+			local line, col = tcode.cursor()
+			tcode.message(line .. "/" .. col)
+		end
+	`, api, "src")
+	if err != nil {
+		t.Fatalf("NewScriptHost falló: %v", err)
+	}
+	defer h.Close()
+
+	if err := h.Call("f"); err != nil {
+		t.Fatalf("Call falló: %v", err)
+	}
+	if len(api.msgs) != 1 || api.msgs[0] != "2/3" {
+		t.Errorf("mensajes = %v, esperaba [2/3] (Go 1,2 → Lua 2,3)", api.msgs)
+	}
+}
+
+// TestScriptHostCursorNilWithoutBuffer: sin buffer activo tcode.cursor no
+// devuelve nada (nil, como tcode.buffer): el script degrada con pcall sin
+// cortar.
+func TestScriptHostCursorNilWithoutBuffer(t *testing.T) {
+	api := &fakeAPI{cursorOK: false}
+	h, err := NewScriptHost(`
+		function f()
+			local line, col = tcode.cursor()
+			tcode.message(tostring(line) .. "/" .. tostring(col))
+		end
+	`, api, "src")
+	if err != nil {
+		t.Fatalf("NewScriptHost falló: %v", err)
+	}
+	defer h.Close()
+
+	if err := h.Call("f"); err != nil {
+		t.Fatalf("Call falló: %v", err)
+	}
+	if len(api.msgs) != 1 || api.msgs[0] != "nil/nil" {
+		t.Errorf("mensajes = %v, esperaba [nil/nil]", api.msgs)
 	}
 }

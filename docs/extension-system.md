@@ -83,6 +83,7 @@ siempre); solo cambia la implementación. El host expone la tabla global
 | `tcode.buffer()` | Devuelve `{path, content, ok}` del buffer activo (`ok=false` sin buffer). `content` es el documento completo (límite del hito 1). |
 | `tcode.insert(text)` | Inserta `text` en la posición del cursor del buffer activo. |
 | `tcode.lineCount()` / `tcode.line(n)` | Líneas del buffer activo y su contenido por línea (`n` 1-indexado; errores "sin buffer activo"/"línea fuera de rango"). |
+| `tcode.cursor()` | Posición del cursor como `line, col` 1-indexados (como `tcode.line`); sin buffer devuelve nil. `line:sub(1, col-1)` son los bytes antes del cursor. |
 | `tcode.read_file(relpath)` | Lee UN archivo por ruta relativa al directorio del buffer activo (p. ej. el módulo que un import nombra). Devuelve `{path, content}` con la ruta absoluta canónica, o nil si no hay buffer, la ruta escapa del directorio, el archivo no existe o no cumple las cotas (solo extensiones de código, máx ~2 MiB). Pensada para 1 archivo por llamada; el cacheo entre invocaciones vive en el estado Lua. |
 | `tcode.diagnostics.set(lista)` / `tcode.diagnostics.clear()` | Reemplaza las **anotaciones** del buffer activo: lista de `{line, message, severity}` (severidad `error`\|`warning`\|`info`, default `error`; un elemento inválido aborta todo). |
 | `tcode.message(msg)` | Muestra un mensaje en la barra de estado. |

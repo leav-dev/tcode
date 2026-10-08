@@ -314,6 +314,7 @@ func (a *forwardAPI) Notify(msg, kind string) error                           { 
 func (a *forwardAPI) SetSection(id, text string) error                        { return nil }
 func (a *forwardAPI) LineCount() (int, bool)                                  { return 0, false }
 func (a *forwardAPI) Line(n int) (string, bool)                               { return "", false }
+func (a *forwardAPI) Cursor() (int, int, bool)                                { return 0, 0, false }
 func (a *forwardAPI) SetDiagnostics(source string, d []view.Diagnostic) error { return nil }
 func (a *forwardAPI) DirFiles() ([]HostFile, error)                           { return nil, nil }
 func (a *forwardAPI) ReadFile(relpath string) (HostFile, error) {

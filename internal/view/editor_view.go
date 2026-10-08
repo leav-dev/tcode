@@ -316,6 +316,13 @@ func (v *EditorView) CursorOffset() int {
 	return v.model.LineStart(v.cursor.Line) + v.cursor.ByteCol
 }
 
+// CursorPosition devuelve la posición del cursor como (línea 0-indexada,
+// byte dentro de la línea). Es la lectura que el backend de scripting expone
+// como tcode.cursor.
+func (v *EditorView) CursorPosition() (line, byteCol int) {
+	return v.cursor.Line, v.cursor.ByteCol
+}
+
 // ClampCursor recorta el cursor y el viewport al documento después de una
 // recarga: el archivo pudo quedarse más corto y un cursor fuera de rango
 // paniquearía en el próximo dibujo (LineContent fuera). Un documento vacío cae

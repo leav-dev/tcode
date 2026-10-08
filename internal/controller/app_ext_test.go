@@ -294,6 +294,23 @@ func writeExtensionDir(t *testing.T, root string, entries map[string]string) str
 	return root
 }
 
+// TestAppCursorTracksEditorMovement: el puente ScriptAPI.Cursor refleja la
+// posición del editor activo (0-indexada) y sigue su movimiento; sin buffer
+// abierto, ok=false.
+func TestAppCursorTracksEditorMovement(t *testing.T) {
+	app, _ := newTestApp(t, "uno")
+
+	line, col, ok := app.Cursor()
+	if !ok || line != 0 || col != 0 {
+		t.Fatalf("Cursor inicial = (%d, %d, %v), esperaba (0, 0, true)", line, col, ok)
+	}
+	press(app, tcell.KeyRight)
+	line, col, ok = app.Cursor()
+	if !ok || line != 0 || col != 1 {
+		t.Fatalf("Cursor tras Right = (%d, %d, %v), esperaba (0, 1, true)", line, col, ok)
+	}
+}
+
 // TestExtensionScriptInsertsAtCursor: integración del backend de scripting —
 // una extensión de disco con main.lua y un comando que declara (script, fn)
 // se dispara desde su keybinding; la función Lua inserta texto en el cursor
